@@ -1,12 +1,13 @@
 {
   "compilerOptions": {
     "allowJs": true,
+    "lib":["es2018", "DOM"],
     "module": "commonjs",
     "noImplicitAny": true,
     "sourceMap": true,
     "removeComments": true,
     "preserveConstEnums": true,
-    "target": "es2017",
+    "target": "es2018",
     "noImplicitReturns": true,
     "pretty": true,
     "noFallthroughCasesInSwitch": true,

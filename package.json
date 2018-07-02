@@ -3,8 +3,11 @@
   "version": "0.0.1",
   "author": "Bert Belder <bertbelder@gmail.com>",
   "license": "LOL",
-  "dependencies": {
-    "@types/assert": "^0.0.31",
-    "assert": "^1.4.1"
-  }
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "^2.9.2"
+  },
+  "browserslist": [
+    "last 1 chrome version"
+  ]
 }

@@ -1,8 +1,8 @@
-
-export type BufTransferList = Array<{ id: number, ab: SharedArrayBuffer }>;
+import { assert } from "./assert";
 
 const bufTable: { [id: number]: Buf } = Object.create(null);
-let idCounter = 0;
+let idCounter: Uint32Array;
+let port: MessagePort;
 
 export class Buf {
   private constructor(
@@ -11,22 +11,37 @@ export class Buf {
     readonly i32: Int32Array
   ) {}
 
-  static get(id: number): Buf | undefined {
+  static async get(id: number): Promise<Buf> {
+    while (!(id in bufTable)) {
+      // Wait for the other side to transfer it over.
+      await null;
+    }
     return bufTable[id];
   }
 
-  static alloc(byteLength: number): Buf {
+  static tryGet(id: number): Buf | null {
+    // Returns null if we're still waiting for the buffer to transferred.
+    return bufTable[id] || null;
+  }
+
+  static import(ab: SharedArrayBuffer): Buf {
     // TODO: find a way to re-use buffer IDs. With the current scheme the
     // program will crash after 2^31 allocations.
-    const id = ++idCounter;
+    const id = 1 + Atomics.add(idCounter, 0, 1);
     // The buffer ID is guaranteed to be greater than zero, and it
     // must be small enough to fit in an Int32Array slot.
     assert(id > 0 && id === ~~id);
-    const ab = new SharedArrayBuffer(byteLength);
     const i32 = new Int32Array(ab);
     const buf = new Buf(id, ab, i32);
     bufTable[id] = buf;
+    port.postMessage({ id: buf.id, ab: buf.ab }); // Share with other thread.
+    console.log("Sent buffer", buf.id);
     return buf;
+  }
+
+  static alloc(byteLength: number): Buf {
+    const ab = new SharedArrayBuffer(byteLength);
+    return this.import(ab);
   }
 
   static free(buf: Buf): void {
@@ -44,11 +59,22 @@ export class Buf {
     obj.i32 = null;
   }
 
-  static receive(buffers: BufTransferList) {
-    for (const {id, ab} of buffers) {
-      assert(!bufTable.hasOwnProperty(id), "Duplicate buffer ID");
-      const i32 = new Int32Array(ab);
-      bufTable[id] = new Buf(id, ab, i32);
-    }
+  static receive(e: MessageEvent) {
+    const { id, ab } = e.data;
+    console.log("Received buffer", id);
+    assert(!(id in bufTable), "Duplicate buffer ID");
+    const i32 = new Int32Array(ab);
+    bufTable[id] = new Buf(id, ab, i32);
+  }
+
+  static setup(p: MessagePort, idBuf: SharedArrayBuffer) {
+    idCounter = new Uint32Array(idBuf);
+    port = p;
+    port.onmessage = Buf.receive;
+    port.start();
+  }
+
+  static debugInfo() {
+    return Object.keys(bufTable).length;
   }
 }
