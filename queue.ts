@@ -29,7 +29,8 @@ const NEXT_BUFFER_MARKER_LENGTH = HEADER_LENGTH + 1;
 // The size of a queue buffer (in slots).
 const QUEUE_BUFFER_LENGTH = 0x1000000;
 
-export const YIELD = Symbol("YIELD");
+export const YIELD: unique symbol = Symbol("YIELD");
+export type YIELD = typeof YIELD;
 
 export interface Message {
   i32: Int32Array;

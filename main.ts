@@ -1,10 +1,6 @@
 import { Buf } from "./buf";
 import { QueueReader, QueueWriter, YIELD, Message, debugInfo } from "./queue";
 
-function delay(msec: number): Promise<void> {
-  return new Promise(res => setTimeout(res, msec));
-}
-
 async function main(
   threadId: number,
   mqIn: QueueReader,
@@ -60,6 +56,7 @@ interface StartupMessage {
   bufIdBuf: SharedArrayBuffer;
   mqInBuf: SharedArrayBuffer;
   mqOutBuf: SharedArrayBuffer;
+  stopBuf: Uint32Array;
 }
 
 const stopBuf = new Uint32Array(new SharedArrayBuffer(4));
