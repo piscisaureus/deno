@@ -32,10 +32,23 @@ environment:
         if ($LastExitCode -ne 0) { throw "Failure. Exit code: $LastExitCode" }
       }
 
+      # Get-Tree does the same thing as Get-ChildItem. The only difference is
+      # that the latter follows symbolic links, and Get-Tree doesn't.
+      function Get-Tree([string[]] $Path, [switch] $Recurse, [switch] $Force) {
+        function Get-SubDirs([string[]] $Path) {
+          Get-ChildItem -Path:$Path -Force:$Force `
+                        -Attributes Directory+!ReparsePoint |
+            ForEach-Object { $_.FullName }                  |
+            ForEach-Object { $_; Get-SubDirs -Path $_ }
+        }
+        if ($Recurse) { $Path += Get-SubDirs -Path:$Path }
+        Get-ChildItem -Path:$Path -Force:$Force @args
+      }
+
       # `Delete-Tree` is a simple wrapper around Remove-Item. It doesn't set
       # an error status if one of the paths to be deleted doesn't exist.
       function Delete-Tree([string[]] $Path) {
-        $Path | Foreach-Object {
+        $Path | ForEach-Object {
           "Deleting '$_'" | Write-Host -NoNewLine
           if (Test-Path -Path $_) {
             Remove-Item -Path $_ -Recurse -Force -ErrorAction Ignore
@@ -46,9 +59,111 @@ environment:
         }
       }
 
-      # `$will_save_cache` equals true if the cache will be saved at the end.
-      $will_save_cache = -not $env:APPVEYOR_PULL_REQUEST_NUMBER -and
-                         -not $env:APPVEYOR_CACHE_SKIP_SAVE -eq "true"
+      # A date in the distant past, used for file usage tracking.
+      $never_accessed = Get-Date -Date "1984-01-11T00:00:00Z"  # A good year.
+
+      # Start file tracking in order to avoid hoarding old build products.
+      function Begin-AntiHoarding([string[]] $Path) {
+        # Don't enable if the cache won't be saved.
+        if (-not (Get-SaveCache)) { return }
+        # Tell Windows to keep track of file access times.
+        Exec { & fsutil behavior set DisableLastAccess 0 }
+        # If the build directory doesn't exist, it could be that it wasn't
+        # restored from the cache. Don't error on nonexisting paths.
+        $global:anti_hoarding_roots = $Path           |
+          Where-Object   { Test-Path -Path $_ }       |
+          ForEach-Object { Get-Item -Path $_ -Force } |
+          ForEach-Object { $_.FullName }
+        # Don't enable if none of the paths subject to anti-hoarding exists.
+        if ($global:anti_hoarding_roots.Count -eq 0) { return }
+        $global:anti_hoarding_enabled = $true
+        # Store all tracked files in a hash map using their full path as key.
+        # Set all tracked files' last access time to very long ago.
+        $global:stale_files = @{}
+        $global:anti_hoarding_roots                                  |
+          ForEach-Object { Get-Tree -Path $_ -Recurse -Force -File } |
+          ForEach-Object { $_.LastAccessTime = $never_accessed
+                           $global:stale_files.Add($_.FullName, $true) }
+        Write-Host "Tracking $($global:stale_files.Count) files."
+      }
+
+      # Marks files as "not stale".
+      #   -Path paths[] : Unconditionally mark files as current. Paths can
+      #                   also be provided as pipeline input.
+      #   -Auto         : Mark all tracked files for which the last access time
+      #                   has changed as current.
+      #   -Reason text  : Optional reason, written to the build log.
+      function Mark-Current {
+        param (
+          [parameter(ValueFromPipeLine=$true)][string[]] $Path,
+          [switch] $Auto,
+          [string] $Reason
+        )
+        begin {
+          $counts = 0, 0  # Tuple of (path_count, auto_count).
+          function Mark-Helper([string[]] $Path, [switch] $CheckAccessTime) {
+            # Bail out early if anti-hoarding is off.
+            if (-not $global:anti_hoarding_enabled) { return }
+            $Path                                                             |
+              Where-Object   { Test-Path -Path $_ -PathType Leaf }            |
+              ForEach-Object { Get-Item -Path $_ -Force }                     |
+              Where-Object   { -not $CheckAccessTime -or
+                               $_.LastAccessTime -ne $never_accessed }        |
+              Where-Object   { $global:stale_files.ContainsKey($_.FullName) } |
+              ForEach-Object { $global:stale_files.Remove($_.FullName)
+                               $counts[$CheckAccessTime.ToBool()] += 1 }
+          }
+          # Mark accessed files.
+          if ($Auto) {
+            Mark-Helper -Path $global:stale_files.Keys -CheckAccessTime
+          }
+        }
+        process {
+          # Mark unconditional paths.
+          if ($Path) { Mark-Helper -Path:$Path }
+        }
+        end {
+          # Summarily log what we just did.
+          $r = if ($Reason) { $Reason + ": " } else { "" }
+          $counts[0] | Where-Object { $_ -gt 0 } | ForEach-Object {
+            Write-Host "$($r)$_ files explicitly marked current."
+          }
+          $counts[1] | Where-Object { $_ -gt 0 } | ForEach-Object {
+            Write-Host "$($r)$_ files accessed and therefore marked current."
+          }
+        }
+      }
+
+      # Clean up stale files and end file tracking.
+      function End-AntiHoarding {
+        # If anti-hoarding is off, this is a no-op.
+        if (-not $global:anti_hoarding_enabled) { return }
+        # Look for files that had their atime changed, and mark them current.
+        Mark-Current -Auto -Reason "Tracking ends"
+        # Make a list of all files to delete.
+        $files = $global:stale_files.Keys |
+                 Where-Object { Test-Path -Path $_ -PathType Leaf }
+        # Compute the total size of all the to-be-deleted files.
+        $size_info = $files | Get-Item | Measure-Object -Property Length -Sum
+        $size_mb = "{0:N1}" -f ($size_info.Sum / (1024 * 1024))
+        # Delete stale files.
+        $files | Remove-Item -Force
+        # Delete empty directories.
+        $dirs = Get-Tree -Path $global:anti_hoarding_roots `
+                         -Attributes Directory+!ReparsePoint `
+                         -Recurse -Force                   |
+                Sort-Object -Property FullName -Descending |
+                ForEach-Object { try { $_.Delete(); $_ } catch {} }
+        # Log summary.
+        Write-Host "Deleted $($files.Count) stale files and",
+                   "$($dirs.Count) directories ($size_mb MB)."
+      }
+
+      # Get-SaveCache returns $true if the cache will be saved at the end.
+      function Get-SaveCache {
+        -not $env:APPVEYOR_PULL_REQUEST_NUMBER -and
+        -not $env:APPVEYOR_CACHE_SKIP_SAVE -eq "true"
+      }
 
 for:
   # Do no save the build cache for feature branches. TODO: Once we have multiple
@@ -96,14 +211,20 @@ install:
   # Appveyor cache, it'll include only objects that were actually needed.
   # This step is skipped if the cache is not going to be saved.
   - ps: |-
-      if ($will_save_cache) {
+      if (Get-SaveCache) {
         Push-Location -Path $env:DENO_THIRD_PARTY_PATH
         Exec { & git gc --prune=all }
         Pop-Location
       }
 
+  # Configure depot_tools and add it to the search path. This is necessary
+  # because, later in this script, we need to invoke ninja directly.
+  - ps: |-
+      $env:PATH = "$env:DENO_THIRD_PARTY_PATH\depot_tools;$env:PATH"
+      $env:DEPOT_TOOLS_WIN_TOOLCHAIN = "0"
+
   # Install a recent Node.js version.
-  - ps: Install-Product node 10 x64
+  - ps: Install-Product -Product node -Version 10 -Platform x64
 
   # Make sure the right Python version is in PATH, and others are not.
   - ps: |-
@@ -134,7 +255,7 @@ install:
   #   up because we removed the 'rust-docs' component.
   # * The actual update is done by removing and reinstalling with rustup-init.
   - ps: |-
-      if ($will_save_cache -and (Test-Path -Path $env:CARGO_HOME)) {
+      if (Get-SaveCache -and (Test-Path -Path $env:CARGO_HOME)) {
         try {
           Exec -NoNewLines { & rustup update stable-x86_64-pc-windows-msvc }
         } catch {
@@ -174,14 +295,40 @@ install:
   - cargo --version
 
 before_build:
+  # Mark all files in the build dir 'stale' until proven otherwise.
+  # TODO: also track files in third_party that aren't checked into the repo.
+  - ps: Begin-AntiHoarding -Path $env:DENO_BUILD_PATH
+
   # Download clang and gn, generate ninja files.
   - python tools\setup.py
+  - ps: Mark-Current -Auto -Reason "Setup finished"
+
+  # Mark files that are produced during the build, and are known to ninja, as
+  # current. We obtain this list by dry-running `ninja -t clean`.
+  # N.b.: we deliberately do *not* pass `:all` to the clean command. It misses
+  # some important files, e.g. executables, .pdb and .ninja files.
+  - ps: |-
+      ninja -C $env:DENO_BUILD_PATH -n -t clean -g               |
+        Where-Object   { $_ -match "^Remove (.*)$" }             |
+        ForEach-Object { "$env:DENO_BUILD_PATH\$($Matches[1])" } |
+        Mark-Current -Auto -Reason "Build dependency graph"
+
+  # When Chromium's Clang is set up, a bunch of c runtime DLLs are copied to the
+  # build dir. Presumably they're there for a reason, so mark them as current.
+  - ps: |-
+      @("api-ms-win-core-*.dll", "api-ms-win-crt-*.dll", "dbgcore.dll",
+        "msvcp*.dll", "ucrtbase*.dll", "vccorlib*.dll", "vcruntime*.dll") |
+        ForEach-Object { "$env:DENO_BUILD_PATH\$_" }                      |
+        Mark-Current -Reason "C runtime DLLs"
 
 build_script:
   - python tools\build.py
-
-after_build:
+  - ps: Mark-Current -Auto -Reason "Build finished"
 
 test_script:
   - python tools\lint.py
   - ps: Exec { & python tools\test.py $env:DENO_BUILD_PATH }
+
+after_test:
+  # Remove stale files and empty dirs from the build directory.
+  - ps: End-AntiHoarding
