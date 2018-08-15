@@ -2,23 +2,24 @@ version: '{build}.{branch}'
 
 skip_branch_with_pr: true
 
-clone_folder: c:\deno
+clone_folder: c:\dummy
 clone_depth: 1
 
 environment:
   APPVEYOR_BUILD_WORKER_IMAGE: Visual Studio 2017
   DENO_BUILD_MODE: debug
-  DENO_BUILD_PATH: $(APPVEYOR_BUILD_FOLDER)\out\debug
-  DENO_THIRD_PARTY_PATH: $(APPVEYOR_BUILD_FOLDER)\third_party
-  CARGO_HOME: $(USERPROFILE)\.cargo
-  RUSTUP_HOME: $(USERPROFILE)\.rustup
+  MOUNT_DIR: c:\image
+  DENO_BUILD_PATH: c:\image\deno\out\debug
+  DENO_THIRD_PARTY_PATH: c:\image\deno\third_party
+  CARGO_HOME: c:\image\cargo
+  RUSTUP_HOME: c:\image\rustup
 
   # Appveyor uses 7zip to pack cache directories. We use these options:
   #   -t7z  : Use '7z' format. The default is 'zip' which can't store symlinks.
   #   -snl  : Store symlinks.
   #   -mtc  : Use UTC timestamps. This is required for incremental builds.
   #   -mx=1 : Fast compression.
-  APPVEYOR_CACHE_ENTRY_ZIP_ARGS: -t7z -snl -mtc -mx=1
+  APPVEYOR_CACHE_ENTRY_ZIP_ARGS: -tzip -mx=0
 
   # Define some PowerShell helper functions which are used in the scripts below.
   # They're defined in an environment variable to reduce noise in the build log.
@@ -61,7 +62,7 @@ environment:
 
       # A date in the distant past, used for file usage tracking.
       $never_accessed = Get-Date -Date "1984-01-11T00:00:00Z"  # A good year.
-
+     
       # Start file tracking in order to avoid hoarding old build products.
       function Begin-AntiHoarding([string[]] $Path) {
         # Don't enable if the cache won't be saved.
@@ -70,21 +71,25 @@ environment:
         Exec { & fsutil behavior set DisableLastAccess 0 }
         # If the build directory doesn't exist, it could be that it wasn't
         # restored from the cache. Don't error on nonexisting paths.
-        $global:anti_hoarding_roots = $Path           |
+        $roots = $Path           |
           Where-Object   { Test-Path -Path $_ }       |
           ForEach-Object { Get-Item -Path $_ -Force } |
           ForEach-Object { $_.FullName }
         # Don't enable if none of the paths subject to anti-hoarding exists.
-        if ($global:anti_hoarding_roots.Count -eq 0) { return }
-        $global:anti_hoarding_enabled = $true
+        if ($roots.Count -eq 0) { return }
+        if (-not $global:anti_hoarding_enabled) {
+          $global:anti_hoarding_enabled = $true
+          $global:stale_files = @{}
+          $global:anti_hoarding_roots = @()
+        }
         # Store all tracked files in a hash map using their full path as key.
         # Set all tracked files' last access time to very long ago.
-        $global:stale_files = @{}
-        $global:anti_hoarding_roots                                  |
+        $global:anti_hoarding_roots += $roots
+        $roots                                |
           ForEach-Object { Get-Tree -Path $_ -Recurse -Force -File } |
           ForEach-Object { $_.LastAccessTime = $never_accessed
                            $global:stale_files.Add($_.FullName, $true) }
-        Write-Host "Tracking $($global:stale_files.Count) files."
+        Write-Host "Now tracking $($global:stale_files.Count) files."
       }
 
       # Marks files as "not stale".
@@ -157,12 +162,51 @@ environment:
         # Log summary.
         Write-Host "Deleted $($files.Count) stale files and",
                    "$($dirs.Count) directories ($size_mb MB)."
+        $files | Write-Host
+        $dirs.FullName | Write-Host
+        $global:anti_hoarding_enabled = $false
       }
 
       # Get-SaveCache returns $true if the cache will be saved at the end.
       function Get-SaveCache {
         -not $env:APPVEYOR_PULL_REQUEST_NUMBER -and
         -not $env:APPVEYOR_CACHE_SKIP_SAVE -eq "true"
+      }
+      
+      $env:DENO_DISK_IMAGE = "c:\image.wim"
+      
+      function MountDiskImage {
+        if (-not (Test-Path $env:DENO_DISK_IMAGE)) {
+          mkdir c:\dummy -force
+          "x" > c:\dummy\.dummy
+          New-WindowsImage -ImagePath $env:DENO_DISK_IMAGE -CapturePath c:\dummy -Name image -CompressionType maximum
+        }
+        mkdir -f $env:MOUNT_DIR
+        Mount-WindowsImage -Path $env:MOUNT_DIR -ImagePath $env:DENO_DISK_IMAGE -Name image -Optimize
+      }
+      
+      function UnmountDiskImage {
+        set-location c:\
+        Dismount-WindowsImage -Path $env:MOUNT_DIR -Save
+      }
+      
+      function CloneRepo {
+        $env:appveyor_build_folder = "$env:MOUNT_DIR\deno"
+        if (-not (Test-Path $env:appveyor_build_folder)) {
+          git init $env:appveyor_build_folder
+        }
+        
+        set-location $env:appveyor_build_folder
+        
+        $remote = "https://github.com/$env:appveyor_repo_name.git"
+        $ref = if (-not $env:appveyor_pull_request_number) {
+                 "$env:appveyor_repo_branch"
+               } else {
+                 "refs/pull/$env:appveyor_pull_request_number/merge"
+               }
+               
+        git fetch --depth=1 $remote "$ref`:"
+        git checkout -qf FETCH_HEAD
       }
 
 for:
@@ -171,31 +215,38 @@ for:
   - branches:
       except:
         - master
+        - try
     environment:
       APPVEYOR_CACHE_SKIP_SAVE: true
 
 cache:
-  # Python packages installed with `pip --user` and Pip cache.
-  - $(APPDATA)\Python
-  - $(LOCALAPPDATA)\pip
-  # Rust stuff.
-  - $(CARGO_HOME)
-  - $(RUSTUP_HOME)
-  # Cache the third_party submodule to preserve binaries downloaded by setup.py,
-  # and to make incremental builds work.
-  - $(APPVEYOR_BUILD_FOLDER)\.git\modules\third_party
-  - $(APPVEYOR_BUILD_FOLDER)\third_party
-  # Build incrementally.
-  - $(DENO_BUILD_PATH)
+  ## Python packages installed with `pip --user` and Pip cache.
+  - c:\deno.wim
+  ## Rust stuff.
+  #- $(CARGO_HOME)
+  #- $(RUSTUP_HOME)
+  ## Cache the third_party submodule to preserve binaries downloaded by setup.py,
+  ## and to make incremental builds work.
+  #- $(APPVEYOR_BUILD_FOLDER)\.git\modules\third_party
+  #- $(APPVEYOR_BUILD_FOLDER)\third_party
+  ## Build incrementally.
+  #- $(DENO_BUILD_PATH)
 
 init:
   # Load utility functions
   - ps: Invoke-Expression $env:PS_UTILS
 
+clone_script:
   # Make git check out symlinks (not placeholder text files).
+  # Actual cloning happens in the install phase, after restoring the cache.
   - git config --global core.symlinks true
 
 install:
+  - ps: |-
+     $env:APPVEYOR_BUILD_FOLDER = "c:\image\deno"
+     MountDiskImage
+     CloneRepo
+    
   # Clone the third_party submodule.
   - ps: |-
       try {
@@ -225,6 +276,15 @@ install:
 
   # Install a recent Node.js version.
   - ps: Install-Product -Product node -Version 10 -Platform x64
+  
+  #
+  - ps: |-
+      "$env:APPDATA\Python", "$env:LOCALAPPDATA\pip" | foreach {
+        $real_dir = "c:\image\" + (split-path $_ -leaf)
+        mkdir $real_dir -force
+        if (test-path $_) { move-item $_ $env:TEMP -force }
+        new-item -ItemType Junction -path $_ -target $real_dir              
+      } | Out-Null
 
   # Make sure the right Python version is in PATH, and others are not.
   - ps: |-
@@ -255,13 +315,17 @@ install:
   #   up because we removed the 'rust-docs' component.
   # * The actual update is done by removing and reinstalling with rustup-init.
   - ps: |-
-      if (Get-SaveCache -and (Test-Path -Path $env:CARGO_HOME)) {
-        try {
-          Exec -NoNewLines { & rustup update stable-x86_64-pc-windows-msvc }
-        } catch {
-          Delete-Tree -Path $env:CARGO_HOME, $env:RUSTUP_HOME
+      function UpdateRust {
+        if (Get-SaveCache -and (Test-Path -Path $env:CARGO_HOME)) {
+          try {
+            Exec -NoNewLines { & rustup update stable-x86_64-pc-windows-msvc }
+          } catch {
+            Delete-Tree -Path $env:CARGO_HOME, $env:RUSTUP_HOME
+          }
         }
       }
+      #Delete-Tree -Path $env:CARGO_HOME, $env:RUSTUP_HOME
+      UpdateRust
 
   # Install or reinstall Rust via rustup-init.
   # * After install/update, the rustup directory is very big, with many files,
@@ -322,13 +386,18 @@ before_build:
         Mark-Current -Reason "C runtime DLLs"
 
 build_script:
-  - python tools\build.py
+  # - python tools\build.py
   - ps: Mark-Current -Auto -Reason "Build finished"
+  - ps: $targets = ninja -C out\debug -t targets | ?{ $_ -match "^build_extra/rust:.*(?=:)" } | %{ $Matches[0] } | ?{ $_ -notmatch "rustc$" }
+  # - ps: ninja -C out\debug -t clean $targets
+  - ps: ninja -C out\debug $targets
 
 test_script:
   - python tools\lint.py
-  - ps: Exec { & python tools\test.py $env:DENO_BUILD_PATH }
+  # - ps: Exec { & python tools\test.py $env:DENO_BUILD_PATH }
 
 after_test:
   # Remove stale files and empty dirs from the build directory.
   - ps: End-AntiHoarding
+  #- ps: $blockRdp = $true; iex ((new-object net.webclient).DownloadString('https://raw.githubusercontent.com/appveyor/ci/master/scripts/enable-rdp.ps1'))
+  - ps: UnmountDiskImage
