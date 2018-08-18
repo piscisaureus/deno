@@ -20,6 +20,36 @@ environment:
   #   -mx=1 : Fast compression.
   APPVEYOR_CACHE_ENTRY_ZIP_ARGS: -t7z -snl -mtc -mx=1
 
+  ZIPHOOK_BAT: |-
+      set CMD='"%~dpn0.ps1"'
+      for %%i in (%*) do call set CMD=%%CMD%% '%%i'
+      powershell -Command . %CMD%
+
+  ZIPHOOK_PS1: |-
+      using namespace System.Management.Automation.Runspaces
+      $ErrorActionPreference = "stop"
+      $ps = [PowerShell]::Create()
+      $agent = Get-PSHostProcessInfo -Name "Appveyor*"
+      $conn = [NamedPipeConnectionInfo]::New($agent.ProcessId)
+      $ps.runspace = [RunspaceFactory]::CreateRunspace($conn)
+      try {
+        $ps.runspace.Open()
+        [void] $ps.AddScript({
+          $ErrorActionPreference = "stop"
+          $ps = [PowerShell]::Create()
+          $ps.runspace = Get-Runspace | select -First 1
+          [void] $ps.AddScript({
+            Zip @args 2>&1 | Write-Host
+          })
+          $args | foreach { [void] $ps.AddArgument($_) }
+          $ps.Invoke()
+        })
+        $args | foreach { [void] $ps.AddArgument($_) }
+        $ps.Invoke()
+      } finally {
+        $ps.runspace.Dispose()
+      }
+
   # Define some PowerShell helper functions which are used in the scripts below.
   # They're defined in an environment variable to reduce noise in the build log.
   PS_UTILS: |-
@@ -158,6 +188,16 @@ environment:
         -not $env:APPVEYOR_CACHE_SKIP_SAVE -eq "true"
       }
 
+      # Set up the cache save/restore hook.
+      $env:7ZIP = "c:\ziphook.bat"
+      $env:ZIPHOOK_BAT | Out-File "c:\ziphook.bat" -Encoding ASCII
+      $env:ZIPHOOK_PS1 | Out-File "c:\ziphook.ps1" -Encoding ASCII
+
+      function Zip {
+        $Host.UI.WriteWarningLine("7z " + $args -join " ")
+        7z.exe @args
+      }
+
 for:
   # Do no save the build cache for feature branches. TODO: Once we have multiple
   # permanent branches, use a build matrix so each branch has it's own cache.
@@ -188,7 +228,11 @@ init:
   # Make git check out symlinks (not placeholder text files).
   - git config --global core.symlinks true
 
+  - ps: #$blockRdp=$false; iex ((new-object net.webclient).DownloadString('https://raw.githubusercontent.com/appveyor/ci/master/scripts/enable-rdp.ps1'))
+
 install:
+  - ps: #Start-Sleep 10000d
+
   # Clone the third_party submodule.
   - ps: |-
       try {
