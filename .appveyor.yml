@@ -152,20 +152,48 @@ environment:
         }
       }
 
-      # Get-SaveCache returns $true if the cache will be saved at the end.
-      function Get-SaveCache {
-        -not $env:APPVEYOR_PULL_REQUEST_NUMBER -and
-        -not $env:APPVEYOR_CACHE_SKIP_SAVE -eq "true"
+      # Initialize our custom cache handler.
+      Invoke-Expression $env:INIT_CACHE_PS1
+
+      # Do no save the build cache for feature branches. TODO: Once we have multiple
+      # permanent branches, use a build matrix so each branch has it's own cache.
+      $save_cache = $env:APPVEYOR_REPO_BRANCH -eq "master" -and
+                    -not $env:APPVEYOR_PULL_REQUEST_NUMBER
+      if (-not $save_cache) { $env:APPVEYOR_CACHE_SKIP_SAVE = "true" }
+
+      # Get-SaveCache returns $true if the cache may be saved at the end.
+      function Get-SaveCache { $save_cache }
+
+      function Restore-Cache([string[]] $ZipArgs) {
+        Write-Warning "7z $ZipArgs"
+        & "7z.exe" @ZipArgs
       }
 
-for:
-  # Do no save the build cache for feature branches. TODO: Once we have multiple
-  # permanent branches, use a build matrix so each branch has it's own cache.
-  - branches:
-      except:
-        - master
-    environment:
-      APPVEYOR_CACHE_SKIP_SAVE: true
+      #$global:unzip_processes = @()
+      #function Zip {
+      #  $Host.UI.WriteWarningLine("7z " + $args -join " ")
+      #  if ($args -contains "x") {
+      #    $ps = start-process -wait -NoNewWindow -PassThru -FilePath "7z.exe" -ArgumentList $args
+      #    $ps.Handle | Out-Null
+      #    $global:unzip_processes += $ps
+      #  } else {
+      #    7z.exe @args
+      #  }
+      #}
+      #
+      #function WaitForProcesses {
+      #  $global:unzip_processes | ft
+      #  $global:unzip_processes | foreach {
+      #    $_.WaitForExit()
+      #    Write-Warning "$($_.StartInfo.FileName) $($_.StartInfo.Arguments)"
+      #    $wall_clock_time = $_.ExitTime -$_.StartTime
+      #    Write-Host "wall clock time: $wall_clock_time"
+      #    Write-Host "user cpu time:   $($_.UserProcessorTime)"
+      #    Write-Host "kernel cpu time: $($_.PrivilegedProcessorTime)"
+      #    Write-Host "exit code: $($_.ExitCode)"
+      #    if ($_.ExitCode -ne 0) { throw "7zip failed" }
+      #  }
+      #}
 
 cache:
   # Python packages installed with `pip --user` and Pip cache.
@@ -188,7 +216,13 @@ init:
   # Make git check out symlinks (not placeholder text files).
   - git config --global core.symlinks true
 
+  #- ps: $blockRdp=$false; iex ((new-object net.webclient).DownloadString('https://raw.githubusercontent.com/appveyor/ci/master/scripts/enable-rdp.ps1'))
+
 install:
+  #- ps: WaitForProcesses
+  #- ps: gc C:\Users\appveyor\AppData\Local\Temp\1\build-cache-logs\*.log
+  #- ps: Start-Sleep 10000d
+
   # Clone the third_party submodule.
   - ps: |-
       try {
@@ -329,3 +363,115 @@ after_test:
       if ($out -notcontains "ninja: no work to do.") {
         throw "Build should be up-to-date but isnt't."
       }
+
+for:
+ - environment:
+    INIT_CACHE_PS1: |-
+      # Set up the cache save/restore hook.
+      $basename = "$env:TEMP\ziphook"
+      $env:ZIPHOOK_BAT | Out-File "$basename.bat" -Encoding ASCII
+      $env:ZIPHOOK_PS1 | Out-File "$basename.ps1" -Encoding ASCII
+      $env:7ZIP = "$basename.bat"  # Redirect 7z.exe invocations to ziphook.bat.
+
+      # Unclobber the environment.
+      Remove-Item env:INIT_CACHE_PS1, env:ZIPHOOK_???
+
+      # This function gets called whenever appveyor needs to zip a cache item.
+      function ZipHookCallback ([string] $CmdLine) {
+        # Forwarding argv from a batch file to a PS script is impossible(!)
+        # We get the unprocessed command line instead. Parse it into argv first.
+        $zipargs = $CmdLine | foreach {
+          $arg = $null      # Argument currently being built by the parser.
+          $q = $false       # True when parsing a quoted substring (between ").
+          for (; $_ -or $arg -ne $null; $_ = $_.Remove(0, $Matches[0].Length)) {
+            if ($_ -match '^(\\\\)+(?=\\?")') {     # Backslashes are escaped
+              $arg += '\' * ($Matches[0].Length/2)  # as \\, but only before ".
+            } elseif ($_ -match '^\\"' -or ($q -and $_ -match '^""')) {
+              $arg += '"'   # Quotes are escaped as \", in quoted str also "".
+            } elseif ($_ -match '^"') {
+              $q = -not $q  # Unescaped quote: begin/end of quoted substring.
+              $arg += ''    # Empty args happen; if $arg is null, change to ''.
+            } elseif ($_ -match '^$' -or (-not $q -and $_ -match '^[ `t]+')) {
+              $arg          # End of cmd, or space/tab outside quotes: emit arg.
+              $arg = $null  # Init next arg. Note: null $arg += 'string' is ok.
+            } elseif ($_ -match '^.') {
+              $arg += $Matches[0]  # Char w/o special purpose: append to arg.
+            }
+          }
+        }
+
+        # Parse the 7zip argument list, and build a hash table with keys
+        # corresponding to Save-Cache and Restore-Cache function parameters.
+        $info = @{ ZipArgs = $zipargs
+                   ZipCmdLine = $CmdLine }
+        $action, $info.ArchivePath, $info.SourcePath =
+          $zipargs | where { $_ -notmatch '^-' }
+        $info.OutDir =
+          $zipargs | where { $_ -match '^-o(.*)$' } | foreach { $Matches[1] }
+
+        # Invoke the high-level cache handlers.
+        switch ($action) {
+          "a"     { return Save-Cache    @info }
+          "x"     { return Restore-Cache @info }
+          default { throw "Unexpected 7zip command: $action" }
+        }
+      }
+
+    # When the AppVeyor build agent tries to run 7zip in order to save/restore
+    # the build cache, we intercept those calls. This file is invoked instead.
+    # All we do is call into the powershell script below.
+    ZIPHOOK_BAT: |-
+      set CMDLINE=%*
+      powershell -File "%~dpn0.ps1"
+
+    # This powerschell script is invoked by the batch file above. It breaks into
+    # the build agent process, and into the runspace where our other powershell
+    # scripts are also run. Then it calls the ZipHookCallback function.
+    ZIPHOOK_PS1: |-
+      using namespace System.Management.Automation.Runspaces
+      $ErrorActionPreference = "Stop"
+
+      $EnterRunspace = {
+        param ($GetRunspace, $CleanupRunspace, $Script, [HashTable] $Params)
+        function Call($Script) {
+          if ($Script -isnot [ScriptBlock]) {
+            $Script = [ScriptBlock]::Create($Script)
+          }
+          & $Script @args
+        }
+        $ps = [PowerShell]::Create()
+        $ps.Runspace = Call $GetRunspace
+        try {
+          @('using namespace System.Management.Automation.Runspaces'
+            '$eap__ = $ErrorActionPreference'
+            '$ErrorActionPreference = "Stop"'
+          ) | foreach { $ps = $ps.AddScript($_) }
+          $ps.AddScript($Script).AddParameters($Params).
+              AddScript('$ErrorActionPreference = $eap__').Invoke()
+        } finally {
+          if ($CleanupRunspace) { Call $CleanupRunspace -Runspace $ps.Runspace }
+        }
+      }
+
+      $hops = @{
+        GetRunspace = {
+          $agent = Get-PSHostProcessInfo -Name "Appveyor*"
+          $conn = [NamedPipeConnectionInfo]::New($agent.ProcessId)
+          $runspace = [RunspaceFactory]::CreateRunspace($conn)
+          $runspace.Open()
+          $runspace
+        }
+        CleanupRunspace = { param ($Runspace) $Runspace.Dispose() }
+        Script = $EnterRunspace
+        Params = @{
+          GetRunspace = { Get-Runspace | select -First 1 }
+          Script = {
+            param ([string] $CmdLine)
+            $ui = (Get-Variable -name Host -Scope global).Value.UI
+            try   { ZipHookCallback $CmdLine | Write-Host }
+            catch { $ui.WriteErrorLine("$_"); throw $_ }
+          }
+          Params = @{ CmdLine = $env:CMDLINE }
+        }
+      }
+      & $EnterRunspace @hops
