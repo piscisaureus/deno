@@ -60,11 +60,12 @@ def get_gn_args():
     cc_wrapper = find_executable("ccache") or find_executable("sccache")
     if cc_wrapper:
         out += [r'cc_wrapper="%s"' % cc_wrapper]
-        # Windows needs a custom toolchain for cc_wrapper to work.
+        # For cc_wrapper to work, we need to override 'custom_toolchain' and
+        # 'host_toolchain' in args.gn.
+        # TODO: is there a way to do this automatically and not use args.gn?
         if os.name == "nt":
-            out += [
-                'custom_toolchain="//build_extra/toolchain/win:win_clang_x64"'
-            ]
+            tc = "//build_extra/toolchain/win:win_clang_x64"
+            out += ['custom_toolchain="%s"' % tc, 'host_toolchain="%s"' % tc]
 
     print "DENO_BUILD_ARGS:", out
 
