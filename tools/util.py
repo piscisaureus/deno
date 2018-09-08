@@ -173,3 +173,32 @@ def parse_exit_code(s):
         return codes[0]
     else:
         return 0
+
+
+# Attempts to represent a path such that it is easy to read for humans.
+# A relative path may be returned, unless base is explicitly set to None.
+def pretty_path(path, base="."):
+    def rel(path, base, base_prefix, base_itself):
+        # Note: relpath() may fail on Windows, if `path` and `base` are on
+        # different drives.
+        try:
+            p = os.path.relpath(path, base)
+        except ValueError:
+            return None
+
+        if p.startswith(".."):
+            return None  # Paths that go up are not pretty.
+        elif p == ".":
+            return base_itself
+        else:
+            return base_prefix + p
+
+    home = os.path.expanduser("~")
+    candidates = [
+        rel(path, base, "", ".") if base is not None else None,
+        rel(path, home, "~" + os.sep, "~"),
+        os.path.abspath(path)
+    ]
+    candidates = filter(None, candidates)
+    candidates.sort(key=len)
+    return candidates[0]  # Return the shortest.
