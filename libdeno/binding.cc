@@ -299,8 +299,9 @@ bool Execute(v8::Local<v8::Context> context, const char* js_filename,
   return ExecuteV8StringSource(context, js_filename, source);
 }
 
-void InitializeContext(v8::Isolate* isolate, v8::Local<v8::Context> context,
-                       const char* js_filename, const std::string& js_source,
+void InitializeContext(Deno* d, v8::Isolate* isolate,
+                       v8::Local<v8::Context> context, const char* js_filename,
+                       const std::string& js_source,
                        const std::string* source_map) {
   v8::HandleScope handle_scope(isolate);
   v8::Context::Scope context_scope(context);
@@ -329,6 +330,12 @@ void InitializeContext(v8::Isolate* isolate, v8::Local<v8::Context> context,
   CHECK(deno_val
             ->Set(context, deno::v8_str("setGlobalErrorHandler"),
                   set_global_error_handler_val)
+            .FromJust());
+
+  auto control_buffer_ab = v8::ArrayBuffer::New(
+      isolate, &d->control_buffer, d->control_buffer_byte_length,
+      v8::ArrayBufferCreationMode::kExternalized);
+  CHECK(deno_val->Set(context, deno::v8_str("controlBuffer"), control_buffer_ab)
             .FromJust());
 
   {
@@ -375,6 +382,17 @@ void AddIsolate(Deno* d, v8::Isolate* isolate) {
   // d->isolate->SetFatalErrorHandler(FatalErrorCallback2);
   d->isolate->SetPromiseRejectCallback(deno::ExitOnPromiseRejectCallback);
   d->isolate->SetData(0, d);
+}
+
+intptr_t* GetExternalReferences(Deno* d) {
+  // Caller takes ownership of the returned array.
+  // TODO: how to do this in idiomatic C++?
+  return new intptr_t[6]{reinterpret_cast<intptr_t>(Print),
+                         reinterpret_cast<intptr_t>(Recv),
+                         reinterpret_cast<intptr_t>(Send),
+                         reinterpret_cast<intptr_t>(SetGlobalErrorHandler),
+                         reinterpret_cast<intptr_t>(d->control_buffer),
+                         0};
 }
 
 }  // namespace deno

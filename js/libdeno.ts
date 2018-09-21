@@ -20,6 +20,8 @@ interface Libdeno {
     ) => void
   ) => void;
 
+  controlBuffer: ArrayBuffer;
+
   mainSource: string;
   mainSourceMap: RawSourceMap;
 }

@@ -32,6 +32,7 @@ mod version;
 
 use isolate::Isolate;
 use std::env;
+use std::time::{Duration, SystemTime};
 
 static LOGGER: Logger = Logger;
 
@@ -48,6 +49,17 @@ impl log::Log for Logger {
     }
   }
   fn flush(&self) {}
+}
+
+// Returns current time in the same format as Javascript Date.now() -- that is,
+// the number of milliseconds passed since the UNIX epoch. For timers to work
+// correctly, the V8 and Rust clocks need to be in sync.
+fn js_now() -> u64 {
+  let duration_since_epoch = SystemTime::now()
+    .duration_since(SystemTime::UNIX_EPOCH)
+    .unwrap();
+  duration_since_epoch.as_secs() * 1000
+    + duration_since_epoch.subsec_millis() as u64
 }
 
 fn main() {
@@ -81,5 +93,9 @@ fn main() {
     });
 
   // Start the Tokio event loop
-  isolate.rt.run().expect("err");
+  while !isolate.rt.is_idle() {
+    isolate.rt.turn(Some(Duration::new(1, 0))).expect("err");
+    let now_msec = js_now();
+    println!("turned! ::   now = {}", now_msec);
+  }
 }

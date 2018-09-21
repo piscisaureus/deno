@@ -28,7 +28,10 @@ void deno_init();
 const char* deno_v8_version();
 void deno_set_flags(int* argc, char** argv);
 
-Deno* deno_new(void* data, deno_recv_cb cb);
+// TODO(piscisaureus): Move the `cb` argument to the end. This makes
+// libdeno_test.cc a lot easier to read.
+Deno* deno_new(void* data, deno_recv_cb cb, void* control_buffer,
+               uint32_t control_buffer_byte_length);
 void deno_delete(Deno* d);
 
 // Returns the void* data provided in deno_new.

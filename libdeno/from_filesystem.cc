@@ -14,7 +14,8 @@
 
 namespace deno {
 
-Deno* NewFromFileSystem(void* data, deno_recv_cb cb) {
+Deno* NewFromFileSystem(void* data, deno_recv_cb cb, void* control_buffer,
+                        uint32_t control_buffer_byte_length) {
   std::string exe_path;
   CHECK(deno::ExePath(&exe_path));
   std::string exe_dir = deno::Dirname(exe_path);  // Always ends with a slash.
@@ -27,10 +28,11 @@ Deno* NewFromFileSystem(void* data, deno_recv_cb cb) {
   std::string js_source_map;
   CHECK(deno::ReadFileToString(js_source_map_path.c_str(), &js_source_map));
 
-  Deno* d = new Deno;
-  d->currentArgs = nullptr;
+  Deno* d = new Deno();
   d->cb = cb;
   d->data = data;
+  d->control_buffer = control_buffer;
+  d->control_buffer_byte_length = control_buffer_byte_length;
   v8::Isolate::CreateParams params;
   params.array_buffer_allocator =
       v8::ArrayBuffer::Allocator::NewDefaultAllocator();
@@ -44,7 +46,7 @@ Deno* NewFromFileSystem(void* data, deno_recv_cb cb) {
     auto context = v8::Context::New(isolate);
     // For source maps to work, the bundle location that is passed to
     // InitializeContext must be a relative path.
-    InitializeContext(isolate, context, BUNDLE_LOCATION, js_source,
+    InitializeContext(d, isolate, context, BUNDLE_LOCATION, js_source,
                       &js_source_map);
     d->context.Reset(d->isolate, context);
   }
@@ -55,7 +57,9 @@ Deno* NewFromFileSystem(void* data, deno_recv_cb cb) {
 }  // namespace deno
 
 extern "C" {
-Deno* deno_new(void* data, deno_recv_cb cb) {
-  return deno::NewFromFileSystem(data, cb);
+Deno* deno_new(void* data, deno_recv_cb cb, void* control_buffer,
+               uint32_t control_buffer_byte_length) {
+  return deno::NewFromFileSystem(data, cb, control_buffer,
+                                 control_buffer_byte_length);
 }
 }

@@ -17,6 +17,8 @@ struct deno_s {
   v8::Persistent<v8::Context> context;
   deno_recv_cb cb;
   void* data;
+  void* control_buffer;
+  uint32_t control_buffer_byte_length;
 };
 }
 
@@ -30,16 +32,15 @@ void Print(const v8::FunctionCallbackInfo<v8::Value>& args);
 void Recv(const v8::FunctionCallbackInfo<v8::Value>& args);
 void Send(const v8::FunctionCallbackInfo<v8::Value>& args);
 void SetGlobalErrorHandler(const v8::FunctionCallbackInfo<v8::Value>& args);
-static intptr_t external_references[] = {
-    reinterpret_cast<intptr_t>(Print), reinterpret_cast<intptr_t>(Recv),
-    reinterpret_cast<intptr_t>(Send),
-    reinterpret_cast<intptr_t>(SetGlobalErrorHandler), 0};
 
 Deno* NewFromSnapshot(void* data, deno_recv_cb cb);
 
-void InitializeContext(v8::Isolate* isolate, v8::Local<v8::Context> context,
-                       const char* js_filename, const std::string& js_source,
+void InitializeContext(Deno* d, v8::Isolate* isolate,
+                       v8::Local<v8::Context> context, const char* js_filename,
+                       const std::string& js_source,
                        const std::string* source_map);
+
+intptr_t* GetExternalReferences(Deno* d);
 
 void AddIsolate(Deno* d, v8::Isolate* isolate);
 

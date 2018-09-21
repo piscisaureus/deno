@@ -25,7 +25,12 @@ extern "C" {
   pub fn deno_init();
   pub fn deno_v8_version() -> *const c_char;
   pub fn deno_set_flags(argc: *mut c_int, argv: *mut *mut c_char);
-  pub fn deno_new(data: *const c_void, cb: DenoRecvCb) -> *const DenoC;
+  pub fn deno_new(
+    data: *const c_void,
+    cb: DenoRecvCb,
+    control_buffer: *mut c_void,
+    control_buffer_byte_length: u32,
+  ) -> *const DenoC;
   pub fn deno_delete(d: *const DenoC);
   pub fn deno_last_exception(d: *const DenoC) -> *const c_char;
   pub fn deno_get_data(d: *const DenoC) -> *const c_void;

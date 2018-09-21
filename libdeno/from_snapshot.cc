@@ -43,11 +43,14 @@ void DeserializeInternalFields(v8::Local<v8::Object> holder, int index,
   deserialized_data.push_back(embedder_field);
 }
 
-Deno* NewFromSnapshot(void* data, deno_recv_cb cb) {
-  Deno* d = new Deno;
-  d->currentArgs = nullptr;
+Deno* NewFromSnapshot(void* data, deno_recv_cb cb, void* control_buffer,
+                      uint32_t control_buffer_byte_length) {
+  Deno* d = new Deno();
   d->cb = cb;
   d->data = data;
+  d->control_buffer = control_buffer;
+  d->control_buffer_byte_length = control_buffer_byte_length;
+  auto external_references = GetExternalReferences(d);
   v8::Isolate::CreateParams params;
   params.array_buffer_allocator =
       v8::ArrayBuffer::Allocator::NewDefaultAllocator();
@@ -74,13 +77,16 @@ Deno* NewFromSnapshot(void* data, deno_recv_cb cb) {
     d->context.Reset(d->isolate, context);
   }
 
+  delete[] external_references;
   return d;
 }
 
 }  // namespace deno
 
 extern "C" {
-Deno* deno_new(void* data, deno_recv_cb cb) {
-  return deno::NewFromSnapshot(data, cb);
+Deno* deno_new(void* data, deno_recv_cb cb, void* control_buffer,
+               uint32_t control_buffer_byte_length) {
+  return deno::NewFromSnapshot(data, cb, control_buffer,
+                               control_buffer_byte_length);
 }
 }

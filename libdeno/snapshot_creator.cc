@@ -25,13 +25,20 @@ v8::StartupData SerializeInternalFields(v8::Local<v8::Object> holder, int index,
 v8::StartupData MakeSnapshot(const char* js_filename,
                              const std::string& js_source,
                              const std::string* source_map) {
+  // IMPORTANT: control_buffer length must be kept in sync with main.rs.
+  // TODO: retrieve this size dynamically.
+  uint32_t control_buffer[2];
+  auto d = new Deno();
+  d->control_buffer = control_buffer;
+  d->control_buffer_byte_length = sizeof control_buffer;
+  auto external_references = GetExternalReferences(d);
   auto* creator = new v8::SnapshotCreator(external_references);
   auto* isolate = creator->GetIsolate();
   v8::Isolate::Scope isolate_scope(isolate);
   {
     v8::HandleScope handle_scope(isolate);
     auto context = v8::Context::New(isolate);
-    InitializeContext(isolate, context, js_filename, js_source, source_map);
+    InitializeContext(d, isolate, context, js_filename, js_source, source_map);
     creator->SetDefaultContext(context, v8::SerializeInternalFieldsCallback(
                                             SerializeInternalFields, nullptr));
   }
@@ -39,6 +46,7 @@ v8::StartupData MakeSnapshot(const char* js_filename,
   auto snapshot_blob =
       creator->CreateBlob(v8::SnapshotCreator::FunctionCodeHandling::kClear);
 
+  delete[] external_references;
   return snapshot_blob;
 }
 

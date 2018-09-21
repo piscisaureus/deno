@@ -9,6 +9,7 @@ use std;
 use std::collections::HashMap;
 use std::ffi::CStr;
 use std::ffi::CString;
+use std::mem::size_of_val;
 use tokio_runtime;
 
 type DenoException<'a> = &'a str;
@@ -20,6 +21,7 @@ pub struct Isolate {
   pub timers: HashMap<u32, futures::sync::oneshot::Sender<()>>,
   pub argv: Vec<String>,
   pub flags: flags::DenoFlags,
+  control_buffer: [u32; 2],
 }
 
 static DENO_INIT: std::sync::Once = std::sync::ONCE_INIT;
@@ -39,14 +41,21 @@ impl Isolate {
       timers: HashMap::new(),
       argv: argv_rest,
       flags,
+      control_buffer: [0, 0],
     });
 
-    (*deno_box).ptr = unsafe {
-      libdeno::deno_new(
-        deno_box.as_ref() as *const _ as *const c_void,
-        handlers::msg_from_js,
-      )
-    };
+    {
+      let deno = &mut *deno_box;
+
+      deno.ptr = unsafe {
+        libdeno::deno_new(
+          deno as *const _ as *const c_void,
+          handlers::msg_from_js,
+          deno.control_buffer.as_mut_ptr() as *mut c_void,
+          size_of_val(&deno.control_buffer) as u32,
+        )
+      };
+    }
 
     deno_box
   }
