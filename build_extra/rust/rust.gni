@@ -2,6 +2,10 @@ declare_args() {
   # Absolute path of rust build files.
   rust_build = "//build_extra/rust/"
 
+  # Full path to the rustc executable. If not explicitly set, it'll be located
+  # by searching PATH for it.
+  rustc = exec_script("get_rustc_path.py", [], "trim string")
+
   # Wrapper executable for rustc invocations. This can be used for a caching
   # utility, e.g. sccache.
   rustc_wrapper = ""
@@ -110,6 +114,10 @@ template("run_rustc") {
     }
 
     script = "//third_party/v8/tools/run.py"
+    inputs = [
+      #rustc,
+      "..\..\out\debug\c:\users\bertbelder\bla.bat"
+    ]
     sources = [
       source_root,
     ]
@@ -125,7 +133,7 @@ template("run_rustc") {
     }
 
     args += [
-      "rustc",
+      rustc,  # Keep this path absolute as it is outside the repo.
       rebase_path(source_root, root_build_dir),
       "--crate-name=$crate_name",
       "--crate-type=$crate_type",
@@ -176,8 +184,6 @@ template("run_rustc") {
     if (!defined(deps)) {
       deps = []
     }
-
-    inputs = []
 
     # Build the list of '--extern' arguments from the 'extern_infos' array.
     foreach(info, extern_infos) {
