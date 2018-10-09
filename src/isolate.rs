@@ -14,7 +14,10 @@ use snapshot;
 
 use futures::Future;
 use libc::c_void;
+use repl::DenoRepl;
 use std;
+use std::collections::hash_map::Entry::{Occupied, Vacant};
+use std::collections::HashMap;
 use std::env;
 use std::ffi::CStr;
 use std::ffi::CString;
@@ -62,6 +65,7 @@ pub struct IsolateState {
   pub flags: flags::DenoFlags,
   tx: Mutex<Option<mpsc::Sender<(i32, Buf)>>>,
   pub metrics: Mutex<Metrics>,
+  pub repls: Mutex<HashMap<String, DenoRepl>>,
 }
 
 impl IsolateState {
@@ -104,6 +108,19 @@ impl IsolateState {
     let mut metrics = self.metrics.lock().unwrap();
     metrics.ops_completed += 1;
     metrics.bytes_received += bytes_received;
+  }
+
+  pub fn start_repl(&self, name: String) {
+    let mut repls = self.repls.lock().unwrap();
+    match repls.entry(name.clone()) {
+      Occupied(entry) => entry.into_mut(),
+      Vacant(entry) => entry.insert(DenoRepl::new(&name, &self.dir)),
+    };
+  }
+
+  pub fn exit_repl(&self, name: String) {
+    let mut repls = self.repls.lock().unwrap();
+    repls.remove(&name).unwrap();
   }
 }
 
@@ -165,6 +182,7 @@ impl Isolate {
         flags,
         tx: Mutex::new(Some(tx)),
         metrics: Mutex::new(Metrics::default()),
+        repls: Mutex::new(HashMap::new()),
       }),
     }
   }

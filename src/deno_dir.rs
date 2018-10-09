@@ -32,6 +32,8 @@ pub struct DenoDir {
   // This splits to http and https deps
   pub deps_http: PathBuf,
   pub deps_https: PathBuf,
+  // This is where repl data is stored, e.g. history.
+  pub repl: PathBuf,
   // If remote resources should be reloaded.
   reload: bool,
 }
@@ -55,6 +57,7 @@ impl DenoDir {
     let deps = root.as_path().join("deps");
     let deps_http = deps.join("http");
     let deps_https = deps.join("https");
+    let repl = root.as_path().join("repl");
 
     let deno_dir = DenoDir {
       root,
@@ -63,14 +66,17 @@ impl DenoDir {
       deps_http,
       deps_https,
       reload,
+      repl,
     };
     deno_fs::mkdir(deno_dir.gen.as_ref(), 0o755)?;
     deno_fs::mkdir(deno_dir.deps.as_ref(), 0o755)?;
     deno_fs::mkdir(deno_dir.deps_http.as_ref(), 0o755)?;
     deno_fs::mkdir(deno_dir.deps_https.as_ref(), 0o755)?;
+    deno_fs::mkdir(deno_dir.repl.as_ref(), 0o755)?;
 
     debug!("root {}", deno_dir.root.display());
     debug!("gen {}", deno_dir.gen.display());
+    debug!("repl {}", deno_dir.repl.display());
     debug!("deps {}", deno_dir.deps.display());
     debug!("deps_http {}", deno_dir.deps_http.display());
     debug!("deps_https {}", deno_dir.deps_https.display());

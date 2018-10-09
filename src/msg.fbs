@@ -24,6 +24,10 @@ union Any {
   Rename,
   Readlink,
   ReadlinkRes,
+  ReplStart,
+  ReplExit,
+  ReplReadline,
+  ReplReadlineRes,
   Resources,
   ResourcesRes,
   Symlink,
@@ -271,6 +275,24 @@ table Readlink {
 
 table ReadlinkRes {
   path: string;
+}
+
+table ReplStart {
+  name: string;
+  // TODO add config
+}
+
+table ReplExit {
+  name: string;
+}
+
+table ReplReadline {
+  name: string;
+  prompt: string;
+}
+
+table ReplReadlineRes {
+  line: string;
 }
 
 table Resources {}
