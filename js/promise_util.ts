@@ -1,4 +1,4 @@
-import { PromiseRejectEvent } from "./libdeno";
+import { PromiseHookType, PromiseRejectEvent } from "./libdeno";
 
 /* tslint:disable-next-line:no-any */
 const rejectMap = new Map<Promise<any>, string>();
@@ -7,6 +7,13 @@ const rejectMap = new Map<Promise<any>, string>();
 /* tslint:disable-next-line:no-any */
 const otherErrorMap = new Map<Promise<any>, string>();
 // For reject after resolve / resolve after resolve errors
+
+export function promiseHook(
+  type: PromiseHookType,
+  promise: Promise<unknown>,
+  parent?: Promise<unknown>
+) {
+}
 
 export function promiseRejectHandler(
   error: Error | string,

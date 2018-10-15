@@ -3,6 +3,15 @@ import { globalEval } from "./global_eval";
 
 // The libdeno functions are moved so that users can't access them.
 type MessageCallback = (msg: Uint8Array) => void;
+
+// These enum values must match v8::PromiseHookType.
+export enum PromiseHookType {
+  Init = 0,
+  Resolve,
+  Before,
+  After
+}
+
 export type PromiseRejectEvent =
   | "RejectWithNoHandler"
   | "HandlerAddedAfterReject"
@@ -23,6 +32,14 @@ interface Libdeno {
       line: number,
       col: number,
       error: Error
+    ) => void
+  ) => void;
+
+  setPromiseHook: (
+    handler: (
+      type: PromiseHookType,
+      promise: Promise<unknown>,
+      parent?: Promise<unknown>
     ) => void
   ) => void;
 

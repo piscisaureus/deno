@@ -7,7 +7,11 @@ import { DenoCompiler } from "./compiler";
 import { libdeno } from "./libdeno";
 import { args } from "./deno";
 import { sendSync, handleAsyncMsgFromRust } from "./dispatch";
-import { promiseErrorExaminer, promiseRejectHandler } from "./promise_util";
+import {
+  promiseErrorExaminer,
+  promiseHook,
+  promiseRejectHandler
+} from "./promise_util";
 
 function sendStart(): msg.StartRes {
   const builder = new flatbuffers.Builder();
@@ -40,6 +44,7 @@ function onGlobalError(
 export default function denoMain() {
   libdeno.recv(handleAsyncMsgFromRust);
   libdeno.setGlobalErrorHandler(onGlobalError);
+  libdeno.setPromiseHook(promiseHook);
   libdeno.setPromiseRejectHandler(promiseRejectHandler);
   libdeno.setPromiseErrorExaminer(promiseErrorExaminer);
   const compiler = DenoCompiler.instance();
