@@ -14,6 +14,7 @@ struct deno_s {
   std::string last_exception;
   v8::Persistent<v8::Function> recv;
   v8::Persistent<v8::Function> global_error_handler;
+  v8::Persistent<v8::Function> promise_hook;
   v8::Persistent<v8::Function> promise_reject_handler;
   v8::Persistent<v8::Function> promise_error_examiner;
   int32_t pending_promise_events;
@@ -35,6 +36,7 @@ void Print(const v8::FunctionCallbackInfo<v8::Value>& args);
 void Recv(const v8::FunctionCallbackInfo<v8::Value>& args);
 void Send(const v8::FunctionCallbackInfo<v8::Value>& args);
 void SetGlobalErrorHandler(const v8::FunctionCallbackInfo<v8::Value>& args);
+void SetPromiseHook(const v8::FunctionCallbackInfo<v8::Value>& args);
 void SetPromiseRejectHandler(const v8::FunctionCallbackInfo<v8::Value>& args);
 void SetPromiseErrorExaminer(const v8::FunctionCallbackInfo<v8::Value>& args);
 static intptr_t external_references[] = {
@@ -42,6 +44,7 @@ static intptr_t external_references[] = {
     reinterpret_cast<intptr_t>(Recv),
     reinterpret_cast<intptr_t>(Send),
     reinterpret_cast<intptr_t>(SetGlobalErrorHandler),
+    reinterpret_cast<intptr_t>(SetPromiseHook),
     reinterpret_cast<intptr_t>(SetPromiseRejectHandler),
     reinterpret_cast<intptr_t>(SetPromiseErrorExaminer),
     0};

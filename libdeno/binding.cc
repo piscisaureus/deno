@@ -151,6 +151,26 @@ const char* PromiseRejectStr(enum v8::PromiseRejectEvent e) {
   }
 }
 
+void PromiseHook(v8::PromiseHookType type, v8::Local<v8::Promise> promise,
+                 v8::Local<v8::Value> parent) {
+  auto* isolate = promise->GetIsolate();
+  Deno* d = static_cast<Deno*>(isolate->GetData(0));
+  DCHECK_EQ(d->isolate, isolate);
+  v8::HandleScope handle_scope(d->isolate);
+  auto context = d->context.Get(d->isolate);
+  v8::Context::Scope context_scope(context);
+
+  auto promise_hook = d->promise_hook.Get(isolate);
+  if (promise_hook.IsEmpty()) {
+    return;
+  }
+
+  v8::Local<v8::Value> args[] = {
+      v8::Integer::New(isolate, static_cast<int32_t>(type)), promise, parent};
+  promise_hook->Call(v8::Undefined(isolate), sizeof args / sizeof args[0],
+                     args);
+}
+
 void PromiseRejectCallback(v8::PromiseRejectMessage promise_reject_message) {
   auto* isolate = v8::Isolate::GetCurrent();
   Deno* d = static_cast<Deno*>(isolate->GetData(0));
@@ -323,6 +343,25 @@ void SetGlobalErrorHandler(const v8::FunctionCallbackInfo<v8::Value>& args) {
   d->global_error_handler.Reset(isolate, func);
 }
 
+void SetPromiseHook(const v8::FunctionCallbackInfo<v8::Value>& args) {
+  v8::Isolate* isolate = args.GetIsolate();
+  Deno* d = reinterpret_cast<Deno*>(isolate->GetData(0));
+  DCHECK_EQ(d->isolate, isolate);
+
+  v8::HandleScope handle_scope(isolate);
+
+  if (!d->promise_hook.IsEmpty()) {
+    isolate->ThrowException(v8_str("libdeno.setPromiseHook already called."));
+    return;
+  }
+
+  v8::Local<v8::Value> v = args[0];
+  CHECK(v->IsFunction());
+  v8::Local<v8::Function> func = v8::Local<v8::Function>::Cast(v);
+
+  d->promise_hook.Reset(isolate, func);
+}
+
 // Sets the promise uncaught reject handler
 void SetPromiseRejectHandler(const v8::FunctionCallbackInfo<v8::Value>& args) {
   v8::Isolate* isolate = args.GetIsolate();
@@ -440,6 +479,14 @@ void InitializeContext(v8::Isolate* isolate, v8::Local<v8::Context> context,
                   set_global_error_handler_val)
             .FromJust());
 
+  auto set_promise_hook_tmpl =
+      v8::FunctionTemplate::New(isolate, SetPromiseHook);
+  auto set_promise_hook_val =
+      set_promise_hook_tmpl->GetFunction(context).ToLocalChecked();
+  CHECK(deno_val
+            ->Set(context, deno::v8_str("setPromiseHook"), set_promise_hook_val)
+            .FromJust());
+
   auto set_promise_reject_handler_tmpl =
       v8::FunctionTemplate::New(isolate, SetPromiseRejectHandler);
   auto set_promise_reject_handler_val =
@@ -502,6 +549,7 @@ void AddIsolate(Deno* d, v8::Isolate* isolate) {
   // d->isolate->SetAbortOnUncaughtExceptionCallback(AbortOnUncaughtExceptionCallback);
   // d->isolate->AddMessageListener(MessageCallback2);
   // d->isolate->SetFatalErrorHandler(FatalErrorCallback2);
+  d->isolate->SetPromiseHook(deno::PromiseHook);
   d->isolate->SetPromiseRejectCallback(deno::PromiseRejectCallback);
   d->isolate->SetData(0, d);
 }
