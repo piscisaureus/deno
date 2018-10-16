@@ -8,12 +8,49 @@ const rejectMap = new Map<Promise<any>, string>();
 const otherErrorMap = new Map<Promise<any>, string>();
 // For reject after resolve / resolve after resolve errors
 
+let promiseIdCounter = 0;
+
+function getPromiseId(promise: Promise<unknown>): number {
+  const obj = promise as { id?: number };
+  if (obj.id) {
+    return obj.id;
+  } else {
+    return (obj.id = ++promiseIdCounter);
+  }
+}
+
+const typeNames = {
+  [PromiseHookType.Init]: "Init",
+  [PromiseHookType.Resolve]: "Resolve",
+  [PromiseHookType.Before]: "Before",
+  [PromiseHookType.After]: "After"
+};
+
 export function promiseHook(
   type: PromiseHookType,
   promise: Promise<unknown>,
   parent?: Promise<unknown>
 ) {
+  console.log(
+    `Promise hook ${typeNames[type]}`,
+    getPromiseId(promise),
+    parent ? getPromiseId(parent) : -1
+  );
 }
+
+function callThenHook(promise: Promise<unknown>, resolve: unknown, reject: unknown, resolution: unknown) {
+  console.log("Promise then", getPromiseId(promise), resolve, reject, resolution);
+}
+
+const then = Promise.prototype.then;
+Promise.prototype.then = function(a, b) {
+  let rv;
+  try {
+    return rv = then.call(this, a, b);
+  } finally {
+    callThenHook(this, a, b, rv);
+  }
+};
 
 export function promiseRejectHandler(
   error: Error | string,
