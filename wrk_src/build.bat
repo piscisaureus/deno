@@ -1,0 +1,1 @@
+clang-cl /imsvc shims /I boringssl/include /I luajit/src /imsvc getopt /imsvc getopt/shims /FI shim.h /FI getopt/shim.h -DHAVE_EPOLL=1 wrk.c net.c ssl.c aprintf.c stats.c script.c units.c ae.c zmalloc.c http_parser.c getopt/getopt.c getopt/getopt_long.c luajit/src/lua51.lib %*

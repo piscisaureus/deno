@@ -1,0 +1,130 @@
+
+
+gyp2gn_py = rebase_path("gyp2gn.py")
+run_py = rebase_path("run.py")
+
+template("gyp_rule") {
+  action_foreach(target_name) {
+    forward_variables_from(invoker, ["gyp_rule", "gypfile_dir"])
+    sources = rebase_path(gyp_rule.rule_sources, "", gypfile_dir)
+    inputs = rebase_path(gyp_rule.inputs, "", gypfile_dir)
+    outputs = gyp_rule.outputs
+    script = run_py
+    args = gyp_rule.action
+  }
+}
+
+template("gyp_target") {
+  forward_variables_from(invoker, ["gyp"])
+  
+  # Initialize the scope where we'll put variables for the gn target.
+  gn = {}
+  gn.deps = []
+  
+  # This list contains *all* the source files listed gyp, including those that
+  # are built with a custom rule. We'll deal with those rules first, removing
+  # rule sources as we go. At the end only the files that are actually sources 
+  # for this target will remain.
+  own_sources = gyp.sources
+  
+  # This list will hold the object files produces by outputs.
+  # They will be treated as sources for this target.
+  rule_outputs = []
+  
+  # Transform custom rules into actions, and remove the inputs from 'sources'.
+  if (defined(gyp.rules)) {
+    foreach(gyp_rule, gyp.rules) {
+      # Define an action_foreach target that corresponds to this rule.
+      action_name = "${target_name}_${gyp_rule.rule_name}"
+      gyp_rule(action_name) {
+        gypfile_dir = gyp.gypfile_dir
+      }
+      
+      # Add a dependency on the target and it's outputs.
+      gn.deps += [":$action_name"]
+      rule_outputs += get_target_outputs(":$action_name")
+      
+      # Remove the rule's sources from this target's source list.
+      own_sources -= gyp_rule.rule_sources
+    }
+  }
+  
+  # Rebase the remaining sources and add them to the gn scope. 
+  gn.sources = rebase_path(own_sources, "", gyp.gypfile_dir)
+  # Add the outputs produced by gyp rules (most likely object files).
+  gn.sources += rule_outputs
+  
+  # GYP's 'libraries' correspond to GN's ldflags here.
+  if (defined(gyp.libs)) {
+    gn.libs = gyp.libs
+  }
+  
+  # Add GYP's dependencies to the list of deps.
+  if (defined(gyp.dependencies)) {
+    foreach(qualified_name, gyp.dependencies) {
+      gn.deps += [":$qualified_name"]
+    }
+  }
+  
+  # Select the gyp configuration to use.
+  gyp_configurations = gyp.configurations
+  if (is_debug) {
+    if (defined(gyp_configurations.Debug)) {
+      config_type = "Debug"
+      config_scope = gyp_configurations.Debug
+    }
+  } else {
+    if (defined(gyp_configurations.Release)) {
+      config_type = "Release"
+      config_scope = gyp_configurations.Release
+    }
+  }
+  if (!defined(config)) {
+    config_type = gyp.default_configuration
+    config_scope = gyp_configurations._default
+  }
+  
+  # Build the gn config from the gyp configuration.
+  config_name = "${target_name}_${config_type}"
+  config(config_name) {
+    forward_variables_from(config_scope, "*", ["include_dirs"])
+    include_dirs = rebase_path(config_scope.include_dirs, "", gyp.gypfile_dir)
+  }
+  gn.configs = [":$config_name"]
+  
+  if (gyp.type == "static_library") {
+    static_library(target_name) {
+      forward_variables_from(gn, "*")
+    }
+  } else if (gyp.type == "executable") {
+    executable(target_name) {
+      forward_variables_from(gn, "*")
+    }
+  } else {
+    # Other types not supported.
+    assert(0 && "Unsupported target type")
+  }
+}
+
+template("gyp_import") {
+  forward_variables_from(invoker, "*")
+
+  substitutions = [
+    "-DINTERMEDIATE_DIR={{source_out_dir}}",
+    "-DPRODUCT_DIR=$target_out_dir",
+    "-DRULE_INPUT_ROOT={{source_name_part}}",
+    "-DRULE_INPUT_NAME={{source_file_part}}",
+    "-DRULE_INPUT_PATH={{source}}"
+  ]
+  
+  gyp_targets = exec_script(gyp2gn_py, [rebase_path(gypfile, root_build_dir),
+                         "--depth", rebase_path(project_root_dir, root_build_dir), "-Dlibrary=static_library", 
+                         "-DOS=win", "-Dtarget_arch=x64"] + substitutions, "json")
+  print(invoker, target_name)
+  foreach(gyp, gyp_targets) {
+    gyp_target(gyp.qualified_name) {
+    }
+  }
+}
+ 
+
