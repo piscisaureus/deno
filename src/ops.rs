@@ -1266,6 +1266,9 @@ fn op_http_accept(
     return odd_future(e);
   }
 
+  use http_util::log_thread;
+  log_thread("dispatch op");
+
   let cmd_id = base.cmd_id();
   let inner = base.inner_as_http_accept().unwrap();
   let listener_rid = inner.listener_rid();

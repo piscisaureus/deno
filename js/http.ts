@@ -28,6 +28,10 @@ export class HttpServer implements Closer {
     }
   }
 
+  accept() {
+    return httpAccept(this.rid);
+  }
+
   close(): void {
     this._closing = true;
     close(this.rid);

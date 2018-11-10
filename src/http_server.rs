@@ -5,6 +5,7 @@ use errors::DenoResult;
 use futures::sync::mpsc;
 use futures::sync::oneshot;
 use futures::Sink;
+use http_util::log_thread;
 use hyper::rt::{Future, Stream};
 use hyper::service::service_fn;
 use hyper::{Body, Request, Response, Server};
@@ -53,20 +54,26 @@ pub fn create_and_bind(addr: &SocketAddr) -> DenoResult<HttpServer> {
 
   let sender_b2 = sender_b.clone();
 
-  let loop_fut =
-    loop_rx
-      .zip(loop2_rx)
-      .for_each(|(transaction_sender, transaction)| {
-        let r = transaction_sender.send(transaction);
-        assert!(r.is_ok());
-        Ok(())
-      });
+  let loop_fut = loop_rx
+    .map(|v| {
+      log_thread("zip: got half");
+      v
+    }).zip(loop2_rx)
+    .for_each(|(transaction_sender, transaction)| {
+      log_thread("zip: got pair");
+      let r = transaction_sender.send(transaction);
+      assert!(r.is_ok());
+      Ok(())
+    });
+
+  log_thread("new_service");
 
   let new_service = move || {
     // Yes, this is oddly necessary. Attempts to remove it end in tears.
     let sender_b3 = sender_b2.clone();
 
     service_fn(move |req: Request<Body>| {
+      log_thread("service_fn");
       let (response_tx, response_rx) = oneshot::channel::<Res>();
       //
       let transaction = Transaction {

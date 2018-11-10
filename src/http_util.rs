@@ -20,6 +20,13 @@ lazy_static! {
   };
 }
 
+#[allow(unused_imports)]
+use std::thread;
+#[allow(unused_variables)]
+pub fn log_thread(msg: &str) {
+  println!("{:?} :: {}", thread::current().id(), msg);
+}
+
 pub fn get_client() -> Client<Connector, hyper::Body> {
   // TODO use Hyper's connection pool.
   let c = CONNECTOR.clone();
