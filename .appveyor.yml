@@ -181,9 +181,9 @@ environment:
           $dirty = git -C $repo status -z -uno --ignore-submodules=all
           if ($dirty) { throw "Work tree $repo dirty." }
           # Ask git for a list of checked-out files and their hashes, metadata.
-          (git -C $_ ls-files -z --stage --eol --full-name -split "\0") |
+          (git -C $repo ls-files -z --stage --eol --full-name) -split "\0" |
             # Filter out non-files, keep only those with mode 100644/100755.
-            where { $_ -match "^100" }
+            where { $_ -match "^100" } |
             foreach {
               # The repo root dir plus the entire "mode hash attr filename" line
               # serves as the cache key.
