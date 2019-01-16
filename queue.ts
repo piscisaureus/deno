@@ -2,8 +2,8 @@ import { assert } from "./assert";
 import { Buf } from "./buf";
 
 export const debugInfo = {
-  spinCount: 0,
-  waitCount: 0
+  spinCountRemaining: { reader: 0, writer: 0 },
+  waitCount: { reader: 0, writer: 0 }
 };
 
 // In the queue buffer, every message is prefixed by a one-slot header.
@@ -34,27 +34,24 @@ const kLengthSlot = 1;
 
 enum HeaderBits {
   // Low 24 bits are reserved for the slice length (measured in slots),
-  // including header slot(s). Size zero indicates that the buffer wraps here.
+  // including header slot(s).
   kLengthMask = 0x00ffffff,
-  kLengthBufWrap = 0x00000000,
   // Every time a slice changes hands between reader and writer, we add 1 to the
   // 2-bit epoch number, which wraps on overflow.
   kEpochBaseWriter = 0x00000000,
   kEpochBaseReader = 0x01000000,
   kEpochTransferDelta = 0x01000000,
   kEpochBufWrapDelta = 0x02000000,
-  kEpochMask = 0x01000000 * 15,
+  kEpochMask = 0x03000000,
   // Flag that indicates that a readable chunk does not contain useful data,
   // e.g. due to an abandoned write or insufficient space at the end of the
   // buffer.
-  kIsWasteFlag = 0x40000000,
+  kIsWasteFlag = 0x04000000,
   // Flag that indicates that there are waiter(s).
-  kHasWaitersFlag = 0x80000000,
+  kHasWaitersFlag = 0x08000000,
   // Pseudo-header returned by poll to indicate that no slice is available.
   kNotAvailable = -1
 }
-
-console.log(HeaderBits.kEpochMask.toString(16));
 
 export const YIELD: unique symbol = Symbol("YIELD");
 export type YIELD = typeof YIELD;
@@ -66,36 +63,39 @@ export interface Message {
   length: number;
 }
 
-interface SliceHeader {
-  pos: number;
+interface SliceHeaderInfo {
   length: number;
-  isWaste: boolean;
-  isEnd: boolean;
+  isWaste?: boolean;
 }
 
-// Default maxSpinCount value for QueueReader.
+interface SliceInfo extends SliceHeaderInfo {
+  pos: number;
+  isEnd: boolean;
+  isWaste: boolean;
+}
+
+// Default kSpinCount value for QueueReader.
 // Optimal value TBD.
-const READER_MAX_SPIN_COUNT = 1000; //100000;
+const READER_MAX_SPIN_COUNT = 100; //0; //1000; //100000;
 
 let ctr = 0;
-class QueueHead {
-  static kEpochBase: number;
+abstract class QueueHead {
+  // These constants define spinning behaviour.
+  static readonly kSpinCount: number = READER_MAX_SPIN_COUNT;
+  static readonly kSpinYieldCpu: boolean = false;
 
-  "constructor": typeof QueueHead;
-  // Helper buffer for the yieldThread() function.
-  private static THREAD_YIELD_HELPER_BUF = new Int32Array(
-    new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)
-  );
+  // Hack to get TypeScript to get type info for 'this.constructor' right.
+  readonly "constructor": typeof QueueHead;
 
-  protected kEpochBase: number;
+  // Subclasses have to provide values for these.
+  static readonly kEpochBase: number;
+  static readonly kKind: "reader" | "writer";
 
-  private maxSpinCount: number = READER_MAX_SPIN_COUNT;
+  private acqEpoch: number;
+  private relEpoch: number;
 
   private acqPos: number = 0;
-  private acqEpoch: number;
-
   private relPos: number = 0;
-  private relEpoch: number;
 
   constructor(protected buf: Buf) {
     const Self = this.constructor;
@@ -103,103 +103,100 @@ class QueueHead {
     this.relEpoch = Self.kEpochBase + HeaderBits.kEpochTransferDelta;
   }
 
-  getSliceHeader(
-    pos: number = this.acqPos,
-    epoch: number = this.acqEpoch,
-    spinCount: number = this.maxSpinCount
-  ): SliceHeader {
-    let header: number = this.buf.i32[pos];
-    wait: for (;;) {
-      let headerEpoch = header & HeaderBits.kEpochMask;
-      if (headerEpoch === epoch) {
-        break wait;
-      }
-
-      while (!(header & HeaderBits.kHasWaitersFlag) && spinCount > 0) {
-        header = Atomics.load(this.buf.i32, pos);
-        headerEpoch = header & HeaderBits.kEpochMask;
-        if (headerEpoch === epoch) {
-          break wait;
-        }
-        Atomics.wait(QueueHead.THREAD_YIELD_HELPER_BUF, 0, 0, 1);
-        spinCount--;
-        debugInfo.spinCount++;
-      }
-
-      for (;;) {
-        let expect, target;
-
-        do {
-          expect = header;
-          target = header | HeaderBits.kHasWaitersFlag;
-
-          header = Atomics.compareExchange(this.buf.i32, pos, expect, target);
-          headerEpoch = header & HeaderBits.kEpochMask;
-          if (headerEpoch === epoch) {
-            break wait;
-          }
-        } while (header !== expect);
-
-        Atomics.wait(this.buf.i32, pos, target);
-        debugInfo.waitCount++;
-
-        header = this.buf.i32[pos];
-        headerEpoch = header & HeaderBits.kEpochMask;
-        if (headerEpoch === epoch) {
-          break wait;
-        }
-      }
-    }
-
-    let length = header & HeaderBits.kLengthMask;
-    let endPos = pos + length;
-    assert(endPos <= this.buf.i32.length);
-    let isWaste = Boolean(header & HeaderBits.kIsWasteFlag);
-    let isEnd = endPos === this.buf.i32.length;
-
-    if (isEnd) {
-      this.acqPos = 0;
-      this.acqEpoch =
-        (this.acqEpoch + HeaderBits.kEpochBufWrapDelta) & HeaderBits.kEpochMask;
-    } else {
-      this.acqPos = endPos;
-    }
-
-    return { pos, length, isWaste, isEnd };
+  private wrapEpoch(epoch: number) {
+    return (epoch + HeaderBits.kEpochBufWrapDelta) & HeaderBits.kEpochMask;
   }
 
-  putSliceHeader(
-    length: number,
-    isWaste: boolean,
-    pos: number = this.relPos,
-    epoch: number = this.relEpoch
-  ) {
+  getSliceHeader(): SliceInfo {
+    const pos: number = this.acqPos;
+    let header: number = this.buf.i32[pos];
+    let spinCountRemaining: number = QueueHead.kSpinCount;
+
+    while ((header & HeaderBits.kEpochMask) !== this.acqEpoch) {
+      let futexWaitTime;
+
+      if (spinCountRemaining === 0) {
+        // We're going to put the thread to sleep.
+        // Use compare-and-swap to set the kHasWaiters flag.
+        const expect = header;
+        const target = header | HeaderBits.kHasWaitersFlag;
+        header = Atomics.compareExchange(this.buf.i32, pos, expect, target);
+        if (expect !== header) {
+          // The buffer slot that holds the header has been modified after we
+          // last read it; compareExchange did not set the flag, but `header`
+          // is now up-to-date again.
+          continue;
+        }
+        header = target;
+        futexWaitTime = Infinity;
+      } else {
+        // We're spinning.
+        --spinCountRemaining;
+        futexWaitTime = QueueHead.kSpinYieldCpu
+          ? 1 // Use futexWait to yield the CPU for 1ms.
+          : null; // Skip futexWait and go read the buffer again.
+      }
+
+      if (
+        futexWaitTime === null ||
+        Atomics.wait(this.buf.i32, pos, header, futexWaitTime) !== "timed-out"
+      ) {
+        // If futexWait returned "ok" or "not-equal", the value in the buffer
+        // has changed, so refresh our copy.
+        header = Atomics.load(this.buf.i32, pos);
+      }
+    }
+
+    const length = header & HeaderBits.kLengthMask;
+    const isWaste = Boolean(header & HeaderBits.kIsWasteFlag);
+
+    const endPos = pos + length;
+    assert(endPos <= this.buf.i32.length);
+    const isEnd = endPos === this.buf.i32.length;
+
+    if (!isEnd) {
+      this.acqPos = endPos;
+    } else {
+      this.acqEpoch = this.wrapEpoch(this.acqEpoch);
+      this.acqPos = 0;
+    }
+
+    return { pos, length, isEnd, isWaste };
+  }
+
+  putSliceHeader({ length, isWaste = false }: SliceHeaderInfo): void {
+    const pos: number = this.relPos;
+
+    assert(length >= HEADER_LENGTH);
     assert((length & ~HeaderBits.kLengthMask) === 0);
     assert(pos + length <= this.buf.i32.length);
-    assert(length >= HEADER_LENGTH);
-    assert((epoch & ~HeaderBits.kEpochMask) === 0);
+
     const flags = Number(isWaste) * HeaderBits.kIsWasteFlag;
-    const header = length | flags | epoch;
-    const prev = Atomics.exchange(this.buf.i32, pos, header);
-    if (prev & HeaderBits.kHasWaitersFlag) {
+    const header = length | flags | this.relEpoch;
+    const previous = Atomics.exchange(this.buf.i32, pos, header);
+
+    if (previous & HeaderBits.kHasWaitersFlag) {
       Atomics.wake(this.buf.i32, pos, 2);
     }
 
-    let endPos = pos + length;
-    if (endPos === this.buf.i32.length) {
-      this.relPos = 0;
-      this.relEpoch =
-        (this.relEpoch + HeaderBits.kEpochBufWrapDelta) & HeaderBits.kEpochMask;
-    } else {
+    const endPos = pos + length;
+    assert(endPos <= this.buf.i32.length);
+    const isEnd = endPos === this.buf.i32.length;
+
+    if (!isEnd) {
       this.relPos = endPos;
+    } else {
+      this.relEpoch = this.wrapEpoch(this.relEpoch);
+      this.relPos = 0;
     }
   }
 }
 
 export class QueueWriter extends QueueHead {
-  static kEpochBase = HeaderBits.kEpochBaseWriter;
+  static readonly kEpochBase = HeaderBits.kEpochBaseWriter;
+  static readonly kKind: "writer" = "writer";
 
-  private reservation: SliceHeader | null = null;
+  private reservation: SliceInfo | null = null;
 
   constructor(buf: Buf) {
     super(buf);
@@ -208,17 +205,17 @@ export class QueueWriter extends QueueHead {
 
   send(message: Int32Array) {
     // Length including header (in slots).
-    const requiredLength = HEADER_LENGTH + message.length;
+    const length = HEADER_LENGTH + message.length;
 
     acquire: for (;;) {
       if (this.reservation === null) {
         this.reservation = this.getSliceHeader();
       }
-      while (this.reservation.length < requiredLength) {
+      while (this.reservation.length < length) {
         if (this.reservation.isEnd) {
           // Can't wrap around the end of the ring buffer. Discard what we got
           // so far and start over at the beginning of the buffer.
-          this.putSliceHeader(this.reservation.length, true);
+          this.putSliceHeader({ ...this.reservation, isWaste: true });
           this.reservation = null;
           continue acquire;
         }
@@ -230,11 +227,11 @@ export class QueueWriter extends QueueHead {
     }
 
     let headerPos: number = this.reservation.pos;
-    if (this.reservation.length === requiredLength) {
+    if (this.reservation.length === length) {
       this.reservation = null;
     } else {
-      this.reservation.pos += requiredLength;
-      this.reservation.length -= requiredLength;
+      this.reservation.pos += length;
+      this.reservation.length -= length;
     }
 
     const messagePos = headerPos + HEADER_LENGTH;
@@ -248,12 +245,13 @@ export class QueueWriter extends QueueHead {
     }
 
     // Write header.
-    this.putSliceHeader(requiredLength, false);
+    this.putSliceHeader({ length });
   }
 }
 
 export class QueueReader extends QueueHead {
-  static kEpochBase: number = HeaderBits.kEpochBaseReader;
+  static readonly kEpochBase: number = HeaderBits.kEpochBaseReader;
+  static readonly kKind: "reader" = "reader";
 
   // The recv() function actually shouldn't be an async function,
   // but in a browser environment buffers can only be transferred
@@ -264,10 +262,10 @@ export class QueueReader extends QueueHead {
     for (;;) {
       let sliceHeader = this.getSliceHeader();
       if (sliceHeader.isWaste) {
-        this.putSliceHeader(sliceHeader.length, false);
+        this.putSliceHeader(sliceHeader);
       } else {
         // TODO: beginRecv()/endRecv()
-        this.putSliceHeader(sliceHeader.length, false);
+        this.putSliceHeader(sliceHeader);
         return {
           i32: this.buf.i32,
           pos: sliceHeader.pos,

@@ -15,7 +15,6 @@ async function main(
 
   // Seed the buffer with some messages.
   //for (let i = 0; i < 1e5; i++) {
-  console.log("SEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEED");
   for (let i = 0; i < 1e5; i++) {
     mqOut.send(msgOut);
   }
@@ -28,10 +27,6 @@ async function main(
     for (let i = 0; i < PER_ROUND; ) {
       mqOut.send(msgOut);
       msg = mqIn.recv();
-      if (msg === YIELD) {
-        await new Promise(res => setTimeout(res, 1));
-        continue;
-      }
       i++;
     }
     received += PER_ROUND;
@@ -40,7 +35,9 @@ async function main(
       "messages processed:",
       received,
       "bufs:",
-      Buf.debugInfo()
+      Buf.debugInfo(),
+      (<any>mqIn).buf.ab.byteLength,
+      (<any>mqOut).buf.ab.byteLength
     );
     const elapsed = (Date.now() - start) / 1000;
     console.log(
@@ -48,7 +45,7 @@ async function main(
       "throughput (msg/sec):",
       Math.floor(received / elapsed),
       "counts",
-      debugInfo
+      JSON.stringify(debugInfo)
     );
   }
 }
@@ -70,8 +67,8 @@ async function domSetup() {
   // Set up the buffer port and send startup info to the worker.
   const bufChan = new MessageChannel();
   // Create small initial buffers for the mq.
-  const mqBuf1 = new SharedArrayBuffer(8000000);
-  const mqBuf2 = new SharedArrayBuffer(9600000);
+  const mqBuf1 = new SharedArrayBuffer(4 * 8 * 1e5 * 1);
+  const mqBuf2 = new SharedArrayBuffer(4 * 9.6 * 1e5 * 2);
   let init = (ab: SharedArrayBuffer) => {
     let i32 = new Int32Array(ab);
     i32[0] = i32.length;
@@ -143,6 +140,5 @@ if (typeof window !== "undefined") {
   global.start = () => domSetup().catch(console.error);
   global.stop = () => Atomics.store(stopBuf, 0, 1);
 } else {
-  console.log("XXXXXXXXXXXXXXXXXXXXXX");
   workerSetup().catch(console.error);
 }
