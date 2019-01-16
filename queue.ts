@@ -1,65 +1,30 @@
 import { assert } from "./assert";
 import { Buf } from "./buf";
 
-export const debugInfo = {
-  spinCountRemaining: { reader: 0, writer: 0 },
-  waitCount: { reader: 0, writer: 0 }
-};
-
-// In the queue buffer, every message is prefixed by a one-slot header.
-// * Initially the header slot contains zero, meaning that there is no message
-//   here (yet).
-// * Greater than zero means that there is a message at this position.
-//   The value itself is the total length of the message *and* the header,
-//   in slots.
-//   (I.O.W., the length of the message itself is `header-1` slots.)
-// * The *reader* can change the value to `HDR_READER_ASLEEP` (-1) to let the
-//   writer know it is asleep and needs to be woken.
-// * The *writer* can change the value to `HDR_NEXT_BUFFER` (-2) to let the
-//   reader know the buffer was full and it has moved on to the next one.
-//   (The next buffer id is placed in the adjacent slot).
-const HDR_INITIAL = 0;
-const HDR_READER_ASLEEP = -1;
-const HDR_NEXT_BUFFER = -2;
-
-// The size of the header is 1 slot.
-const HEADER_LENGTH = 2;
-// The size of the NEXT_BUFFER marker is 2 slots (including it's header).
-const NEXT_BUFFER_MARKER_LENGTH = HEADER_LENGTH + 1;
-// The size of a queue buffer (in slots).
-const QUEUE_BUFFER_LENGTH = 0x1000000;
-
-const kMarkerSlot = 0;
-const kLengthSlot = 1;
-
+// prettier-ignore
 enum HeaderBits {
   // Low 24 bits are reserved for the slice length (measured in slots),
   // including header slot(s).
-  kLengthMask = 0x00ffffff,
+  kLengthMask         = 0x00ffffff,
   // Every time a slice changes hands between reader and writer, we add 1 to the
   // 2-bit epoch number, which wraps on overflow.
-  kEpochBaseWriter = 0x00000000,
-  kEpochBaseReader = 0x01000000,
+  kEpochBaseWriter    = 0x00000000,
+  kEpochBaseReader    = 0x01000000,
   kEpochTransferDelta = 0x01000000,
-  kEpochBufWrapDelta = 0x02000000,
-  kEpochMask = 0x03000000,
+  kEpochBufWrapDelta  = 0x02000000,
+  kEpochMask          = 0x03000000,
   // Flag that indicates that a readable chunk does not contain useful data,
   // e.g. due to an abandoned write or insufficient space at the end of the
   // buffer.
-  kIsWasteFlag = 0x04000000,
+  kIsWasteFlag        = 0x04000000,
   // Flag that indicates that there are waiter(s).
-  kHasWaitersFlag = 0x08000000,
-  // Pseudo-header returned by poll to indicate that no slice is available.
-  kNotAvailable = -1
+  kHasWaitersFlag     = 0x08000000,
 }
-
-export const YIELD: unique symbol = Symbol("YIELD");
-export type YIELD = typeof YIELD;
 
 // Todo: rename to Slice.
 export interface Message {
   i32: Int32Array;
-  pos: number;
+  offset: number;
   length: number;
 }
 
@@ -69,50 +34,76 @@ interface SliceHeaderInfo {
 }
 
 interface SliceInfo extends SliceHeaderInfo {
-  pos: number;
-  isEnd: boolean;
+  offset: number;
+  isEndOfBuffer: boolean;
   isWaste: boolean;
 }
 
-// Default kSpinCount value for QueueReader.
-// Optimal value TBD.
-const READER_MAX_SPIN_COUNT = 100; //0; //1000; //100000;
+export interface QueueCounters {
+  class: string;
+  spin: number;
+  wait: number;
+  wake: number;
+}
 
-let ctr = 0;
-abstract class QueueHead {
+abstract class QueueUser {
   // These constants define spinning behaviour.
-  static readonly kSpinCount: number = READER_MAX_SPIN_COUNT;
+  static readonly kSpinCount: number = 100;
   static readonly kSpinYieldCpu: boolean = false;
 
+  // Maximum number of threads that will access the ring buffer simultaneously.
+  // Currently we support one reader and one writer only.
+  static readonly kMaxConcurrentUsers = 2;
+
+  // Length of slice header (in i32 slots).
+  static readonly kHeaderLength = 2;
+
   // Hack to get TypeScript to get type info for 'this.constructor' right.
-  readonly "constructor": typeof QueueHead;
+  readonly "constructor": typeof QueueUser;
 
-  // Subclasses have to provide values for these.
+  // Subclasses need to provide a value for kEpochBase.
   static readonly kEpochBase: number;
-  static readonly kKind: "reader" | "writer";
 
-  private acqEpoch: number;
-  private relEpoch: number;
+  private acquireEpoch: number;
+  private releaseEpoch: number;
+  private acquireOffset: number = 0;
+  private releaseOffset: number = 0;
 
-  private acqPos: number = 0;
-  private relPos: number = 0;
+  private waitCounter: number = 0;
+  private wakeCounter: number = 0;
+  private spinCounter: number = 0;
 
   constructor(protected buf: Buf) {
+    // Set initial acquire and release epoch numbers.
     const Self = this.constructor;
-    this.acqEpoch = Self.kEpochBase;
-    this.relEpoch = Self.kEpochBase + HeaderBits.kEpochTransferDelta;
+    this.acquireEpoch = Self.kEpochBase;
+    this.releaseEpoch = Self.kEpochBase + HeaderBits.kEpochTransferDelta;
+
+    // Typically we'd get a buffer that's initialized with zeroes. If that's the
+    // case, define a slice that spans the entire buffer and place it's header
+    // at offset 0, so the reader and writer don't get confused.
+    Atomics.compareExchange(buf.i32, 0, 0, buf.i32.length);
+  }
+
+  get counters(): QueueCounters {
+    return {
+      class: this.constructor.name,
+      wait: this.waitCounter,
+      wake: this.wakeCounter,
+      spin: this.spinCounter
+    };
   }
 
   private wrapEpoch(epoch: number) {
     return (epoch + HeaderBits.kEpochBufWrapDelta) & HeaderBits.kEpochMask;
   }
 
-  getSliceHeader(): SliceInfo {
-    const pos: number = this.acqPos;
-    let header: number = this.buf.i32[pos];
-    let spinCountRemaining: number = QueueHead.kSpinCount;
+  protected acquireSlice(): SliceInfo {
+    const offset: number = this.acquireOffset;
+    let header: number = this.buf.i32[offset];
+    let spinCountRemaining: number = QueueUser.kSpinCount;
 
-    while ((header & HeaderBits.kEpochMask) !== this.acqEpoch) {
+    while ((header & HeaderBits.kEpochMask) !== this.acquireEpoch) {
       let futexWaitTime;
 
       if (spinCountRemaining === 0) {
@@ -120,7 +111,7 @@ abstract class QueueHead {
         // Use compare-and-swap to set the kHasWaiters flag.
         const expect = header;
         const target = header | HeaderBits.kHasWaitersFlag;
-        header = Atomics.compareExchange(this.buf.i32, pos, expect, target);
+        header = Atomics.compareExchange(this.buf.i32, offset, expect, target);
         if (expect !== header) {
           // The buffer slot that holds the header has been modified after we
           // last read it; compareExchange did not set the flag, but `header`
@@ -129,129 +120,128 @@ abstract class QueueHead {
         }
         header = target;
         futexWaitTime = Infinity;
+        this.waitCounter++;
       } else {
-        // We're spinning.
-        --spinCountRemaining;
-        futexWaitTime = QueueHead.kSpinYieldCpu
-          ? 1 // Use futexWait to yield the CPU for 1ms.
-          : null; // Skip futexWait and go read the buffer again.
+        // We're spinning. If CPU yielding is enabled, we'll call futexWait
+        // as if we were going to sleep, but with a timeout of 1ms. If CPU
+        // yielding is off we'll just refresh `header` from the ring buffer.
+        futexWaitTime = QueueUser.kSpinYieldCpu ? 1 : null;
+        spinCountRemaining--;
+        this.spinCounter++;
       }
 
       if (
         futexWaitTime === null ||
-        Atomics.wait(this.buf.i32, pos, header, futexWaitTime) !== "timed-out"
+        Atomics.wait(this.buf.i32, offset, header, futexWaitTime) !==
+          "timed-out"
       ) {
         // If futexWait returned "ok" or "not-equal", the value in the buffer
-        // has changed, so refresh our copy.
-        header = Atomics.load(this.buf.i32, pos);
+        // is different from our local copy, so refresh it.
+        header = Atomics.load(this.buf.i32, offset);
       }
     }
 
     const length = header & HeaderBits.kLengthMask;
     const isWaste = Boolean(header & HeaderBits.kIsWasteFlag);
 
-    const endPos = pos + length;
-    assert(endPos <= this.buf.i32.length);
-    const isEnd = endPos === this.buf.i32.length;
+    const endOffset = offset + length;
+    assert(endOffset <= this.buf.i32.length);
+    const isEndOfBuffer = endOffset === this.buf.i32.length;
 
-    if (!isEnd) {
-      this.acqPos = endPos;
+    if (!isEndOfBuffer) {
+      this.acquireOffset = endOffset;
     } else {
-      this.acqEpoch = this.wrapEpoch(this.acqEpoch);
-      this.acqPos = 0;
+      this.acquireEpoch = this.wrapEpoch(this.acquireEpoch);
+      this.acquireOffset = 0;
     }
 
-    return { pos, length, isEnd, isWaste };
+    return { offset, length, isEndOfBuffer, isWaste };
   }
 
-  putSliceHeader({ length, isWaste = false }: SliceHeaderInfo): void {
-    const pos: number = this.relPos;
+  protected releaseSlice({ length, isWaste = false }: SliceHeaderInfo): void {
+    const offset: number = this.releaseOffset;
 
-    assert(length >= HEADER_LENGTH);
+    assert(length >= QueueUser.kHeaderLength);
     assert((length & ~HeaderBits.kLengthMask) === 0);
-    assert(pos + length <= this.buf.i32.length);
+    assert(offset + length <= this.buf.i32.length);
 
     const flags = Number(isWaste) * HeaderBits.kIsWasteFlag;
-    const header = length | flags | this.relEpoch;
-    const previous = Atomics.exchange(this.buf.i32, pos, header);
+    const header = length | flags | this.releaseEpoch;
+    const previous = Atomics.exchange(this.buf.i32, offset, header);
 
     if (previous & HeaderBits.kHasWaitersFlag) {
-      Atomics.wake(this.buf.i32, pos, 2);
+      Atomics.wake(this.buf.i32, offset, QueueUser.kMaxConcurrentUsers);
+      this.wakeCounter++;
     }
 
-    const endPos = pos + length;
-    assert(endPos <= this.buf.i32.length);
-    const isEnd = endPos === this.buf.i32.length;
+    const endOffset = offset + length;
+    assert(endOffset <= this.buf.i32.length);
+    const isEndOfBuffer = endOffset === this.buf.i32.length;
 
-    if (!isEnd) {
-      this.relPos = endPos;
+    if (!isEndOfBuffer) {
+      this.releaseOffset = endOffset;
     } else {
-      this.relEpoch = this.wrapEpoch(this.relEpoch);
-      this.relPos = 0;
+      this.releaseEpoch = this.wrapEpoch(this.releaseEpoch);
+      this.releaseOffset = 0;
     }
   }
 }
 
-export class QueueWriter extends QueueHead {
+export class QueueWriter extends QueueUser {
   static readonly kEpochBase = HeaderBits.kEpochBaseWriter;
-  static readonly kKind: "writer" = "writer";
 
-  private reservation: SliceInfo | null = null;
-
-  constructor(buf: Buf) {
-    super(buf);
-    //this.buf.i32[0] = this.buf.i32.length;
-  }
+  // This slice spans the part of the buffer that has been reserved for the
+  // current (or next) message that will be written to the buffer.
+  private reservationSlice: SliceInfo | null = null;
 
   send(message: Int32Array) {
     // Length including header (in slots).
-    const length = HEADER_LENGTH + message.length;
+    const length = QueueUser.kHeaderLength + message.length;
 
-    acquire: for (;;) {
-      if (this.reservation === null) {
-        this.reservation = this.getSliceHeader();
+    expandReservationLoop: for (;;) {
+      if (this.reservationSlice === null) {
+        this.reservationSlice = this.acquireSlice();
       }
-      while (this.reservation.length < length) {
-        if (this.reservation.isEnd) {
+      while (this.reservationSlice.length < length) {
+        if (this.reservationSlice.isEndOfBuffer) {
           // Can't wrap around the end of the ring buffer. Discard what we got
           // so far and start over at the beginning of the buffer.
-          this.putSliceHeader({ ...this.reservation, isWaste: true });
-          this.reservation = null;
-          continue acquire;
+          this.releaseSlice({ ...this.reservationSlice, isWaste: true });
+          this.reservationSlice = null;
+          continue expandReservationLoop;
         }
-        let h = this.getSliceHeader();
-        this.reservation.length += h.length;
-        this.reservation.isEnd = h.isEnd;
+        let h = this.acquireSlice();
+        this.reservationSlice.length += h.length;
+        this.reservationSlice.isEndOfBuffer = h.isEndOfBuffer;
       }
       break;
     }
 
-    let headerPos: number = this.reservation.pos;
-    if (this.reservation.length === length) {
-      this.reservation = null;
+    let headerOffset: number = this.reservationSlice.offset;
+    if (this.reservationSlice.length === length) {
+      this.reservationSlice = null;
     } else {
-      this.reservation.pos += length;
-      this.reservation.length -= length;
+      this.reservationSlice.offset += length;
+      this.reservationSlice.length -= length;
     }
 
-    const messagePos = headerPos + HEADER_LENGTH;
-    assert(messagePos + message.length <= this.buf.i32.length);
+    const messageOffset = headerOffset + QueueUser.kHeaderLength;
+    assert(messageOffset + message.length <= this.buf.i32.length);
 
     // Copy the message itself into the buffer.
     // Slow:
-    // this.buf.i32.set(message, messagePos);
+    // this.buf.i32.set(message, messageOffset);
     for (let i = 0; i < message.length; i++) {
-      this.buf.i32[messagePos + i] = message[i];
+      this.buf.i32[messageOffset + i] = message[i];
     }
 
     // Write header.
-    this.putSliceHeader({ length });
+    this.releaseSlice({ length });
   }
 }
 
-export class QueueReader extends QueueHead {
+export class QueueReader extends QueueUser {
   static readonly kEpochBase: number = HeaderBits.kEpochBaseReader;
-  static readonly kKind: "reader" = "reader";
 
   // The recv() function actually shouldn't be an async function,
   // but in a browser environment buffers can only be transferred
@@ -260,15 +250,15 @@ export class QueueReader extends QueueHead {
   // loop every now and then.
   recv(): Message {
     for (;;) {
-      let sliceHeader = this.getSliceHeader();
+      let sliceHeader = this.acquireSlice();
       if (sliceHeader.isWaste) {
-        this.putSliceHeader(sliceHeader);
+        this.releaseSlice(sliceHeader);
       } else {
         // TODO: beginRecv()/endRecv()
-        this.putSliceHeader(sliceHeader);
+        this.releaseSlice(sliceHeader);
         return {
           i32: this.buf.i32,
-          pos: sliceHeader.pos,
+          offset: sliceHeader.offset,
           length: sliceHeader.length
         };
       }
