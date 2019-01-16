@@ -23,212 +23,256 @@ const HDR_READER_ASLEEP = -1;
 const HDR_NEXT_BUFFER = -2;
 
 // The size of the header is 1 slot.
-const HEADER_LENGTH = 1;
+const HEADER_LENGTH = 2;
 // The size of the NEXT_BUFFER marker is 2 slots (including it's header).
 const NEXT_BUFFER_MARKER_LENGTH = HEADER_LENGTH + 1;
 // The size of a queue buffer (in slots).
 const QUEUE_BUFFER_LENGTH = 0x1000000;
 
+const kMarkerSlot = 0;
+const kLengthSlot = 1;
+
+enum HeaderBits {
+  // Low 24 bits are reserved for the slice length (measured in slots),
+  // including header slot(s). Size zero indicates that the buffer wraps here.
+  kLengthMask = 0x00ffffff,
+  kLengthBufWrap = 0x00000000,
+  // Every time a slice changes hands between reader and writer, we add 1 to the
+  // 2-bit epoch number, which wraps on overflow.
+  kEpochBaseWriter = 0x00000000,
+  kEpochBaseReader = 0x01000000,
+  kEpochTransferDelta = 0x01000000,
+  kEpochBufWrapDelta = 0x02000000,
+  kEpochMask = 0x01000000 * 15,
+  // Flag that indicates that a readable chunk does not contain useful data,
+  // e.g. due to an abandoned write or insufficient space at the end of the
+  // buffer.
+  kIsWasteFlag = 0x40000000,
+  // Flag that indicates that there are waiter(s).
+  kHasWaitersFlag = 0x80000000,
+  // Pseudo-header returned by poll to indicate that no slice is available.
+  kNotAvailable = -1
+}
+
+console.log(HeaderBits.kEpochMask.toString(16));
+
 export const YIELD: unique symbol = Symbol("YIELD");
 export type YIELD = typeof YIELD;
 
+// Todo: rename to Slice.
 export interface Message {
   i32: Int32Array;
   pos: number;
   length: number;
 }
 
+interface SliceHeader {
+  pos: number;
+  length: number;
+  isWaste: boolean;
+  isEnd: boolean;
+}
+
 // Default maxSpinCount value for QueueReader.
 // Optimal value TBD.
-const READER_MAX_SPIN_COUNT = 10000; //100000;
+const READER_MAX_SPIN_COUNT = 1000; //100000;
 
-export class QueueWriter {
-  private writerPos: number = 0; // Write position in the current buffer.
+let ctr = 0;
+class QueueHead {
+  static kEpochBase: number;
 
-  constructor(private buf: Buf) {}
+  "constructor": typeof QueueHead;
+  // Helper buffer for the yieldThread() function.
+  private static THREAD_YIELD_HELPER_BUF = new Int32Array(
+    new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)
+  );
 
-  send(message: Int32Array) {
-    // Length including header (in slots).
-    const length = HEADER_LENGTH + message.length;
+  protected kEpochBase: number;
 
-    // See if there is enough space in the current buffer for this message.
-    // Note that we keep two slots reserved, because we must be able to fit the
-    // eventual 'go-to-the-next-buffer' marker after this message.
-    const needed = length + NEXT_BUFFER_MARKER_LENGTH;
-    const avail = this.buf.i32.length - this.writerPos;
+  private maxSpinCount: number = READER_MAX_SPIN_COUNT;
 
-    if (needed > avail) {
-      // Allocate a new buffer. It should be zero-filled already.
-      // TODO: should probably just reject messages that don't fit
-      // in a buffer of default length.
-      const byteLength =
-        Math.max(QUEUE_BUFFER_LENGTH, needed) * Uint32Array.BYTES_PER_ELEMENT;
-      const nextBuf = Buf.alloc(byteLength);
-      // Write the go-to-next-buffer meta message.
-      this.write(this.writerPos, HDR_NEXT_BUFFER, [nextBuf.id]);
-      // Free the old buffer; the receiver should still have a reference to it.
-      Buf.free(this.buf);
-      // Switch over to the new buffer.
-      this.buf = nextBuf;
-      this.writerPos = 0;
-    }
+  private acqPos: number = 0;
+  private acqEpoch: number;
 
-    // Write the message itself.
-    this.write(this.writerPos, length, message);
-    this.writerPos += length;
+  private relPos: number = 0;
+  private relEpoch: number;
+
+  constructor(protected buf: Buf) {
+    const Self = this.constructor;
+    this.acqEpoch = Self.kEpochBase;
+    this.relEpoch = Self.kEpochBase + HeaderBits.kEpochTransferDelta;
   }
 
-  private write(
-    pos: number,
-    header: number,
-    payload: Int32Array | number[]
-  ): void {
-    // The header is used for synchronization. Once we set it it,
-    // the reader will think that it has received a message.
-    // So we have to write the payload first, and the header last.
-    const payloadPos = pos + HEADER_LENGTH;
-    assert(payloadPos + payload.length <= this.buf.i32.length);
+  getSliceHeader(
+    pos: number = this.acqPos,
+    epoch: number = this.acqEpoch,
+    spinCount: number = this.maxSpinCount
+  ): SliceHeader {
+    let header: number = this.buf.i32[pos];
+    wait: for (;;) {
+      let headerEpoch = header & HeaderBits.kEpochMask;
+      if (headerEpoch === epoch) {
+        break wait;
+      }
 
-    // Copy the payload into the buffer.
-    // Slow:
-    // this.buf.i32.set(payload, payloadPos);
-    for (let i = 0; i < payload.length; i++) {
-      this.buf.i32[payloadPos + i] = payload[i];
+      while (!(header & HeaderBits.kHasWaitersFlag) && spinCount > 0) {
+        header = Atomics.load(this.buf.i32, pos);
+        headerEpoch = header & HeaderBits.kEpochMask;
+        if (headerEpoch === epoch) {
+          break wait;
+        }
+        Atomics.wait(QueueHead.THREAD_YIELD_HELPER_BUF, 0, 0, 1);
+        spinCount--;
+        debugInfo.spinCount++;
+      }
+
+      for (;;) {
+        let expect, target;
+
+        do {
+          expect = header;
+          target = header | HeaderBits.kHasWaitersFlag;
+
+          header = Atomics.compareExchange(this.buf.i32, pos, expect, target);
+          headerEpoch = header & HeaderBits.kEpochMask;
+          if (headerEpoch === epoch) {
+            break wait;
+          }
+        } while (header !== expect);
+
+        Atomics.wait(this.buf.i32, pos, target);
+        debugInfo.waitCount++;
+
+        header = this.buf.i32[pos];
+        headerEpoch = header & HeaderBits.kEpochMask;
+        if (headerEpoch === epoch) {
+          break wait;
+        }
+      }
     }
 
-    // Atomically fetch the previous value from the header slot and
-    // place the header value into it.
-    const prev = Atomics.exchange(this.buf.i32, pos, header);
-    assert(prev === HDR_INITIAL || prev === HDR_READER_ASLEEP);
+    let length = header & HeaderBits.kLengthMask;
+    let endPos = pos + length;
+    assert(endPos <= this.buf.i32.length);
+    let isWaste = Boolean(header & HeaderBits.kIsWasteFlag);
+    let isEnd = endPos === this.buf.i32.length;
 
-    // If the previous value was HDR_READER_ASLEEP, the reader went to sleep
-    // and needs to be woken.
-    if (prev === HDR_READER_ASLEEP) {
-      // Between js<->rust, the wake/wait mechanism will be different
-      // because the rust thread will block on epoll() or similar.
-      // For the prototype we use the "futex" support in Atomics.
-      Atomics.wake(this.buf.i32, pos, 1);
+    if (isEnd) {
+      this.acqPos = 0;
+      this.acqEpoch =
+        (this.acqEpoch + HeaderBits.kEpochBufWrapDelta) & HeaderBits.kEpochMask;
+    } else {
+      this.acqPos = endPos;
+    }
+
+    return { pos, length, isWaste, isEnd };
+  }
+
+  putSliceHeader(
+    length: number,
+    isWaste: boolean,
+    pos: number = this.relPos,
+    epoch: number = this.relEpoch
+  ) {
+    assert((length & ~HeaderBits.kLengthMask) === 0);
+    assert(pos + length <= this.buf.i32.length);
+    assert(length >= HEADER_LENGTH);
+    assert((epoch & ~HeaderBits.kEpochMask) === 0);
+    const flags = Number(isWaste) * HeaderBits.kIsWasteFlag;
+    const header = length | flags | epoch;
+    const prev = Atomics.exchange(this.buf.i32, pos, header);
+    if (prev & HeaderBits.kHasWaitersFlag) {
+      Atomics.wake(this.buf.i32, pos, 2);
+    }
+
+    let endPos = pos + length;
+    if (endPos === this.buf.i32.length) {
+      this.relPos = 0;
+      this.relEpoch =
+        (this.relEpoch + HeaderBits.kEpochBufWrapDelta) & HeaderBits.kEpochMask;
+    } else {
+      this.relPos = endPos;
     }
   }
 }
 
-export class QueueReader {
-  private readerPos: number = 0; // We've processed messages up to this point.
-  private maxSpinCount: number = READER_MAX_SPIN_COUNT;
+export class QueueWriter extends QueueHead {
+  static kEpochBase = HeaderBits.kEpochBaseWriter;
 
-  constructor(private buf: Buf) {}
+  private reservation: SliceHeader | null = null;
 
-  poll(will_sleep: boolean): Int32Array | Message | null | YIELD {
-    let header: number;
-
-    for (;;) {
-      if (!will_sleep) {
-        // If we're spinning, simply read the header from the slot where we
-        // expect it to appear.
-        header = this.buf.i32[this.readerPos];
-        if (header === 0) header = Atomics.load(this.buf.i32, this.readerPos);
-      } else {
-        // If we're planning to sleep the thread when there are no message(s)
-        // available, we'll place HDR_READER_ASLEEP in the slot where the next
-        // next message header is supposed to appear. Thus the writer thread will
-        // know that it has to wake as up.
-
-        // Use compareExchange here to avoid a race condition; if the writer has
-        // written a header in the meantime, we won't overwrite it.
-        header = Atomics.compareExchange(
-          this.buf.i32,
-          this.readerPos,
-          HDR_INITIAL,
-          HDR_READER_ASLEEP
-        );
-      }
-
-      // Check for any special header values.
-      switch (header) {
-        case HDR_INITIAL:
-          // No message available.
-          return null;
-
-        case HDR_READER_ASLEEP:
-          // Depending on whether the sleep/wake implementation allows for
-          // spurious wake-ups, this may or may not be acceptable.
-          // If spurious wake-ups are expected, we should go back to sleep.
-          // But for now, be conservative and just throw.
-          throw new Error("Queue state error");
-
-        case HDR_NEXT_BUFFER:
-          // Fetch the ID for the new buffer from the queue.
-          const bufIdPos = this.readerPos + HEADER_LENGTH;
-          assert(bufIdPos < this.buf.i32.length);
-          const bufId = this.buf.i32[bufIdPos];
-
-          // Check if the new buffer is available.
-          const nextBuf = Buf.tryGet(bufId);
-          if (nextBuf === null) {
-            // We won't need this in Deno.
-            // If poll() needs to move on to the next queue buffer, but this
-            // thread hasn't received that buffer yet, tell the caller to yield
-            // to the event loop so it can process incoming message events.
-            return YIELD;
-          }
-
-          // Release the old queue buffer.
-          Buf.free(this.buf);
-
-          // Move over to the next one.
-          this.buf = nextBuf;
-          this.readerPos = 0;
-
-          // Go back to start.
-          continue;
-      }
-
-      // Since the header wasn't any special value, there is a message.
-      const payloadPos = this.readerPos + HEADER_LENGTH;
-
-      // Do some cursory checks, then update readerPos to point at the end of
-      // this message. Note that the value of `header` at this point indicates
-      // the total length of header and payload.
-      const maxLength =
-        this.buf.i32.length - this.readerPos - NEXT_BUFFER_MARKER_LENGTH;
-      assert(header >= HEADER_LENGTH && header <= maxLength);
-      this.readerPos += header;
-
-      // Copy the message out of the buffer. TODO: don't do that.
-      return { i32: this.buf.i32, pos: this.readerPos, length: header };
-      // SLow:
-      // return this.buf.i32.subarray(payloadPos, this.readerPos);
-    }
+  constructor(buf: Buf) {
+    super(buf);
+    //this.buf.i32[0] = this.buf.i32.length;
   }
+
+  send(message: Int32Array) {
+    // Length including header (in slots).
+    const requiredLength = HEADER_LENGTH + message.length;
+
+    acquire: for (;;) {
+      if (this.reservation === null) {
+        this.reservation = this.getSliceHeader();
+      }
+      while (this.reservation.length < requiredLength) {
+        if (this.reservation.isEnd) {
+          // Can't wrap around the end of the ring buffer. Discard what we got
+          // so far and start over at the beginning of the buffer.
+          this.putSliceHeader(this.reservation.length, true);
+          this.reservation = null;
+          continue acquire;
+        }
+        let h = this.getSliceHeader();
+        this.reservation.length += h.length;
+        this.reservation.isEnd = h.isEnd;
+      }
+      break;
+    }
+
+    let headerPos: number = this.reservation.pos;
+    if (this.reservation.length === requiredLength) {
+      this.reservation = null;
+    } else {
+      this.reservation.pos += requiredLength;
+      this.reservation.length -= requiredLength;
+    }
+
+    const messagePos = headerPos + HEADER_LENGTH;
+    assert(messagePos + message.length <= this.buf.i32.length);
+
+    // Copy the message itself into the buffer.
+    // Slow:
+    // this.buf.i32.set(message, messagePos);
+    for (let i = 0; i < message.length; i++) {
+      this.buf.i32[messagePos + i] = message[i];
+    }
+
+    // Write header.
+    this.putSliceHeader(requiredLength, false);
+  }
+}
+
+export class QueueReader extends QueueHead {
+  static kEpochBase: number = HeaderBits.kEpochBaseReader;
 
   // The recv() function actually shouldn't be an async function,
   // but in a browser environment buffers can only be transferred
   // between threads (workers) with postMessage().
   // We won't receive those messages unless we yield to the event
   // loop every now and then.
-  recv(): Int32Array | Message | YIELD {
-    let msg: Int32Array | Message | null | YIELD;
-    let spinCountLeft = this.maxSpinCount;
-
+  recv(): Message {
     for (;;) {
-      msg = this.poll(spinCountLeft === 0);
-
-      // If we got a message or YIELD, break out of the loop.
-      if (msg !== null) {
-        return msg;
-      }
-
-      if (spinCountLeft > 0) {
-        // We had spins left, so not sleeping now.
-        // However this would be an opportune moment to do some other stuff, if there is anything to do.
-        --spinCountLeft;
-        debugInfo.spinCount++;
+      let sliceHeader = this.getSliceHeader();
+      if (sliceHeader.isWaste) {
+        this.putSliceHeader(sliceHeader.length, false);
       } else {
-        // Sleep the thread; the writer will wake us up.
-        // See remarks in QueueWriter.write().
-        //console.log("Sleeping")
-        Atomics.wait(this.buf.i32, this.readerPos, HDR_READER_ASLEEP);
-        debugInfo.waitCount++;
+        // TODO: beginRecv()/endRecv()
+        this.putSliceHeader(sliceHeader.length, false);
+        return {
+          i32: this.buf.i32,
+          pos: sliceHeader.pos,
+          length: sliceHeader.length
+        };
       }
     }
   }

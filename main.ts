@@ -14,6 +14,8 @@ async function main(
   let received = 0;
 
   // Seed the buffer with some messages.
+  //for (let i = 0; i < 1e5; i++) {
+  console.log("SEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEED");
   for (let i = 0; i < 1e5; i++) {
     mqOut.send(msgOut);
   }
@@ -21,6 +23,7 @@ async function main(
   const start = Date.now();
 
   for (let round = 0; round < 100; round++) {
+    console.log(`====== ROUND ${round} ======`);
     if (Atomics.load(stopBuf, 0)) break;
     for (let i = 0; i < PER_ROUND; ) {
       mqOut.send(msgOut);
@@ -67,8 +70,14 @@ async function domSetup() {
   // Set up the buffer port and send startup info to the worker.
   const bufChan = new MessageChannel();
   // Create small initial buffers for the mq.
-  const mqBuf1 = new SharedArrayBuffer(256);
-  const mqBuf2 = new SharedArrayBuffer(256);
+  const mqBuf1 = new SharedArrayBuffer(8000000);
+  const mqBuf2 = new SharedArrayBuffer(9600000);
+  let init = (ab: SharedArrayBuffer) => {
+    let i32 = new Int32Array(ab);
+    i32[0] = i32.length;
+  };
+  init(mqBuf1);
+  init(mqBuf2);
   // Create buffer for the buffer ID counter;
   const bufIdBuf = new SharedArrayBuffer(4);
   // Spin up the web worker thread.
@@ -134,5 +143,6 @@ if (typeof window !== "undefined") {
   global.start = () => domSetup().catch(console.error);
   global.stop = () => Atomics.store(stopBuf, 0, 1);
 } else {
+  console.log("XXXXXXXXXXXXXXXXXXXXXX");
   workerSetup().catch(console.error);
 }

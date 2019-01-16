@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     "allowJs": true,
-    "lib":["es2018", "DOM"],
+    "lib": ["es2018", "dom"],
     "module": "commonjs",
     "noImplicitAny": true,
     "sourceMap": true,
