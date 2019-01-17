@@ -218,7 +218,12 @@ export class QueueWriter extends QueueUser {
   // This slice spans the part of the buffer that has been reserved for the
   // current (or next) message that will be written to the buffer. Note
   // that writeSlice may be non-null even when we're not writing.
-  private writeSlice: SliceInfo | null = null;
+  private writeSlice!: SliceInfo;
+
+  constructor(buf: Buf) {
+    super(buf);
+    this.initWriteSlice();
+  }
 
   beginWrite(byteLength: number) {
     if (this.allocationLength >= 0) {
@@ -244,15 +249,9 @@ export class QueueWriter extends QueueUser {
       const length = this.allocationLength;
       this.releaseSlice({ length });
 
-      if (this.writeSlice === null) {
-        fail("this.writeSlice should not be null");
-      } else if (this.writeSlice.length === length) {
-        this.writeSlice = null;
-      } else {
-        this.writeSlice.offset += length;
-        this.writeSlice.length -= length;
-        this.messageByteOffset += length * QueueWriter.kSlotByteLength;
-      }
+      this.writeSlice.offset += length;
+      this.writeSlice.length -= length;
+      this.messageByteOffset += length * QueueWriter.kSlotByteLength;
     }
 
     this.allocationLength = -1;
@@ -282,6 +281,14 @@ export class QueueWriter extends QueueUser {
     }
   }
 
+  private initWriteSlice(): void {
+    this.writeSlice = this.acquireSlice();
+    // Compute the byte offset for the start of the payload (after the header).
+    this.messageByteOffset =
+      (this.writeSlice.offset + QueueWriter.kHeaderLength) *
+      QueueWriter.kSlotByteLength;
+  }
+
   private allocate(messageByteLength: number): Message {
     // Compute the total required length, including header and padding,
     // in slots - not bytes.
@@ -289,24 +296,17 @@ export class QueueWriter extends QueueUser {
       this.align(messageByteLength) / QueueWriter.kSlotByteLength;
     const targetLength = QueueWriter.kHeaderLength + messageLength;
 
-    // Bootstrap writeSlice if it isn't set, and compute the byte offset of the
-    // message payload into the underlying `Buf`.
-    if (this.writeSlice === null) {
-      this.writeSlice = this.acquireSlice();
-      this.messageByteOffset =
-        (this.writeSlice.offset + QueueWriter.kHeaderLength) *
-        QueueWriter.kSlotByteLength;
-    }
-
     // Acquire slices until we have the number of slots required.
     while (this.writeSlice.length < targetLength) {
       if (this.writeSlice.isEndOfBuffer) {
         // Can't wrap around the end of the ring buffer. Discard what we got
         // so far and start over at the beginning of the buffer.
-        this.releaseSlice({ ...this.writeSlice, isWaste: true });
-        this.writeSlice = null;
+        if (this.writeSlice.length > 0) {
+          this.releaseSlice({ ...this.writeSlice, isWaste: true });
+        }
 
         // Create a new allocation from scratch.
+        this.initWriteSlice();
         return this.allocate(messageByteLength);
       }
 
