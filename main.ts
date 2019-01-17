@@ -1,5 +1,5 @@
 import { Buf } from "./buf";
-import { QueueReader, QueueWriter, Message } from "./queue";
+import { QueueReader, QueueWriter, Payload } from "./queue";
 
 async function main(
   threadId: number,
@@ -7,7 +7,7 @@ async function main(
   mqOut: QueueWriter,
   stopBuf: Uint32Array
 ) {
-  let msg: Message;
+  let msg: Payload;
   let msgOut = new Int32Array([1, 2, 3, 4, 5, 6]);
 
   const PER_ROUND = 1e7;

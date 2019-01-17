@@ -6,12 +6,6 @@ export interface ArrayBufferViewConstructor<T extends ArrayBufferView> {
   new (buffer: ArrayBufferLike, byteOffset: number, length: number): T;
 }
 
-export interface Message {
-  buf: Buf;
-  byteOffset: number;
-  byteLength: number;
-}
-
 export interface QueueCounters {
   role: string;
   spin: number;
@@ -20,22 +14,27 @@ export interface QueueCounters {
   wrap: number;
 }
 
+export interface Payload {
+  buf: Buf;
+  byteOffset: number;
+  byteLength: number;
+}
+
 interface SliceHeaderInfo {
-  length: number;
+  byteLength: number;
   isWaste?: boolean;
 }
 
 interface SliceInfo extends SliceHeaderInfo {
-  offset: number;
+  byteOffset: number;
   isEndOfBuffer: boolean;
   isWaste: boolean;
 }
 
 // prettier-ignore
 enum HeaderBits {
-  // Low 24 bits are reserved for the slice length (measured in slots),
-  // including header slot(s).
-  kLengthMask         = 0x00ffffff,
+  // Low 24 bits are reserved for the length of the slice (including header).
+  kByteLengthMask     = 0x00ffffff,
   // Every time a slice changes hands between reader and writer, we add 1 to the
   // 2-bit epoch number, which wraps on overflow.
   kEpochBaseWriter    = 0x00000000,
@@ -63,19 +62,16 @@ abstract class QueueUser {
   // Slice allocation alignment (in bytes).
   static readonly kAlignmentBytes = 8;
 
-  // Slot size (in bytes).
-  static readonly kSlotByteLength = Int32Array.BYTES_PER_ELEMENT;
-
-  // Length of slice header (in i32 slots).
-  static readonly kHeaderLength = 2;
+  // Length of slice header.
+  static readonly kHeaderByteLength = 8;
 
   // Subclasses need to provide a value for kEpochBase.
   static readonly kEpochBase: number;
 
   private acquireEpoch: number;
   private releaseEpoch: number;
-  private acquireOffset: number = 0;
-  private releaseOffset: number = 0;
+  private acquireByteOffset: number = 0;
+  private releaseByteOffset: number = 0;
 
   private waitCounter: number = 0;
   private wakeCounter: number = 0;
@@ -91,7 +87,7 @@ abstract class QueueUser {
     // Typically we'd get a buffer that's initialized with zeroes. If that's the
     // case, define a slice that spans the entire buffer and place it's header
     // at offset 0, so the reader and writer don't get confused.
-    Atomics.compareExchange(buf.i32, 0, 0, buf.i32.length);
+    Atomics.compareExchange(buf.i32, 0, 0, buf.i32.byteLength);
   }
 
   get counters(): QueueCounters {
@@ -107,8 +103,9 @@ abstract class QueueUser {
   protected acquireSlice(wait?: true): SliceInfo;
   protected acquireSlice(wait: false): SliceInfo | null;
   protected acquireSlice(wait = true): SliceInfo | null {
-    const offset: number = this.acquireOffset;
-    let header: number = this.buf.i32[offset];
+    const byteOffset: number = this.acquireByteOffset;
+    const i32Offset: number = byteOffset / this.buf.i32.BYTES_PER_ELEMENT;
+    let header: number = this.buf.i32[i32Offset];
     let spinCountRemaining: number = QueueUser.kSpinCount;
 
     while ((header & HeaderBits.kEpochMask) !== this.acquireEpoch) {
@@ -122,7 +119,12 @@ abstract class QueueUser {
         // Use compare-and-swap to set the kHasWaiters flag.
         const expect = header;
         const target = header | HeaderBits.kHasWaitersFlag;
-        header = Atomics.compareExchange(this.buf.i32, offset, expect, target);
+        header = Atomics.compareExchange(
+          this.buf.i32,
+          i32Offset,
+          expect,
+          target
+        );
         if (expect !== header) {
           // The buffer slot that holds the header has been modified after we
           // last read it; compareExchange did not set the flag, but `header`
@@ -143,58 +145,62 @@ abstract class QueueUser {
 
       if (
         futexWaitTime === null ||
-        Atomics.wait(this.buf.i32, offset, header, futexWaitTime) !==
+        Atomics.wait(this.buf.i32, i32Offset, header, futexWaitTime) !==
           "timed-out"
       ) {
         // If futexWait returned "ok" or "not-equal", the value in the buffer
         // is different from our local copy, so refresh it.
-        header = Atomics.load(this.buf.i32, offset);
+        header = Atomics.load(this.buf.i32, i32Offset);
       }
     }
 
-    const length = header & HeaderBits.kLengthMask;
+    const byteLength = header & HeaderBits.kByteLengthMask;
     const isWaste = Boolean(header & HeaderBits.kIsWasteFlag);
 
-    const endOffset = offset + length;
-    assert(endOffset <= this.buf.i32.length);
-    const isEndOfBuffer = endOffset === this.buf.i32.length;
+    const endByteOffset = byteOffset + byteLength;
+    assert(endByteOffset <= this.buf.i32.byteLength);
+    const isEndOfBuffer = endByteOffset === this.buf.i32.byteLength;
 
     if (!isEndOfBuffer) {
-      this.acquireOffset = endOffset;
+      this.acquireByteOffset = endByteOffset;
     } else {
       this.acquireEpoch = this.wrapEpoch(this.acquireEpoch);
-      this.acquireOffset = 0;
+      this.acquireByteOffset = 0;
       this.wrapCounter++;
     }
 
-    return { offset, length, isEndOfBuffer, isWaste };
+    return { byteOffset, byteLength, isEndOfBuffer, isWaste };
   }
 
-  protected releaseSlice({ length, isWaste = false }: SliceHeaderInfo): void {
-    const offset: number = this.releaseOffset;
+  protected releaseSlice({
+    byteLength,
+    isWaste = false
+  }: SliceHeaderInfo): void {
+    const byteOffset: number = this.releaseByteOffset;
+    const i32Offset: number = byteOffset / this.buf.i32.BYTES_PER_ELEMENT;
 
-    assert(length >= QueueUser.kHeaderLength);
-    assert((length & ~HeaderBits.kLengthMask) === 0);
-    assert(offset + length <= this.buf.i32.length);
+    assert(byteLength >= QueueUser.kHeaderByteLength);
+    assert((byteLength & ~HeaderBits.kByteLengthMask) === 0);
+    assert(byteOffset + byteLength <= this.buf.i32.byteLength);
 
     const flags = Number(isWaste) * HeaderBits.kIsWasteFlag;
-    const header = length | flags | this.releaseEpoch;
-    const previous = Atomics.exchange(this.buf.i32, offset, header);
+    const header = byteLength | flags | this.releaseEpoch;
+    const previous = Atomics.exchange(this.buf.i32, i32Offset, header);
 
     if (previous & HeaderBits.kHasWaitersFlag) {
-      Atomics.wake(this.buf.i32, offset, QueueUser.kMaxConcurrentUsers);
+      Atomics.wake(this.buf.i32, i32Offset, QueueUser.kMaxConcurrentUsers);
       this.wakeCounter++;
     }
 
-    const endOffset = offset + length;
-    assert(endOffset <= this.buf.i32.length);
-    const isEndOfBuffer = endOffset === this.buf.i32.length;
+    const endByteOffset = byteOffset + byteLength;
+    assert(endByteOffset <= this.buf.i32.byteLength);
+    const isEndOfBuffer = endByteOffset === this.buf.i32.byteLength;
 
     if (!isEndOfBuffer) {
-      this.releaseOffset = endOffset;
+      this.releaseByteOffset = endByteOffset;
     } else {
       this.releaseEpoch = this.wrapEpoch(this.releaseEpoch);
-      this.releaseOffset = 0;
+      this.releaseByteOffset = 0;
     }
   }
 
@@ -206,14 +212,12 @@ abstract class QueueUser {
 export class QueueWriter extends QueueUser {
   static readonly kEpochBase = HeaderBits.kEpochBaseWriter;
 
-  // The length *in slots* of the allocation we made for the user,
-  // including header and padding.
-  private allocationLength: number = -1;
-
-  // The number of bytes allocated for the user, *not* including the header,
-  // and the byte offset into the underlying `Buf`.
-  private messageByteOffset: number = -1;
-  private messageByteLength: number = -1;
+  // The size of the allocation we made for the message, including header and
+  // alignment padding.
+  private allocationByteLength: number = -1;
+  // The number of bytes that the the user requested, *not* including the
+  // header, and without alignment padding.
+  private payloadByteLength: number = -1;
 
   // This slice spans the part of the buffer that has been reserved for the
   // current (or next) message that will be written to the buffer. Note
@@ -222,11 +226,11 @@ export class QueueWriter extends QueueUser {
 
   constructor(buf: Buf) {
     super(buf);
-    this.initWriteSlice();
+    this.writeSlice = this.acquireSlice();
   }
 
   beginWrite(byteLength: number) {
-    if (this.allocationLength >= 0) {
+    if (this.allocationByteLength >= 0) {
       throw new Error("Already writing.");
     }
     return this.allocate(byteLength);
@@ -234,27 +238,28 @@ export class QueueWriter extends QueueUser {
 
   // TODO: copy bytes when allocation wraps.
   resizeWrite(byteLength: number) {
-    if (this.allocationLength < 0) {
+    if (this.allocationByteLength < 0) {
       throw new Error("Not writing.");
     }
     return this.allocate(byteLength);
   }
 
   endWrite(submit = true): void {
-    if (this.allocationLength < 0) {
+    if (this.allocationByteLength < 0) {
       throw new Error("Not writing.");
     }
 
     if (submit) {
-      const length = this.allocationLength;
-      this.releaseSlice({ length });
+      const byteLength = this.allocationByteLength;
+      this.releaseSlice({ byteLength });
 
-      this.writeSlice.offset += length;
-      this.writeSlice.length -= length;
-      this.messageByteOffset += length * QueueWriter.kSlotByteLength;
+      // Compute the length and offsets of the part of writeSlice that remains
+      // reserved after emitting the allocated part as a slice.
+      this.writeSlice.byteOffset += byteLength;
+      this.writeSlice.byteLength -= byteLength;
     }
 
-    this.allocationLength = -1;
+    this.allocationByteLength = -1;
   }
 
   write(data: ArrayBufferView): void {
@@ -281,51 +286,42 @@ export class QueueWriter extends QueueUser {
     }
   }
 
-  private initWriteSlice(): void {
-    this.writeSlice = this.acquireSlice();
-    // Compute the byte offset for the start of the payload (after the header).
-    this.messageByteOffset =
-      (this.writeSlice.offset + QueueWriter.kHeaderLength) *
-      QueueWriter.kSlotByteLength;
-  }
-
-  private allocate(messageByteLength: number): Message {
+  private allocate(payloadByteLength: number): Payload {
     // Compute the total required length, including header and padding,
     // in slots - not bytes.
-    const messageLength =
-      this.align(messageByteLength) / QueueWriter.kSlotByteLength;
-    const targetLength = QueueWriter.kHeaderLength + messageLength;
+    const targetByteLength =
+      QueueWriter.kHeaderByteLength + this.align(payloadByteLength);
 
     // Acquire slices until we have the number of slots required.
-    while (this.writeSlice.length < targetLength) {
+    while (this.writeSlice.byteLength < targetByteLength) {
       if (this.writeSlice.isEndOfBuffer) {
         // Can't wrap around the end of the ring buffer. Discard what we got
         // so far and start over at the beginning of the buffer.
-        if (this.writeSlice.length > 0) {
+        if (this.writeSlice.byteLength > 0) {
           this.releaseSlice({ ...this.writeSlice, isWaste: true });
         }
 
         // Create a new allocation from scratch.
-        this.initWriteSlice();
-        return this.allocate(messageByteLength);
+        this.writeSlice = this.acquireSlice();
+        return this.allocate(payloadByteLength);
       }
 
       // Acquire the next slice and use it to make `writeSlice` longer.
       let h = this.acquireSlice();
-      this.writeSlice.length += h.length;
+      this.writeSlice.byteLength += h.byteLength;
       this.writeSlice.isEndOfBuffer = h.isEndOfBuffer;
     }
 
     // Update the stored lengths. The offset is updated in
     // acquireInitialSlice(), so we don't need to do that here.
-    this.allocationLength = targetLength;
-    this.messageByteLength = messageByteLength;
+    this.allocationByteLength = targetByteLength;
+    this.payloadByteLength = payloadByteLength;
 
     // Return information about the new allocation.
     return {
       buf: this.buf,
-      byteOffset: this.messageByteOffset,
-      byteLength: this.messageByteLength
+      byteOffset: this.writeSlice.byteOffset + QueueWriter.kHeaderByteLength,
+      byteLength: this.payloadByteLength
     };
   }
 
@@ -340,19 +336,15 @@ export class QueueReader extends QueueUser {
 
   private readSlice: SliceInfo | null = null;
 
-  beginRead(): Message {
+  beginRead(): Payload {
     if (this.readSlice !== null) {
       throw new Error("Already reading.");
     }
     this.readSlice = this.acquireSlice();
     return {
       buf: this.buf,
-      byteOffset:
-        (this.readSlice.offset + QueueReader.kHeaderLength) *
-        QueueReader.kSlotByteLength,
-      byteLength:
-        (this.readSlice.length - QueueReader.kHeaderLength) *
-        QueueReader.kSlotByteLength
+      byteOffset: this.readSlice.byteOffset + QueueReader.kHeaderByteLength,
+      byteLength: this.readSlice.byteLength - QueueReader.kHeaderByteLength
     };
   }
 
@@ -369,7 +361,7 @@ export class QueueReader extends QueueUser {
   readInto<T extends ArrayBufferView>(
     viewConstructor: ArrayBufferViewConstructor<T>
   ): T {
-    const message = this.beginRead();
+    const payload = this.beginRead();
     let view: T | undefined;
     try {
       // Create a view of the proper type on the underlying ArrayBuffer,
@@ -378,9 +370,9 @@ export class QueueReader extends QueueUser {
       // TODO: This is slow (>2x slowdown); find a more efficient solution.
       view = new viewConstructor(
         new viewConstructor(
-          message.buf.ab,
-          message.byteOffset,
-          message.byteLength
+          payload.buf.ab,
+          payload.byteOffset,
+          payload.byteLength
         )
       );
       return view;
