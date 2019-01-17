@@ -1,6 +1,38 @@
 import { assert } from "./assert";
 import { Buf } from "./buf";
 
+export interface ArrayBufferViewConstructor<T extends ArrayBufferView> {
+  new (from: T): T;
+  new (buffer: ArrayBufferLike, byteOffset: number, length: number): T;
+}
+
+let a = new Uint32Array();
+let b = new Uint32Array(a);
+
+export interface Message {
+  buf: Buf;
+  offset: number;
+  length: number;
+}
+
+export interface QueueCounters {
+  class: string;
+  spin: number;
+  wait: number;
+  wake: number;
+}
+
+interface SliceHeaderInfo {
+  length: number;
+  isWaste?: boolean;
+}
+
+interface SliceInfo extends SliceHeaderInfo {
+  offset: number;
+  isEndOfBuffer: boolean;
+  isWaste: boolean;
+}
+
 // prettier-ignore
 enum HeaderBits {
   // Low 24 bits are reserved for the slice length (measured in slots),
@@ -21,31 +53,6 @@ enum HeaderBits {
   kHasWaitersFlag     = 0x08000000,
 }
 
-// Todo: rename to Slice.
-export interface Message {
-  i32: Int32Array;
-  offset: number;
-  length: number;
-}
-
-interface SliceHeaderInfo {
-  length: number;
-  isWaste?: boolean;
-}
-
-interface SliceInfo extends SliceHeaderInfo {
-  offset: number;
-  isEndOfBuffer: boolean;
-  isWaste: boolean;
-}
-
-export interface QueueCounters {
-  class: string;
-  spin: number;
-  wait: number;
-  wake: number;
-}
-
 abstract class QueueUser {
   // These constants define spinning behaviour.
   static readonly kSpinCount: number = 100;
@@ -55,11 +62,11 @@ abstract class QueueUser {
   // Currently we support one reader and one writer only.
   static readonly kMaxConcurrentUsers = 2;
 
+  // Slot size (in bytes).
+  static readonly kSlotByteLength = Int32Array.BYTES_PER_ELEMENT;
+
   // Length of slice header (in i32 slots).
   static readonly kHeaderLength = 2;
-
-  // Hack to get TypeScript to get type info for 'this.constructor' right.
-  readonly "constructor": typeof QueueUser;
 
   // Subclasses need to provide a value for kEpochBase.
   static readonly kEpochBase: number;
@@ -75,7 +82,7 @@ abstract class QueueUser {
 
   constructor(protected buf: Buf) {
     // Set initial acquire and release epoch numbers.
-    const Self = this.constructor;
+    const Self = this.constructor as any;
     this.acquireEpoch = Self.kEpochBase;
     this.releaseEpoch = Self.kEpochBase + HeaderBits.kEpochTransferDelta;
 
@@ -98,14 +105,19 @@ abstract class QueueUser {
     return (epoch + HeaderBits.kEpochBufWrapDelta) & HeaderBits.kEpochMask;
   }
 
-  protected acquireSlice(): SliceInfo {
+  protected acquireSlice(wait?: true): SliceInfo;
+  protected acquireSlice(wait: false): SliceInfo | null;
+  protected acquireSlice(wait = true): SliceInfo | null {
     const offset: number = this.acquireOffset;
     let header: number = this.buf.i32[offset];
     let spinCountRemaining: number = QueueUser.kSpinCount;
 
     while ((header & HeaderBits.kEpochMask) !== this.acquireEpoch) {
-      let futexWaitTime;
+      if (!wait) {
+        return null;
+      }
 
+      let futexWaitTime;
       if (spinCountRemaining === 0) {
         // We're going to put the thread to sleep.
         // Use compare-and-swap to set the kHasWaiters flag.
@@ -243,25 +255,49 @@ export class QueueWriter extends QueueUser {
 export class QueueReader extends QueueUser {
   static readonly kEpochBase: number = HeaderBits.kEpochBaseReader;
 
-  // The recv() function actually shouldn't be an async function,
-  // but in a browser environment buffers can only be transferred
-  // between threads (workers) with postMessage().
-  // We won't receive those messages unless we yield to the event
-  // loop every now and then.
-  recv(): Message {
-    for (;;) {
-      let sliceHeader = this.acquireSlice();
-      if (sliceHeader.isWaste) {
-        this.releaseSlice(sliceHeader);
-      } else {
-        // TODO: beginRecv()/endRecv()
-        this.releaseSlice(sliceHeader);
-        return {
-          i32: this.buf.i32,
-          offset: sliceHeader.offset,
-          length: sliceHeader.length
-        };
-      }
+  private readSlice: SliceInfo | null = null;
+
+  beginRead(): Message {
+    if (this.readSlice !== null) {
+      throw new Error("Already reading.");
+    }
+    this.readSlice = this.acquireSlice();
+    return {
+      buf: this.buf,
+      offset: this.readSlice.offset + QueueUser.kHeaderLength,
+      length: this.readSlice.length - QueueUser.kHeaderLength
+    };
+  }
+
+  endRead(release = true): void {
+    if (this.readSlice === null) {
+      throw new Error("Not reading.");
+    }
+    if (release) {
+      this.releaseSlice(this.readSlice);
+    }
+    this.readSlice = null;
+  }
+
+  readInto<T extends ArrayBufferView>(
+    viewConstructor: ArrayBufferViewConstructor<T>
+  ): T {
+    const message = this.beginRead();
+    let view: T | undefined;
+    try {
+      // Create a view of the proper type on the underlying ArrayBuffer.
+      // Then call the constructor again to make a copy.
+      view = new viewConstructor(
+        new viewConstructor(
+          message.buf.ab,
+          message.offset * QueueUser.kSlotByteLength,
+          message.length * QueueUser.kSlotByteLength
+        )
+      );
+      return view;
+    } finally {
+      // Only release the slice if creating the view succeeded.
+      this.endRead(view !== undefined);
     }
   }
 }

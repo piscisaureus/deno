@@ -1,5 +1,5 @@
 import { Buf } from "./buf";
-import { QueueReader, QueueWriter, YIELD, Message, debugInfo } from "./queue";
+import { QueueReader, QueueWriter, Message } from "./queue";
 
 async function main(
   threadId: number,
@@ -7,7 +7,7 @@ async function main(
   mqOut: QueueWriter,
   stopBuf: Uint32Array
 ) {
-  let msg: Int32Array | Message | YIELD;
+  let msg: Uint8Array;
   let msgOut = new Int32Array([1, 2, 3, 4, 5, 6]);
 
   const PER_ROUND = 1e7;
@@ -26,7 +26,7 @@ async function main(
     if (Atomics.load(stopBuf, 0)) break;
     for (let i = 0; i < PER_ROUND; ) {
       mqOut.send(msgOut);
-      msg = mqIn.recv();
+      msg = mqIn.readInto(Uint8Array);
       i++;
     }
     received += PER_ROUND;
@@ -44,8 +44,10 @@ async function main(
       threadId,
       "throughput (msg/sec):",
       Math.floor(received / elapsed),
-      "counts",
-      JSON.stringify(debugInfo)
+      "mqIn counters",
+      mqIn.counters,
+      "mqOut counters",
+      mqOut.counters
     );
   }
 }
@@ -69,12 +71,6 @@ async function domSetup() {
   // Create small initial buffers for the mq.
   const mqBuf1 = new SharedArrayBuffer(4 * 8 * 1e5 * 1);
   const mqBuf2 = new SharedArrayBuffer(4 * 9.6 * 1e5 * 2);
-  let init = (ab: SharedArrayBuffer) => {
-    let i32 = new Int32Array(ab);
-    i32[0] = i32.length;
-  };
-  init(mqBuf1);
-  init(mqBuf2);
   // Create buffer for the buffer ID counter;
   const bufIdBuf = new SharedArrayBuffer(4);
   // Spin up the web worker thread.
