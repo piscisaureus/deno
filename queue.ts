@@ -20,6 +20,9 @@ export interface TypedArrayConstructor<T extends TypedArray> {
 
 export interface QueueCounters {
   role: string;
+  message: number;
+  acquire: number;
+  release: number;
   spin: number;
   wait: number;
   wake: number;
@@ -93,6 +96,9 @@ abstract class QueueUser {
   private acquirePosition: number = 0;
   private releasePosition: number = 0;
 
+  protected messageCounter: number = 0;
+  private acquireCounter: number = 0;
+  private releaseCounter: number = 0;
   private waitCounter: number = 0;
   private wakeCounter: number = 0;
   private spinCounter: number = 0;
@@ -129,6 +135,9 @@ abstract class QueueUser {
   get counters(): QueueCounters {
     return {
       role: this.constructor.name,
+      message: this.messageCounter,
+      acquire: this.acquireCounter,
+      release: this.releaseCounter,
       wait: this.waitCounter,
       wake: this.wakeCounter,
       spin: this.spinCounter,
@@ -226,6 +235,7 @@ abstract class QueueUser {
       this.wrapCounter++;
     }
 
+    this.acquireCounter++;
     return { position, byteLength, isEndOfBuffer, isWaste };
   }
 
@@ -246,9 +256,11 @@ abstract class QueueUser {
       this.fillDirectionOffsetAdjustment * position;
     const headerI32Offset = headerByteOffset / this.buf.i32.BYTES_PER_ELEMENT;
 
-    const flags = Number(isWaste) * HeaderBits.kIsWasteFlag;
+    const flags = isWaste ? HeaderBits.kIsWasteFlag : 0;
     const header = byteLength | flags | this.releaseEpoch;
     const previous = Atomics.exchange(this.buf.i32, headerI32Offset, header);
+    this.buf.i32[headerI32Offset + 1] =
+      this.releaseEpoch / HeaderBits.kEpochTransferDelta;
 
     if (previous & HeaderBits.kHasWaitersFlag) {
       Atomics.wake(
@@ -269,6 +281,8 @@ abstract class QueueUser {
       this.releaseEpoch = this.wrapEpoch(this.releaseEpoch);
       this.releasePosition = 0;
     }
+
+    this.releaseCounter++;
   }
 
   private wrapEpoch(epoch: number) {
@@ -286,7 +300,7 @@ export class QueueWriter extends QueueUser {
   // This slice spans the part of the buffer that has been reserved for the
   // current (or next) message that will be written to the buffer. Note
   // that writeSlice may be non-null even when we're not writing.
-  private writeSlice!: SliceInfo;
+  private writeSlice: SliceInfo;
 
   constructor(buf: Buf) {
     super(buf);
@@ -323,6 +337,8 @@ export class QueueWriter extends QueueUser {
       // reserved after emitting the allocated part as a slice.
       this.writeSlice.position += byteLength;
       this.writeSlice.byteLength -= byteLength;
+
+      this.messageCounter++;
     }
 
     this.allocationByteLength = -1;
@@ -413,17 +429,24 @@ export class QueueReader extends QueueUser {
     if (this.readSlice !== null) {
       throw new Error("Already reading.");
     }
-    this.readSlice = this.acquireSlice();
+
+    let readSlice = this.acquireSlice();
+    while (readSlice.isWaste) {
+      this.releaseSlice(readSlice);
+      readSlice = this.acquireSlice();
+    }
+    this.readSlice = readSlice;
 
     // Compute the offset and length of the payload (the part after the header),
     // making adjustments for buffers that grow bottom-up.
     const payloadByteLength =
-      this.readSlice.byteLength - QueueReader.kHeaderByteLength;
+      readSlice.byteLength - QueueReader.kHeaderByteLength;
     const payloadByteOffset =
       this.fillDirectionBaseAdjustment *
         (this.buf.i32.byteLength - payloadByteLength) +
       this.fillDirectionOffsetAdjustment *
-        (this.readSlice.position + QueueReader.kHeaderByteLength);
+        (readSlice.position + QueueReader.kHeaderByteLength);
+
     return {
       buf: this.buf,
       byteOffset: payloadByteOffset,
@@ -437,6 +460,7 @@ export class QueueReader extends QueueUser {
     }
     if (release) {
       this.releaseSlice(this.readSlice);
+      this.messageCounter++;
     }
     this.readSlice = null;
   }

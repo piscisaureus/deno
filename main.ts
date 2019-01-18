@@ -14,26 +14,22 @@ async function main(
 
   // Seed the buffer with some messages.
   //for (let i = 0; i < 1e5; i++) {
-  for (let i = 0; i < 0; i++) {
+  for (let i = 0; i < (threadId == 1 ? 100 : 0); i++) {
+    console.log(threadId, "Bootstrap message sent");
     mqOut.write(msgOut);
   }
 
   const start = Date.now();
 
-  let g = 4;
-
   for (let round = 0; round < 100; round++) {
     console.log(`====== ROUND ${round} ======`);
     if (Atomics.load(stopBuf, 0)) break;
     for (let i = 0; i < PER_ROUND; ) {
-      let slOut = mqOut.beginWrite(msgOut.byteLength / 2);
-      slOut = mqOut.resizeWrite(24);
-      slOut = mqOut.resizeWrite(1);
-      mqOut.endWrite();
       let msgIn = mqIn.beginRead();
       mqIn.endRead();
+      let slOut = mqOut.beginWrite(24);
+      mqOut.endWrite();
       //let msgIn = mqIn.readInto(Int32Array);
-      if (g) console.log(g--, slOut);
       i++;
     }
     received += PER_ROUND;
@@ -49,6 +45,51 @@ async function main(
     const elapsed = (Date.now() - start) / 1000;
     console.log(
       threadId,
+      "throughput (msg/sec):",
+      Math.floor(received / elapsed),
+      "mqIn counters",
+      mqIn.counters,
+      "mqOut counters",
+      mqOut.counters
+    );
+    await new Promise(res => setTimeout(res, 10));
+  }
+}
+
+async function extra(stopBuf: Uint32Array) {
+  const PER_ROUND = 1e7;
+  const PER_SUBROUND = 10;
+  let received = 0;
+  const start = Date.now();
+
+  let ab = new SharedArrayBuffer(PER_SUBROUND * 100);
+  let i32 = new Int32Array(ab);
+  let buf: any = { ab, i32 };
+  let mqIn = new QueueReader(buf);
+  let mqOut = new QueueWriter(buf);
+
+  for (let round = 0; round < 100; round++) {
+    console.log(`====== EXTRA ${round} ======`);
+    if (Atomics.load(stopBuf, 0)) break;
+    for (let i = 0; i < PER_ROUND; i += PER_SUBROUND) {
+      let outLen = Math.ceil(Math.random() * 90);
+      for (let j = 0; j < PER_SUBROUND; j++) {
+        let slOut = mqOut.beginWrite(24);
+        i32[slOut.byteOffset / 4 + 1] = 1e6 + 1e3 * (i % 10) + j;
+        i32[slOut.byteOffset / 4 + 2] = 0;
+        mqOut.endWrite();
+      }
+      for (let j = 0; j < PER_SUBROUND; j++) {
+        let slIn = mqIn.beginRead();
+        i32[slIn.byteOffset / 4 + 1] *= -1;
+        i32[slIn.byteOffset / 4 + 2] = -(1e6 + 1e3 * (i % 10) + j);
+        mqIn.endRead();
+      }
+    }
+    received += PER_ROUND;
+    console.log("messages processed:", received, "bufs:", Buf.debugInfo());
+    const elapsed = (Date.now() - start) / 1000;
+    console.log(
       "throughput (msg/sec):",
       Math.floor(received / elapsed),
       "mqIn counters",
@@ -143,6 +184,7 @@ global.beenHereBefore = true;
 if (typeof window !== "undefined") {
   global.start = () => domSetup().catch(console.error);
   global.stop = () => Atomics.store(stopBuf, 0, 1);
+  global.extra = () => extra(stopBuf);
 } else {
   workerSetup().catch(console.error);
 }
