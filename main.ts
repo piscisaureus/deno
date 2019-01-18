@@ -7,7 +7,6 @@ async function main(
   mqOut: QueueWriter,
   stopBuf: Uint32Array
 ) {
-  let msg: Payload;
   let msgOut = new Int32Array([1, 2, 3, 4, 5, 6]);
 
   const PER_ROUND = 1e7;
@@ -15,19 +14,26 @@ async function main(
 
   // Seed the buffer with some messages.
   //for (let i = 0; i < 1e5; i++) {
-  for (let i = 0; i < 1e5; i++) {
+  for (let i = 0; i < 0; i++) {
     mqOut.write(msgOut);
   }
 
   const start = Date.now();
 
+  let g = 4;
+
   for (let round = 0; round < 100; round++) {
     console.log(`====== ROUND ${round} ======`);
     if (Atomics.load(stopBuf, 0)) break;
     for (let i = 0; i < PER_ROUND; ) {
-      mqOut.write(msgOut);
-      msg = mqIn.beginRead();
+      let slOut = mqOut.beginWrite(msgOut.byteLength / 2);
+      slOut = mqOut.resizeWrite(24);
+      slOut = mqOut.resizeWrite(1);
+      mqOut.endWrite();
+      let msgIn = mqIn.beginRead();
       mqIn.endRead();
+      //let msgIn = mqIn.readInto(Int32Array);
+      if (g) console.log(g--, slOut);
       i++;
     }
     received += PER_ROUND;
@@ -50,6 +56,7 @@ async function main(
       "mqOut counters",
       mqOut.counters
     );
+    await new Promise(res => setTimeout(res, 10));
   }
 }
 

@@ -12,3 +12,7 @@ export function assert(cond: boolean, message?: string): void {
 export function fail(message?: string): never {
   return throwAssertionError(message);
 }
+
+export function unreachable(): never {
+  throw new Error("Unreachable code reached");
+}
