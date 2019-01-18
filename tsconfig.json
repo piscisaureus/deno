@@ -13,6 +13,7 @@
     "noFallthroughCasesInSwitch": true,
     "allowUnreachableCode": false,
     "experimentalDecorators": true,
-    "strict": true
+    "strict": true,
+    "outDir": "out"
   }
 }
