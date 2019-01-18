@@ -14,7 +14,7 @@ async function main(
 
   // Seed the buffer with some messages.
   //for (let i = 0; i < 1e5; i++) {
-  for (let i = 0; i < (threadId == 1 ? 100 : 0); i++) {
+  for (let i = 0; i < (threadId == 1 ? 0 : 0); i++) {
     console.log(threadId, "Bootstrap message sent");
     mqOut.write(msgOut);
   }
@@ -50,11 +50,10 @@ async function main(
       threadId,
       "throughput (msg/sec):",
       Math.floor(received / elapsed),
-      "mqIn counters",
       mqIn.counters,
-      "mqOut counters",
       mqOut.counters
     );
+    console.log(mqIn, mqOut);
     await new Promise(res => setTimeout(res, 10));
   }
 }
@@ -74,9 +73,9 @@ async function extra(stopBuf: Uint32Array) {
     console.log(`====== EXTRA ${round} ======`);
     if (Atomics.load(stopBuf, 0)) break;
     for (let i = 0; i < PER_ROUND; i += PER_SUBROUND) {
-      let outLen = Math.ceil(Math.random() * 90);
+      let outLen = (Math.ceil(Math.random() * 30) | 0) + 8;
       for (let j = 0; j < PER_SUBROUND; j++) {
-        let slOut = mqOut.beginWrite(24);
+        let slOut = mqOut.beginWrite(outLen);
         i32[slOut.byteOffset / 4 + 1] = 1e6 + 1e3 * (i % 10) + j;
         i32[slOut.byteOffset / 4 + 2] = 0;
         mqOut.endWrite();
@@ -94,9 +93,7 @@ async function extra(stopBuf: Uint32Array) {
     console.log(
       "throughput (msg/sec):",
       Math.floor(received / elapsed),
-      "mqIn counters",
       mqIn.counters,
-      "mqOut counters",
       mqOut.counters
     );
     await new Promise(res => setTimeout(res, 10));

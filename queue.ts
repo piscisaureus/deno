@@ -72,6 +72,9 @@ const enum FillDirection {
 }
 
 abstract class QueueUser {
+  // Whether buffers are filled upwards or downwards.
+  static readonly kFillDirection: FillDirection = FillDirection.kBottomUp;
+
   // These constants define spinning behaviour.
   static readonly kSpinCount: number = 100;
   static readonly kSpinYieldCpu: boolean = false;
@@ -79,6 +82,9 @@ abstract class QueueUser {
   // Maximum number of threads that will access the ring buffer simultaneously.
   // Currently we support one reader and one writer only.
   static readonly kMaxConcurrentUsers = 2;
+
+  // Maximum fraction of the buffer that can be allocated to a single message.
+  static readonly kMaxMessageSizeFraction = 4; // Quarter of the buffer.
 
   // Slice allocation alignment (in bytes).
   static readonly kAlignmentBytes = 8;
@@ -89,13 +95,15 @@ abstract class QueueUser {
   // Subclasses need to provide a value for kEpochBase.
   static readonly kEpochBase: number;
 
-  public readonly buffer: SharedArrayBuffer;
   public readonly u8: Uint8Array;
   public readonly i32: Int32Array;
   public readonly u32: Uint32Array;
 
   // Cache the buffer length because it's much faster than buffer.byteLength;
   public readonly bufferByteLength: number;
+
+  // The maximum payload size of a message.
+  public readonly maxPayloadByteLength: number;
 
   private acquireEpoch: number;
   private releaseEpoch: number;
@@ -110,12 +118,11 @@ abstract class QueueUser {
   private spinCounter: number = 0;
   private wrapCounter: number = 0;
 
-  static readonly kFillDirection: FillDirection = FillDirection.kTopDown;
   protected readonly fillDirectionBaseAdjustment: number;
   protected readonly fillDirectionOffsetAdjustment: number;
 
   // `buffer` must be initialized with zeroes.
-  constructor(buffer: SharedArrayBuffer) {
+  constructor(public readonly buffer: SharedArrayBuffer) {
     // Set fill direction adjustment constants.
     switch (QueueUser.kFillDirection) {
       case FillDirection.kTopDown:
@@ -135,14 +142,21 @@ abstract class QueueUser {
     this.acquireEpoch = Self.kEpochBase;
     this.releaseEpoch = Self.kEpochBase + HeaderBits.kEpochTransferDelta;
 
+    this.bufferByteLength = buffer.byteLength;
+    this.maxPayloadByteLength =
+      (Math.min(
+        HeaderBits.kByteLengthMask,
+        this.bufferByteLength / QueueUser.kMaxMessageSizeFraction
+      ) -
+        QueueUser.kHeaderByteLength) &
+      ~(QueueUser.kAlignmentBytes - 1);
+
     // Create various views on the SharedArrayBuffer.
-    this.buffer = buffer.slice();
     this.u8 = new Uint8Array(buffer);
     this.i32 = new Int32Array(buffer);
     this.u32 = new Uint32Array(buffer);
 
     // Initialize the slice structure inside the buffer.
-    this.bufferByteLength = buffer.byteLength;
     this.initBufferSlice();
   }
 
@@ -277,7 +291,12 @@ abstract class QueueUser {
       this.releaseEpoch / HeaderBits.kEpochTransferDelta;
 
     if (previous & HeaderBits.kHasWaitersFlag) {
-      Atomics.wake(this.i32, headerI32Offset, QueueUser.kMaxConcurrentUsers);
+      Atomics.wake(
+        this.i32,
+        headerI32Offset,
+        // Subtract one because we're a user and we're definitely not sleeping.
+        QueueUser.kMaxConcurrentUsers - 1
+      );
       this.wakeCounter++;
     }
 
@@ -322,6 +341,9 @@ export class QueueWriter extends QueueUser {
     if (this.allocationByteLength >= 0) {
       throw new Error("Already writing.");
     }
+    if (byteLength > this.maxPayloadByteLength) {
+      throw new RangeError("Message too big.");
+    }
     return this.allocate(byteLength);
   }
 
@@ -330,6 +352,9 @@ export class QueueWriter extends QueueUser {
   resizeWrite(byteLength: number) {
     if (this.allocationByteLength < 0) {
       throw new Error("Not writing.");
+    }
+    if (byteLength > this.maxPayloadByteLength) {
+      throw new RangeError("Message too big.");
     }
     return this.allocate(byteLength);
   }
