@@ -1,5 +1,5 @@
 import { Buf } from "./buf";
-import { QueueReader, QueueWriter, Payload } from "./queue";
+import { QueueReader, QueueWriter, PayloadSlice } from "./queue";
 
 async function main(
   threadId: number,
@@ -25,10 +25,13 @@ async function main(
     console.log(`====== ROUND ${round} ======`);
     if (Atomics.load(stopBuf, 0)) break;
     for (let i = 0; i < PER_ROUND; ) {
-      let msgIn = mqIn.beginRead();
-      mqIn.endRead();
-      let slOut = mqOut.beginWrite(24);
-      mqOut.endWrite();
+      if (threadId === 1) {
+        let msgIn = mqIn.beginRead();
+        mqIn.endRead();
+      } else {
+        let slOut = mqOut.beginWrite(24);
+        mqOut.endWrite();
+      }
       //let msgIn = mqIn.readInto(Int32Array);
       i++;
     }
@@ -39,8 +42,8 @@ async function main(
       received,
       "bufs:",
       Buf.debugInfo(),
-      (<any>mqIn).buf.ab.byteLength,
-      (<any>mqOut).buf.ab.byteLength
+      mqIn.buffer.byteLength,
+      mqOut.buffer.byteLength
     );
     const elapsed = (Date.now() - start) / 1000;
     console.log(
@@ -64,9 +67,8 @@ async function extra(stopBuf: Uint32Array) {
 
   let ab = new SharedArrayBuffer(PER_SUBROUND * 100);
   let i32 = new Int32Array(ab);
-  let buf: any = { ab, i32 };
-  let mqIn = new QueueReader(buf);
-  let mqOut = new QueueWriter(buf);
+  let mqIn = new QueueReader(ab);
+  let mqOut = new QueueWriter(ab);
 
   for (let round = 0; round < 100; round++) {
     console.log(`====== EXTRA ${round} ======`);
@@ -167,8 +169,8 @@ async function workerSetup() {
   );
   // Set up buffer port and message queues.
   Buf.setup(bufPort, bufIdBuf);
-  const mqIn = new QueueReader(Buf.import(mqInBuf));
-  const mqOut = new QueueWriter(Buf.import(mqOutBuf));
+  const mqIn = new QueueReader(Buf.import(mqInBuf).ab);
+  const mqOut = new QueueWriter(Buf.import(mqOutBuf).ab);
   await main(threadId, mqIn, mqOut, stopBuf);
 }
 

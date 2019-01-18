@@ -1,5 +1,4 @@
 import { assert, fail, unreachable } from "./assert";
-import { Buf } from "./buf";
 
 type TypedArray =
   | Int8Array
@@ -29,8 +28,7 @@ export interface QueueCounters {
   wrap: number;
 }
 
-export interface Payload {
-  buf: Buf;
+export interface PayloadSlice {
   byteOffset: number;
   byteLength: number;
 }
@@ -91,6 +89,14 @@ abstract class QueueUser {
   // Subclasses need to provide a value for kEpochBase.
   static readonly kEpochBase: number;
 
+  public readonly buffer: SharedArrayBuffer;
+  public readonly u8: Uint8Array;
+  public readonly i32: Int32Array;
+  public readonly u32: Uint32Array;
+
+  // Cache the buffer length because it's much faster than buffer.byteLength;
+  public readonly bufferByteLength: number;
+
   private acquireEpoch: number;
   private releaseEpoch: number;
   private acquirePosition: number = 0;
@@ -108,7 +114,8 @@ abstract class QueueUser {
   protected readonly fillDirectionBaseAdjustment: number;
   protected readonly fillDirectionOffsetAdjustment: number;
 
-  constructor(protected buf: Buf) {
+  // `buffer` must be initialized with zeroes.
+  constructor(buffer: SharedArrayBuffer) {
     // Set fill direction adjustment constants.
     switch (QueueUser.kFillDirection) {
       case FillDirection.kTopDown:
@@ -128,7 +135,14 @@ abstract class QueueUser {
     this.acquireEpoch = Self.kEpochBase;
     this.releaseEpoch = Self.kEpochBase + HeaderBits.kEpochTransferDelta;
 
-    // Initialize the buffer.
+    // Create various views on the SharedArrayBuffer.
+    this.buffer = buffer.slice();
+    this.u8 = new Uint8Array(buffer);
+    this.i32 = new Int32Array(buffer);
+    this.u32 = new Uint32Array(buffer);
+
+    // Initialize the slice structure inside the buffer.
+    this.bufferByteLength = buffer.byteLength;
     this.initBufferSlice();
   }
 
@@ -150,12 +164,12 @@ abstract class QueueUser {
     // case, define a slice that spans the entire buffer and place it's header
     // at offset 0, so the reader and writer don't get confused.
     Atomics.compareExchange(
-      this.buf.i32,
+      this.i32,
       (this.fillDirectionBaseAdjustment *
-        (this.buf.i32.byteLength - QueueUser.kHeaderByteLength)) /
-        this.buf.i32.BYTES_PER_ELEMENT,
+        (this.bufferByteLength - QueueUser.kHeaderByteLength)) /
+        this.i32.BYTES_PER_ELEMENT,
       0,
-      this.buf.i32.byteLength
+      this.bufferByteLength
     );
   }
 
@@ -167,11 +181,11 @@ abstract class QueueUser {
     // Compute the directionality-adjusted header offset.
     const headerByteOffset: number =
       this.fillDirectionBaseAdjustment *
-        (this.buf.i32.byteLength - QueueUser.kHeaderByteLength) +
+        (this.bufferByteLength - QueueUser.kHeaderByteLength) +
       this.fillDirectionOffsetAdjustment * position;
-    const headerI32Offset = headerByteOffset / this.buf.i32.BYTES_PER_ELEMENT;
+    const headerI32Offset = headerByteOffset / this.i32.BYTES_PER_ELEMENT;
 
-    let header: number = this.buf.i32[headerI32Offset];
+    let header: number = this.i32[headerI32Offset];
     let spinCountRemaining: number = QueueUser.kSpinCount;
 
     while ((header & HeaderBits.kEpochMask) !== this.acquireEpoch) {
@@ -186,7 +200,7 @@ abstract class QueueUser {
         const expect = header;
         const target = header | HeaderBits.kHasWaitersFlag;
         header = Atomics.compareExchange(
-          this.buf.i32,
+          this.i32,
           headerI32Offset,
           expect,
           target
@@ -211,12 +225,12 @@ abstract class QueueUser {
 
       if (
         futexWaitTime === null ||
-        Atomics.wait(this.buf.i32, headerI32Offset, header, futexWaitTime) !==
+        Atomics.wait(this.i32, headerI32Offset, header, futexWaitTime) !==
           "timed-out"
       ) {
         // If futexWait returned "ok" or "not-equal", the value in the buffer
         // is different from our local copy, so refresh it.
-        header = Atomics.load(this.buf.i32, headerI32Offset);
+        header = Atomics.load(this.i32, headerI32Offset);
       }
     }
 
@@ -224,8 +238,8 @@ abstract class QueueUser {
     const isWaste = Boolean(header & HeaderBits.kIsWasteFlag);
 
     const nextPosition = position + byteLength;
-    assert(nextPosition <= this.buf.i32.byteLength);
-    const isEndOfBuffer = nextPosition === this.buf.i32.byteLength;
+    assert(nextPosition <= this.bufferByteLength);
+    const isEndOfBuffer = nextPosition === this.bufferByteLength;
 
     if (!isEndOfBuffer) {
       this.acquirePosition = nextPosition;
@@ -247,33 +261,29 @@ abstract class QueueUser {
 
     assert(byteLength >= QueueUser.kHeaderByteLength);
     assert((byteLength & ~HeaderBits.kByteLengthMask) === 0);
-    assert(position + byteLength <= this.buf.i32.byteLength);
+    assert(position + byteLength <= this.bufferByteLength);
 
     // Compute the directionality-adjusted header offset.
     const headerByteOffset: number =
       this.fillDirectionBaseAdjustment *
-        (this.buf.i32.byteLength - QueueUser.kHeaderByteLength) +
+        (this.bufferByteLength - QueueUser.kHeaderByteLength) +
       this.fillDirectionOffsetAdjustment * position;
-    const headerI32Offset = headerByteOffset / this.buf.i32.BYTES_PER_ELEMENT;
+    const headerI32Offset = headerByteOffset / this.i32.BYTES_PER_ELEMENT;
 
     const flags = isWaste ? HeaderBits.kIsWasteFlag : 0;
     const header = byteLength | flags | this.releaseEpoch;
-    const previous = Atomics.exchange(this.buf.i32, headerI32Offset, header);
-    this.buf.i32[headerI32Offset + 1] =
+    const previous = Atomics.exchange(this.i32, headerI32Offset, header);
+    this.i32[headerI32Offset + 1] =
       this.releaseEpoch / HeaderBits.kEpochTransferDelta;
 
     if (previous & HeaderBits.kHasWaitersFlag) {
-      Atomics.wake(
-        this.buf.i32,
-        headerI32Offset,
-        QueueUser.kMaxConcurrentUsers
-      );
+      Atomics.wake(this.i32, headerI32Offset, QueueUser.kMaxConcurrentUsers);
       this.wakeCounter++;
     }
 
     const nextPosition = position + byteLength;
-    assert(nextPosition <= this.buf.i32.byteLength);
-    const isEndOfBuffer = nextPosition === this.buf.i32.byteLength;
+    assert(nextPosition <= this.bufferByteLength);
+    const isEndOfBuffer = nextPosition === this.bufferByteLength;
 
     if (!isEndOfBuffer) {
       this.releasePosition = nextPosition;
@@ -302,8 +312,8 @@ export class QueueWriter extends QueueUser {
   // that writeSlice may be non-null even when we're not writing.
   private writeSlice: SliceInfo;
 
-  constructor(buf: Buf) {
-    super(buf);
+  constructor(buffer: SharedArrayBuffer) {
+    super(buffer);
     this.writeSlice = this.acquireSlice();
   }
 
@@ -345,30 +355,25 @@ export class QueueWriter extends QueueUser {
   }
 
   write(data: ArrayBufferView): void {
+    // Convert `data` to an Uint8Array if necessary.
+    const u8data: Uint8Array =
+      data instanceof Uint8Array
+        ? data
+        : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
     // Allocate space.
-    const range = this.beginWrite(data.byteLength);
-
+    const target = this.beginWrite(data.byteLength);
+    // Copy data.
     let submit = false;
     try {
-      // Copy data into buffer.
-      const sourceView = new Uint8Array(
-        data.buffer,
-        data.byteOffset,
-        data.byteLength
-      );
-      const targetView = new Uint8Array(
-        range.buf.ab,
-        range.byteOffset,
-        range.byteLength
-      );
-      targetView.set(sourceView);
+      this.u8.set(u8data, target.byteOffset);
       submit = true;
     } finally {
+      // Finalize.
       this.endWrite(submit);
     }
   }
 
-  private allocate(requestedByteLength: number): Payload {
+  private allocate(requestedByteLength: number): PayloadSlice {
     // Compute the total required length, including header and padding,
     // in slots - not bytes.
     const targetByteLength =
@@ -402,13 +407,12 @@ export class QueueWriter extends QueueUser {
     const payloadByteLength = targetByteLength - QueueWriter.kHeaderByteLength;
     const payloadByteOffset =
       this.fillDirectionBaseAdjustment *
-        (this.buf.i32.byteLength - payloadByteLength) +
+        (this.bufferByteLength - payloadByteLength) +
       this.fillDirectionOffsetAdjustment *
         (this.writeSlice.position + QueueWriter.kHeaderByteLength);
 
     // Return information about the new allocation.
     return {
-      buf: this.buf,
       byteOffset: payloadByteOffset,
       byteLength: payloadByteLength
     };
@@ -425,7 +429,7 @@ export class QueueReader extends QueueUser {
 
   private readSlice: SliceInfo | null = null;
 
-  beginRead(): Payload {
+  beginRead(): PayloadSlice {
     if (this.readSlice !== null) {
       throw new Error("Already reading.");
     }
@@ -443,12 +447,11 @@ export class QueueReader extends QueueUser {
       readSlice.byteLength - QueueReader.kHeaderByteLength;
     const payloadByteOffset =
       this.fillDirectionBaseAdjustment *
-        (this.buf.i32.byteLength - payloadByteLength) +
+        (this.bufferByteLength - payloadByteLength) +
       this.fillDirectionOffsetAdjustment *
         (readSlice.position + QueueReader.kHeaderByteLength);
 
     return {
-      buf: this.buf,
       byteOffset: payloadByteOffset,
       byteLength: payloadByteLength
     };
@@ -471,7 +474,7 @@ export class QueueReader extends QueueUser {
     try {
       // TODO: This is slow (>2x slowdown); find a more efficient solution.
       let view: T = new ctor(
-        payload.buf.ab,
+        this.buffer,
         payload.byteOffset,
         payload.byteLength / ctor.BYTES_PER_ELEMENT
       );

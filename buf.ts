@@ -5,11 +5,7 @@ let idCounter: Uint32Array;
 let port: MessagePort;
 
 export class Buf {
-  private constructor(
-    readonly id: number,
-    readonly ab: SharedArrayBuffer,
-    readonly i32: Int32Array
-  ) {}
+  private constructor(readonly id: number, readonly ab: SharedArrayBuffer) {}
 
   static async get(id: number): Promise<Buf> {
     while (!(id in bufTable)) {
@@ -31,8 +27,7 @@ export class Buf {
     // The buffer ID is guaranteed to be greater than zero, and it
     // must be small enough to fit in an Int32Array slot.
     assert(id > 0 && id === ~~id);
-    const i32 = new Int32Array(ab);
-    const buf = new Buf(id, ab, i32);
+    const buf = new Buf(id, ab);
     bufTable[id] = buf;
     port.postMessage({ id: buf.id, ab: buf.ab }); // Share with other thread.
     console.log("Sent buffer", buf.id);
@@ -63,8 +58,7 @@ export class Buf {
     const { id, ab } = e.data;
     console.log("Received buffer", id);
     assert(!(id in bufTable), "Duplicate buffer ID");
-    const i32 = new Int32Array(ab);
-    bufTable[id] = new Buf(id, ab, i32);
+    bufTable[id] = new Buf(id, ab);
   }
 
   static setup(p: MessagePort, idBuf: SharedArrayBuffer) {
