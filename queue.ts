@@ -38,9 +38,10 @@ interface SliceHeaderInfo {
 }
 
 interface SliceInfo extends SliceHeaderInfo {
-  // vByteOffset does is not affected by top-down vs bottom-up mode.
-  // IOW, the first slice in a buffer always has vByteOffset == 0.
-  vByteOffset: number;
+  // `position` is counted in bytes, but it's not affected by whether the buffer
+  // is filled top-down or bottom-up.
+  // IOW, the first slice in a buffer always has position == 0.
+  position: number;
   isEndOfBuffer: boolean;
   isWaste: boolean;
 }
@@ -89,8 +90,8 @@ abstract class QueueUser {
 
   private acquireEpoch: number;
   private releaseEpoch: number;
-  private vAcquireByteOffset: number = 0;
-  private vReleaseByteOffset: number = 0;
+  private acquirePosition: number = 0;
+  private releasePosition: number = 0;
 
   private waitCounter: number = 0;
   private wakeCounter: number = 0;
@@ -152,13 +153,13 @@ abstract class QueueUser {
   protected acquireSlice(wait?: true): SliceInfo;
   protected acquireSlice(wait: false): SliceInfo | null;
   protected acquireSlice(wait = true): SliceInfo | null {
-    const vByteOffset: number = this.vAcquireByteOffset;
+    const position: number = this.acquirePosition;
 
     // Compute the directionality-adjusted header offset.
     const headerByteOffset: number =
       this.fillDirectionBaseAdjustment *
         (this.buf.i32.byteLength - QueueUser.kHeaderByteLength) +
-      this.fillDirectionOffsetAdjustment * vByteOffset;
+      this.fillDirectionOffsetAdjustment * position;
     const headerI32Offset = headerByteOffset / this.buf.i32.BYTES_PER_ELEMENT;
 
     let header: number = this.buf.i32[headerI32Offset];
@@ -213,36 +214,36 @@ abstract class QueueUser {
     const byteLength = header & HeaderBits.kByteLengthMask;
     const isWaste = Boolean(header & HeaderBits.kIsWasteFlag);
 
-    const vEndByteOffset = vByteOffset + byteLength;
-    assert(vEndByteOffset <= this.buf.i32.byteLength);
-    const isEndOfBuffer = vEndByteOffset === this.buf.i32.byteLength;
+    const nextPosition = position + byteLength;
+    assert(nextPosition <= this.buf.i32.byteLength);
+    const isEndOfBuffer = nextPosition === this.buf.i32.byteLength;
 
     if (!isEndOfBuffer) {
-      this.vAcquireByteOffset = vEndByteOffset;
+      this.acquirePosition = nextPosition;
     } else {
       this.acquireEpoch = this.wrapEpoch(this.acquireEpoch);
-      this.vAcquireByteOffset = 0;
+      this.acquirePosition = 0;
       this.wrapCounter++;
     }
 
-    return { vByteOffset, byteLength, isEndOfBuffer, isWaste };
+    return { position, byteLength, isEndOfBuffer, isWaste };
   }
 
   protected releaseSlice({
     byteLength,
     isWaste = false
   }: SliceHeaderInfo): void {
-    const vByteOffset: number = this.vReleaseByteOffset;
+    const position: number = this.releasePosition;
 
     assert(byteLength >= QueueUser.kHeaderByteLength);
     assert((byteLength & ~HeaderBits.kByteLengthMask) === 0);
-    assert(vByteOffset + byteLength <= this.buf.i32.byteLength);
+    assert(position + byteLength <= this.buf.i32.byteLength);
 
     // Compute the directionality-adjusted header offset.
     const headerByteOffset: number =
       this.fillDirectionBaseAdjustment *
         (this.buf.i32.byteLength - QueueUser.kHeaderByteLength) +
-      this.fillDirectionOffsetAdjustment * vByteOffset;
+      this.fillDirectionOffsetAdjustment * position;
     const headerI32Offset = headerByteOffset / this.buf.i32.BYTES_PER_ELEMENT;
 
     const flags = Number(isWaste) * HeaderBits.kIsWasteFlag;
@@ -258,15 +259,15 @@ abstract class QueueUser {
       this.wakeCounter++;
     }
 
-    const vEndByteOffset = vByteOffset + byteLength;
-    assert(vEndByteOffset <= this.buf.i32.byteLength);
-    const isEndOfBuffer = vEndByteOffset === this.buf.i32.byteLength;
+    const nextPosition = position + byteLength;
+    assert(nextPosition <= this.buf.i32.byteLength);
+    const isEndOfBuffer = nextPosition === this.buf.i32.byteLength;
 
     if (!isEndOfBuffer) {
-      this.vReleaseByteOffset = vEndByteOffset;
+      this.releasePosition = nextPosition;
     } else {
       this.releaseEpoch = this.wrapEpoch(this.releaseEpoch);
-      this.vReleaseByteOffset = 0;
+      this.releasePosition = 0;
     }
   }
 
@@ -320,7 +321,7 @@ export class QueueWriter extends QueueUser {
 
       // Compute the length and offsets of the part of writeSlice that remains
       // reserved after emitting the allocated part as a slice.
-      this.writeSlice.vByteOffset += byteLength;
+      this.writeSlice.position += byteLength;
       this.writeSlice.byteLength -= byteLength;
     }
 
@@ -387,7 +388,7 @@ export class QueueWriter extends QueueUser {
       this.fillDirectionBaseAdjustment *
         (this.buf.i32.byteLength - payloadByteLength) +
       this.fillDirectionOffsetAdjustment *
-        (this.writeSlice.vByteOffset + QueueWriter.kHeaderByteLength);
+        (this.writeSlice.position + QueueWriter.kHeaderByteLength);
 
     // Return information about the new allocation.
     return {
@@ -422,7 +423,7 @@ export class QueueReader extends QueueUser {
       this.fillDirectionBaseAdjustment *
         (this.buf.i32.byteLength - payloadByteLength) +
       this.fillDirectionOffsetAdjustment *
-        (this.readSlice.vByteOffset + QueueReader.kHeaderByteLength);
+        (this.readSlice.position + QueueReader.kHeaderByteLength);
     return {
       buf: this.buf,
       byteOffset: payloadByteOffset,
