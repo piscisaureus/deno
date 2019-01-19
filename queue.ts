@@ -1,4 +1,14 @@
-import { assert, fail, unreachable } from "./assert";
+function assert(cond: false): never;
+function assert(cond: boolean): void;
+function assert(cond: boolean): void {
+  if (!cond) {
+    throw new Error("Assertion failed.");
+  }
+}
+
+function unreachable(): never {
+  throw new Error("Unreachable code reached.");
+}
 
 type TypedArray =
   | Int8Array
