@@ -339,10 +339,11 @@ abstract class QueueUser {
 
 export class QueueWriter extends QueueUser {
   static readonly kEpochBase = HeaderBits.kEpochBaseWriter;
+  static readonly kNotWriting = -1;
 
   // The size of the allocation we made for the message, including header and
   // alignment padding.
-  private allocationByteLength: number = -1;
+  private allocationByteLength: number = QueueWriter.kNotWriting;
 
   // This slice spans the part of the buffer that has been reserved for the
   // current (or next) message that will be written to the buffer. Note
@@ -356,45 +357,54 @@ export class QueueWriter extends QueueUser {
 
   // Note: byteLength will be rounded up to alignment.
   beginWrite(byteLength: number) {
-    if (this.allocationByteLength >= 0) {
+    if (this.allocationByteLength !== QueueWriter.kNotWriting)
       throw new Error("Already writing.");
-    }
-    if (byteLength > this.maxPayloadByteLength) {
+
+    // Compute the total required length, including header and padding,
+    if (byteLength > this.maxPayloadByteLength)
       throw new RangeError("Message too big.");
-    }
-    return this.allocate(byteLength);
+    this.allocationByteLength =
+      QueueWriter.kHeaderByteLength + this.align(byteLength);
+
+    // Allocate and return return PayloadSlice to the user.
+    return this.allocate();
   }
 
   // Note: byteLength will be rounded up to alignment.
   // TODO: copy bytes when allocation wraps.
   resizeWrite(byteLength: number) {
-    if (this.allocationByteLength < 0) {
+    if (this.allocationByteLength === QueueWriter.kNotWriting)
       throw new Error("Not writing.");
-    }
-    if (byteLength > this.maxPayloadByteLength) {
+
+    // Compute the total required length, including header and padding,
+    if (byteLength > this.maxPayloadByteLength)
       throw new RangeError("Message too big.");
-    }
-    return this.allocate(byteLength);
+    this.allocationByteLength =
+      QueueWriter.kHeaderByteLength + this.align(byteLength);
+
+    // Allocate and return return PayloadSlice to the user.
+    return this.allocate();
   }
 
   endWrite(submit = true): void {
-    if (this.allocationByteLength < 0) {
+    if (this.allocationByteLength === QueueWriter.kNotWriting) {
       throw new Error("Not writing.");
     }
 
     if (submit) {
       const byteLength = this.allocationByteLength;
-      this.releaseSlice({ byteLength });
 
       // Compute the length and offsets of the part of writeSlice that remains
       // reserved after emitting the allocated part as a slice.
       this.writeSlice.position += byteLength;
       this.writeSlice.byteLength -= byteLength;
 
+      // Leave the message slice behind us.
+      this.releaseSlice({ byteLength });
       this.messageCounter++;
     }
 
-    this.allocationByteLength = -1;
+    this.allocationByteLength = QueueWriter.kNotWriting;
   }
 
   write(data: ArrayBufferView): void {
@@ -411,12 +421,8 @@ export class QueueWriter extends QueueUser {
     this.endWrite();
   }
 
-  private allocate(requestedByteLength: number): PayloadSlice {
-    // Compute the total required length, including header and padding,
-    const targetByteLength =
-      QueueWriter.kHeaderByteLength + this.align(requestedByteLength);
-
-    while (this.writeSlice.byteLength < targetByteLength) {
+  private allocate(): PayloadSlice {
+    while (this.writeSlice.byteLength < this.allocationByteLength) {
       if (this.writeSlice.isEndOfBuffer) {
         // Can't wrap around the end of the ring buffer. Discard what we got
         // so far and start over at the beginning of the buffer.
@@ -426,7 +432,7 @@ export class QueueWriter extends QueueUser {
 
         // Create a new allocation from scratch.
         this.writeSlice = this.acquireSlice();
-        return this.allocate(requestedByteLength);
+        return this.allocate();
       }
 
       // Acquire the next slice and use it to make `writeSlice` longer.
@@ -435,11 +441,10 @@ export class QueueWriter extends QueueUser {
       this.writeSlice.isEndOfBuffer = h.isEndOfBuffer;
     }
 
-    // Update the stored lengths. The offset is updated in
-    // acquireInitialSlice(), so we don't need to do that here.
-    this.allocationByteLength = targetByteLength;
-
-    return this.getPayloadSlice(this.writeSlice.position, targetByteLength);
+    return this.getPayloadSlice(
+      this.writeSlice.position,
+      this.allocationByteLength
+    );
   }
 
   private align(byteCount: number) {
