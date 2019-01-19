@@ -157,7 +157,15 @@ abstract class QueueUser {
     this.u32 = new Uint32Array(buffer);
 
     // Initialize the slice structure inside the buffer.
-    this.initBufferSlice();
+    // Typically we'd get a buffer that's initialized with zeroes. If that's the
+    // case, define a slice that spans the entire buffer and place it's header
+    // at offset 0, so the reader and writer don't get confused.
+    Atomics.compareExchange(
+      this.i32,
+      this.getHeaderI32Offset(0),
+      0,
+      this.bufferByteLength
+    );
   }
 
   get counters(): QueueCounters {
@@ -173,31 +181,11 @@ abstract class QueueUser {
     };
   }
 
-  private initBufferSlice() {
-    // Typically we'd get a buffer that's initialized with zeroes. If that's the
-    // case, define a slice that spans the entire buffer and place it's header
-    // at offset 0, so the reader and writer don't get confused.
-    Atomics.compareExchange(
-      this.i32,
-      (this.fillDirectionBaseAdjustment *
-        (this.bufferByteLength - QueueUser.kHeaderByteLength)) /
-        this.i32.BYTES_PER_ELEMENT,
-      0,
-      this.bufferByteLength
-    );
-  }
-
   protected acquireSlice(wait?: true): SliceInfo;
   protected acquireSlice(wait: false): SliceInfo | null;
   protected acquireSlice(wait = true): SliceInfo | null {
     const position: number = this.acquirePosition;
-
-    // Compute the directionality-adjusted header offset.
-    const headerByteOffset: number =
-      this.fillDirectionBaseAdjustment *
-        (this.bufferByteLength - QueueUser.kHeaderByteLength) +
-      this.fillDirectionOffsetAdjustment * position;
-    const headerI32Offset = headerByteOffset / this.i32.BYTES_PER_ELEMENT;
+    const headerI32Offset: number = this.getHeaderI32Offset(position);
 
     let header: number = this.i32[headerI32Offset];
     let spinCountRemaining: number = QueueUser.kSpinCount;
@@ -272,17 +260,11 @@ abstract class QueueUser {
     isWaste = false
   }: SliceHeaderInfo): void {
     const position: number = this.releasePosition;
+    const headerI32Offset: number = this.getHeaderI32Offset(position);
 
     assert(byteLength >= QueueUser.kHeaderByteLength);
     assert((byteLength & ~HeaderBits.kByteLengthMask) === 0);
     assert(position + byteLength <= this.bufferByteLength);
-
-    // Compute the directionality-adjusted header offset.
-    const headerByteOffset: number =
-      this.fillDirectionBaseAdjustment *
-        (this.bufferByteLength - QueueUser.kHeaderByteLength) +
-      this.fillDirectionOffsetAdjustment * position;
-    const headerI32Offset = headerByteOffset / this.i32.BYTES_PER_ELEMENT;
 
     const flags = isWaste ? HeaderBits.kIsWasteFlag : 0;
     const header = byteLength | flags | this.releaseEpoch;
@@ -312,6 +294,34 @@ abstract class QueueUser {
     }
 
     this.releaseCounter++;
+  }
+
+  // Returns the byte offset of the header from the slice position, adjusted for
+  // the fill direction of the buffer.
+  protected getHeaderI32Offset(position: number): number {
+    const headerByteOffset: number =
+      this.fillDirectionBaseAdjustment *
+        (this.bufferByteLength - QueueUser.kHeaderByteLength) +
+      this.fillDirectionOffsetAdjustment * position;
+    return headerByteOffset / this.i32.BYTES_PER_ELEMENT;
+  }
+
+  // Creates a PayloadSlice object, adjusted for the fill direction of the
+  // buffer, given the position and byte length of the encapsulating slice.
+  protected getPayloadSlice(
+    position: number,
+    byteLength: number
+  ): PayloadSlice {
+    const payloadByteLength = byteLength - QueueWriter.kHeaderByteLength;
+    const payloadByteOffset =
+      this.fillDirectionBaseAdjustment *
+        (this.bufferByteLength - payloadByteLength) +
+      this.fillDirectionOffsetAdjustment *
+        (position + QueueUser.kHeaderByteLength);
+    return {
+      byteOffset: payloadByteOffset,
+      byteLength: payloadByteLength
+    };
   }
 
   private wrapEpoch(epoch: number) {
@@ -428,19 +438,7 @@ export class QueueWriter extends QueueUser {
     // acquireInitialSlice(), so we don't need to do that here.
     this.allocationByteLength = targetByteLength;
 
-    // Adjust for for buffers that grow bottom-up.
-    const payloadByteLength = targetByteLength - QueueWriter.kHeaderByteLength;
-    const payloadByteOffset =
-      this.fillDirectionBaseAdjustment *
-        (this.bufferByteLength - payloadByteLength) +
-      this.fillDirectionOffsetAdjustment *
-        (this.writeSlice.position + QueueWriter.kHeaderByteLength);
-
-    // Return information about the new allocation.
-    return {
-      byteOffset: payloadByteOffset,
-      byteLength: payloadByteLength
-    };
+    return this.getPayloadSlice(this.writeSlice.position, targetByteLength);
   }
 
   private align(byteCount: number) {
