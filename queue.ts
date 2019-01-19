@@ -95,11 +95,17 @@ abstract class QueueUser {
   // Subclasses need to provide a value for kEpochBase.
   static readonly kEpochBase: number;
 
+  // We'll create some (public) views on the underlying buffer. It's much
+  // faster to recycle these than to create them on the spot every time, and
+  // also much faster than using a DataView.
   public readonly u8: Uint8Array;
   public readonly i32: Int32Array;
   public readonly u32: Uint32Array;
 
-  // Cache the buffer length because it's much faster than buffer.byteLength;
+  // Cache the buffer length because it's much faster than buffer.byteLength.
+  // (Which is in itself quite surprising -- I suspect that
+  // SharedArrayBuffer.byteLength incurs a runtime call, possibly to check
+  // whether the buffer has been neutered.)
   public readonly bufferByteLength: number;
 
   // The maximum payload size of a message.
@@ -157,9 +163,11 @@ abstract class QueueUser {
     this.u32 = new Uint32Array(buffer);
 
     // Initialize the slice structure inside the buffer.
-    // Typically we'd get a buffer that's initialized with zeroes. If that's the
+    // We expect the buffer to be initialized with zeroes. If that's the
     // case, define a slice that spans the entire buffer and place it's header
     // at offset 0, so the reader and writer don't get confused.
+    // Since the other user (reader/writer) may have gotten here first, only
+    // do the initializtion if the first slot is still contains zero.
     Atomics.compareExchange(
       this.i32,
       this.getHeaderI32Offset(0),
@@ -390,7 +398,7 @@ export class QueueWriter extends QueueUser {
   }
 
   write(data: ArrayBufferView): void {
-    // Convert `data` to an Uint8Array if necessary.
+    // Convert `data` to an Uint8Array view if necessary.
     const u8data: Uint8Array =
       data instanceof Uint8Array
         ? data
@@ -398,23 +406,16 @@ export class QueueWriter extends QueueUser {
     // Allocate space.
     const target = this.beginWrite(data.byteLength);
     // Copy data.
-    let submit = false;
-    try {
-      this.u8.set(u8data, target.byteOffset);
-      submit = true;
-    } finally {
-      // Finalize.
-      this.endWrite(submit);
-    }
+    this.u8.set(u8data, target.byteOffset);
+    // Close the write.
+    this.endWrite();
   }
 
   private allocate(requestedByteLength: number): PayloadSlice {
     // Compute the total required length, including header and padding,
-    // in slots - not bytes.
     const targetByteLength =
       QueueWriter.kHeaderByteLength + this.align(requestedByteLength);
 
-    // Acquire slices until we have the number of slots required.
     while (this.writeSlice.byteLength < targetByteLength) {
       if (this.writeSlice.isEndOfBuffer) {
         // Can't wrap around the end of the ring buffer. Discard what we got
@@ -463,21 +464,7 @@ export class QueueReader extends QueueUser {
       readSlice = this.acquireSlice();
     }
     this.readSlice = readSlice;
-
-    // Compute the offset and length of the payload (the part after the header),
-    // making adjustments for buffers that grow bottom-up.
-    const payloadByteLength =
-      readSlice.byteLength - QueueReader.kHeaderByteLength;
-    const payloadByteOffset =
-      this.fillDirectionBaseAdjustment *
-        (this.bufferByteLength - payloadByteLength) +
-      this.fillDirectionOffsetAdjustment *
-        (readSlice.position + QueueReader.kHeaderByteLength);
-
-    return {
-      byteOffset: payloadByteOffset,
-      byteLength: payloadByteLength
-    };
+    return this.getPayloadSlice(readSlice.position, readSlice.byteLength);
   }
 
   endRead(release = true): void {
@@ -491,7 +478,7 @@ export class QueueReader extends QueueUser {
     this.readSlice = null;
   }
 
-  readInto<T extends TypedArray>(ctor: TypedArrayConstructor<T>): T {
+  read<T extends TypedArray>(ctor: TypedArrayConstructor<T>): T {
     const payload = this.beginRead();
     let copy: T | undefined;
     try {
