@@ -287,8 +287,6 @@ abstract class QueueUser {
     const flags = isWaste ? HeaderBits.kIsWasteFlag : 0;
     const header = byteLength | flags | this.releaseEpoch;
     const previous = Atomics.exchange(this.i32, headerI32Offset, header);
-    this.i32[headerI32Offset + 1] =
-      this.releaseEpoch / HeaderBits.kEpochTransferDelta;
 
     if (previous & HeaderBits.kHasWaitersFlag) {
       Atomics.wake(
