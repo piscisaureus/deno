@@ -20,7 +20,7 @@ export interface Message {
   byteLength: number;
 }
 
-export interface Counters {
+export interface MsgRingCounters {
   role: string;
   message: number;
   acquire: number;
@@ -189,7 +189,7 @@ abstract class MsgRingAccess extends MsgRingDefaultOptions {
     );
   }
 
-  get counters(): Counters {
+  get counters(): MsgRingCounters {
     return {
       role: this.constructor.name,
       message: this.messageCounter,
