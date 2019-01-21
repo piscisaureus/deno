@@ -44,7 +44,7 @@ const enum SliceHeader {
   EpochMask          = 0x03000000,
   // Initial epoch values for respectively the sender and the receiver.
   EpochBaseSender    = 0x00000000,
-  EpochBaseReceiver    = 0x01000000,
+  EpochBaseReceiver  = 0x01000000,
   // Flag that indicates to receiver that a slice contains a message. It may not
   // due to an abandoned send or insufficient space at the end of the buffer.
   HasMessageFlag     = 0x04000000,
