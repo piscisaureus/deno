@@ -83,7 +83,7 @@ abstract class MsgRingDefaultConfig {
   readonly spinYieldCpuTime: number = 0;
 }
 
-abstract class MsgRingAccess extends MsgRingDefaultConfig {
+abstract class MsgRingCommon extends MsgRingDefaultConfig {
   // We'll create some (public) views on the underlying buffer. It's much
   // faster to recycle these than to create them on the spot every time, and
   // also much faster than using a DataView. They are public so whoever needs
@@ -332,7 +332,7 @@ abstract class MsgRingAccess extends MsgRingDefaultConfig {
   }
 }
 
-export class MsgRingSender extends MsgRingAccess {
+export class MsgRingSender extends MsgRingCommon {
   protected epoch: number = SliceHeader.EpochInitSender;
 
   // Number of bytes allocated by beginSend()/resizeSend(). It includes space
@@ -414,7 +414,7 @@ export class MsgRingSender extends MsgRingAccess {
   }
 }
 
-export class MsgRingReceiver extends MsgRingAccess {
+export class MsgRingReceiver extends MsgRingCommon {
   protected epoch: number = SliceHeader.EpochInitReceiver;
   private isReceiving: boolean = false;
 
