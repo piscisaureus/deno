@@ -211,15 +211,15 @@ abstract class QueueAccess extends QueueDefaultOptions {
       // bytes before attempting to acquire a new slice.
       this.assert(this.sliceByteLength === 0);
 
-      // Increment the epoch number. Note that the epoch number itself wraps
-      // around on overflow, this is intentional.
-      this.epoch =
-        (this.epoch + SliceHeader.EpochBufWrapDelta) & SliceHeader.EpochMask;
-
       // Rewind the current slice to the start of the ring buffer.
       this.sliceHeadPosition = 0;
       this.sliceTailPosition = 0;
       this.sliceIsAtEndOfBuffer = false;
+
+      // Increment the epoch number. Note that the epoch number itself wraps
+      // around on overflow, this is intentional.
+      this.epoch =
+        (this.epoch + SliceHeader.EpochBufWrapDelta) & SliceHeader.EpochMask;
       this.wrapCounter++;
     }
 
