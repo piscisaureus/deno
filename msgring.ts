@@ -80,9 +80,6 @@ abstract class MsgRingAccess extends MsgRingDefaultOptions {
   // Length of slice header.
   static readonly kHeaderByteLength = 8;
 
-  // Maximum fraction of the buffer that can be allocated to a single message.
-  static readonly kMaxMessageSizeDenom = 4; // Quarter of the buffer.
-
   // Role-dependent initial epoch. Subclasses should assign a value to it.
   static readonly kEpochBase: number;
 
@@ -159,10 +156,7 @@ abstract class MsgRingAccess extends MsgRingDefaultOptions {
 
     this.bufferByteLength = buffer.byteLength;
     this.maxMessageByteLength =
-      (Math.min(
-        SliceHeader.ByteLengthMask,
-        this.bufferByteLength / MsgRingAccess.kMaxMessageSizeDenom
-      ) -
+      (Math.min(SliceHeader.ByteLengthMask, this.bufferByteLength) -
         MsgRingAccess.kHeaderByteLength) &
       ~(MsgRingAccess.kAlignmentByteLength - 1);
 
