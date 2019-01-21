@@ -338,8 +338,8 @@ export class QueueWriter extends QueueAccess {
   static readonly kEpochBase = SliceHeader.EpochBaseWriter;
   static readonly kNotWriting = -1;
 
-  // Byte length of the allocation made to hold the written message, which
-  // includes room for the the slice header and alignment padding.
+  // Byte length of the allocation made for the message, which also includes
+  // room for the slice header and alignment padding.
   private allocationByteLength: number = QueueWriter.kNotWriting;
 
   // Note: byteLength will be rounded up to alignment.
