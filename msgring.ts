@@ -52,14 +52,15 @@ const enum SliceHeader {
   None               = 0x00000000,
   // Low 24 bits are reserved for the length of the slice (including header).
   ByteLengthMask     = 0x00ffffff,
-  // Every time a slice changes hands between receiver and sender, we add 1 to
-  // the 2-bit epoch number, which wraps on overflow.
-  EpochTransferDelta = 0x01000000,
-  EpochBufWrapDelta  = 0x02000000,
+  // The `epoch` serves as a filter for which slices are ready to be acquired.
   EpochMask          = 0x03000000,
   // Initial epoch values for respectively the sender and the receiver.
-  EpochBaseSender    = 0x00000000,
-  EpochBaseReceiver  = 0x01000000,
+  EpochInitSender    = 0x00000000,
+  EpochInitReceiver  = 0x01000000,
+  // Every time a slice changes hands between receiver and sender, we add 1 to
+  // the 2-bit epoch number; when the buffer wraps, add 2.
+  EpochIncrementPass = 0x01000000,
+  EpochIncrementWrap = 0x02000000,
   // Flag that indicates to receiver that a slice contains a message. If it
   // doesn't, that's due to insufficient space at the end of the buffer.
   HasMessageFlag     = 0x04000000,
@@ -81,9 +82,6 @@ abstract class MsgRingDefaultConfig {
 }
 
 abstract class MsgRingAccess extends MsgRingDefaultConfig {
-  // Role-dependent initial epoch. Subclasses should assign a value to it.
-  static readonly kEpochBase: number;
-
   // We'll create some (public) views on the underlying buffer. It's much
   // faster to recycle these than to create them on the spot every time, and
   // also much faster than using a DataView. They are public so whoever needs
@@ -119,9 +117,11 @@ abstract class MsgRingAccess extends MsgRingDefaultConfig {
   protected sliceByteLength: number = 0;
   protected sliceIsAtEndOfBuffer: boolean = false;
 
-  // The epoch number identifies who (receiver or sender) released a slice and
-  // whether the header was written after wrapping around the end of the buffer.
-  private epoch: number;
+  // A slice's epoch identifies which role (receiver or sender) released a
+  // slice, and whether the buffer has since wrapped around. This epoch field
+  // tracks which epoch acquireSlice() will currently acquire slices from.
+  // Initialization is role-dependent, so it's done by our subclasses.
+  protected epoch!: number;
 
   // Counters for debugging.
   protected messageCounter: number = 0;
@@ -163,11 +163,7 @@ abstract class MsgRingAccess extends MsgRingDefaultConfig {
     this.i32 = new Int32Array(buffer);
     this.u32 = new Uint32Array(buffer);
 
-    // Set role-dependent initial epoch.
-    const Self = this.constructor as typeof MsgRingAccess;
-    this.epoch = Self.kEpochBase;
-
-    // Initialize the slice structure inside the buffer.
+    3; // Initialize the slice structure inside the buffer.
     // We expect the buffer to be initialized with zeroes. If that's the
     // case, define a slice that spans the entire buffer and place it's header
     // at offset 0, so the receiver and sender don't get confused.
@@ -216,7 +212,7 @@ abstract class MsgRingAccess extends MsgRingDefaultConfig {
       // Increment the epoch number. Note that the epoch number itself wraps
       // around on overflow, this is intentional.
       this.epoch =
-        (this.epoch + SliceHeader.EpochBufWrapDelta) & SliceHeader.EpochMask;
+        (this.epoch + SliceHeader.EpochIncrementWrap) & SliceHeader.EpochMask;
       this.wrapCounter++;
     }
 
@@ -288,7 +284,7 @@ abstract class MsgRingAccess extends MsgRingDefaultConfig {
     this.assert(byteLength >= SliceAllocation.HeaderByteLength);
     this.assert(byteLength <= this.sliceByteLength);
 
-    const tailEpoch = this.epoch + SliceHeader.EpochTransferDelta;
+    const tailEpoch = this.epoch + SliceHeader.EpochIncrementPass;
     const newHeader = byteLength | flags | tailEpoch;
 
     const headerI32Offset = this.getHeaderI32Offset(this.sliceTailPosition);
@@ -335,11 +331,11 @@ abstract class MsgRingAccess extends MsgRingDefaultConfig {
 }
 
 export class MsgRingSender extends MsgRingAccess {
-  static readonly kEpochBase = SliceHeader.EpochBaseSender;
-  static readonly kNotWriting = -1;
+  protected epoch = SliceHeader.EpochInitSender;
 
   // Byte length of the allocation made for the message, which also includes
   // room for the slice header and alignment padding.
+  static readonly kNotWriting = -1;
   private allocationByteLength: number = MsgRingSender.kNotWriting;
 
   // Note: byteLength will be rounded up to alignment.
@@ -418,8 +414,7 @@ export class MsgRingSender extends MsgRingAccess {
 }
 
 export class MsgRingReceiver extends MsgRingAccess {
-  static readonly kEpochBase: number = SliceHeader.EpochBaseReceiver;
-
+  protected epoch: number = SliceHeader.EpochInitReceiver;
   private isReceiving: boolean = false;
 
   beginReceive(): Message {
