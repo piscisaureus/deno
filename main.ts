@@ -1,10 +1,10 @@
 import { Buf } from "./buf";
-import { QueueReader, QueueWriter } from "./queue";
+import { MsgRingReceiver, MsgRingSender } from "./msgring";
 
 async function main(
   threadId: number,
-  mqIn: QueueReader,
-  mqOut: QueueWriter,
+  mqIn: MsgRingReceiver,
+  mqOut: MsgRingSender,
   stopBuf: Uint32Array
 ) {
   let msgOut = new Int32Array([1, 2, 3, 4, 5, 6]);
@@ -16,7 +16,7 @@ async function main(
   //for (let i = 0; i < 1e5; i++) {
   for (let i = 0; i < (threadId == 1 ? 0 : 0); i++) {
     console.log(threadId, "Bootstrap message sent");
-    mqOut.write(msgOut);
+    mqOut.send(msgOut);
   }
 
   const start = Date.now();
@@ -26,11 +26,11 @@ async function main(
     if (Atomics.load(stopBuf, 0)) break;
     for (let i = 0; i < PER_ROUND; ) {
       if (threadId === 1) {
-        let msgIn = mqIn.beginRead();
-        mqIn.endRead();
+        let msgIn = mqIn.beginReceive();
+        mqIn.endReceive();
       } else {
-        let slOut = mqOut.beginWrite(24);
-        mqOut.endWrite();
+        let slOut = mqOut.beginSend(24);
+        mqOut.endSend();
       }
       //let msgIn = mqIn.readInto(Int32Array);
       i++;
@@ -66,8 +66,8 @@ async function extra(stopBuf: Uint32Array) {
 
   let ab = new SharedArrayBuffer(PER_SUBROUND * 100);
   let i32 = new Int32Array(ab);
-  let mqIn = new QueueReader(ab);
-  let mqOut = new QueueWriter(ab);
+  let mqIn = new MsgRingReceiver(ab);
+  let mqOut = new MsgRingSender(ab);
 
   for (let round = 0; round < 100; round++) {
     console.log(`====== EXTRA ${round} ======`);
@@ -75,16 +75,16 @@ async function extra(stopBuf: Uint32Array) {
     for (let i = 0; i < PER_ROUND; i += PER_SUBROUND) {
       let outLen = (Math.ceil(Math.random() * 30) | 0) + 8;
       for (let j = 0; j < PER_SUBROUND; j++) {
-        let slOut = mqOut.beginWrite(outLen);
+        let slOut = mqOut.beginSend(outLen);
         i32[slOut.byteOffset / 4 + 1] = 1e6 + 1e3 * (i % 10) + j;
         i32[slOut.byteOffset / 4 + 2] = 0;
-        mqOut.endWrite();
+        mqOut.endSend();
       }
       for (let j = 0; j < PER_SUBROUND; j++) {
-        let slIn = mqIn.beginRead();
+        let slIn = mqIn.beginReceive();
         i32[slIn.byteOffset / 4 + 1] *= -1;
         i32[slIn.byteOffset / 4 + 2] = -(1e6 + 1e3 * (i % 10) + j);
-        mqIn.endRead();
+        mqIn.endReceive();
       }
     }
     received += PER_ROUND;
@@ -166,8 +166,8 @@ async function workerSetup() {
   );
   // Set up buffer port and message queues.
   Buf.setup(bufPort, bufIdBuf);
-  const mqIn = new QueueReader(Buf.import(mqInBuf).ab);
-  const mqOut = new QueueWriter(Buf.import(mqOutBuf).ab);
+  const mqIn = new MsgRingReceiver(Buf.import(mqInBuf).ab);
+  const mqOut = new MsgRingSender(Buf.import(mqOutBuf).ab);
   await main(threadId, mqIn, mqOut, stopBuf);
 }
 

@@ -37,30 +37,30 @@ const enum SliceHeader {
   None               = 0x00000000,
   // Low 24 bits are reserved for the length of the slice (including header).
   ByteLengthMask     = 0x00ffffff,
-  // Every time a slice changes hands between reader and writer, we add 1 to the
-  // 2-bit epoch number, which wraps on overflow.
+  // Every time a slice changes hands between receiver and sender, we add 1 to
+  // the 2-bit epoch number, which wraps on overflow.
   EpochTransferDelta = 0x01000000,
   EpochBufWrapDelta  = 0x02000000,
   EpochMask          = 0x03000000,
-  // Initial (acquire) epoch values for respectively the writer and the reader.
-  EpochBaseWriter    = 0x00000000,
-  EpochBaseReader    = 0x01000000,
-  // Flag that indicates to reader that a slice contains a message. It may not
-  // due to an abandoned write or insufficient space at the end of the buffer.
+  // Initial epoch values for respectively the sender and the receiver.
+  EpochBaseSender    = 0x00000000,
+  EpochBaseReceiver    = 0x01000000,
+  // Flag that indicates to receiver that a slice contains a message. It may not
+  // due to an abandoned send or insufficient space at the end of the buffer.
   HasMessageFlag     = 0x04000000,
   // Flag that indicates that there are waiter(s) that expect to be notified.
   HasWaitersFlag     = 0x08000000,
 }
 
 type OptionsObject<T> = { -readonly [P in keyof T]?: T[P] };
-export type QueueOptions = OptionsObject<QueueDefaultOptions>;
+export type MsgRingOptions = OptionsObject<MsgRingDefaultOptions>;
 
 export const enum FillDirection {
   TopDown,
   BottomUp
 }
 
-abstract class QueueDefaultOptions {
+abstract class MsgRingDefaultOptions {
   // Whether buffers are filled upwards or downwards.
   readonly fillDirection: FillDirection = FillDirection.BottomUp;
 
@@ -69,7 +69,7 @@ abstract class QueueDefaultOptions {
   readonly spinYieldCpu: boolean = false;
 }
 
-abstract class QueueAccess extends QueueDefaultOptions {
+abstract class MsgRingAccess extends MsgRingDefaultOptions {
   // Slice allocation alignment (in bytes).
   static readonly kAlignmentByteLength = 8;
 
@@ -85,7 +85,7 @@ abstract class QueueAccess extends QueueDefaultOptions {
   // We'll create some (public) views on the underlying buffer. It's much
   // faster to recycle these than to create them on the spot every time, and
   // also much faster than using a DataView. They are public so whoever needs
-  // to read/write a message payload can use them too.
+  // to receive/send a message payload can use them too.
   public readonly u8: Uint8Array;
   public readonly i32: Int32Array;
   public readonly u32: Uint32Array;
@@ -105,9 +105,9 @@ abstract class QueueAccess extends QueueDefaultOptions {
   private readonly fillDirectionOffsetAdjustment: 1 | -1;
 
   // The head and tail position indicate the range of bytes (slice) that is
-  // locked by this reader/writer. The value indicates the offset in bytes from
-  // the start of the ring buffer, ***NOT*** adjusted for fill direction of the
-  // buffer. Hence the first slice always starts at position 0.
+  // locked by this receiver/sender. The value indicates the offset in bytes
+  // from the start of the ring buffer, ***NOT*** adjusted for fill direction of
+  // the buffer. Hence the first slice always starts at position 0.
   protected sliceHeadPosition: number = 0;
   protected sliceTailPosition: number = 0;
 
@@ -117,7 +117,7 @@ abstract class QueueAccess extends QueueDefaultOptions {
   protected sliceByteLength: number = 0;
   protected sliceIsAtEndOfBuffer: boolean = false;
 
-  // The epoch number identifies who (reader or writer) released a slice and
+  // The epoch number identifies who (receiver or sender) released a slice and
   // whether the header was written after wrapping around the end of the buffer.
   private epoch: number;
 
@@ -131,7 +131,10 @@ abstract class QueueAccess extends QueueDefaultOptions {
   private wrapCounter: number = 0;
 
   // `buffer` must be initialized with zeroes.
-  constructor(readonly buffer: SharedArrayBuffer, options: QueueOptions = {}) {
+  constructor(
+    readonly buffer: SharedArrayBuffer,
+    options: MsgRingOptions = {}
+  ) {
     // Initialize (default) options.
     super();
     Object.assign(this, options);
@@ -154,10 +157,10 @@ abstract class QueueAccess extends QueueDefaultOptions {
     this.maxMessageByteLength =
       (Math.min(
         SliceHeader.ByteLengthMask,
-        this.bufferByteLength / QueueAccess.kMaxMessageSizeDenom
+        this.bufferByteLength / MsgRingAccess.kMaxMessageSizeDenom
       ) -
-        QueueAccess.kHeaderByteLength) &
-      ~(QueueAccess.kAlignmentByteLength - 1);
+        MsgRingAccess.kHeaderByteLength) &
+      ~(MsgRingAccess.kAlignmentByteLength - 1);
 
     // Create various views on the SharedArrayBuffer.
     this.u8 = new Uint8Array(buffer);
@@ -165,14 +168,14 @@ abstract class QueueAccess extends QueueDefaultOptions {
     this.u32 = new Uint32Array(buffer);
 
     // Set role-dependent initial epoch.
-    const Self = this.constructor as typeof QueueAccess;
+    const Self = this.constructor as typeof MsgRingAccess;
     this.epoch = Self.kEpochBase;
 
     // Initialize the slice structure inside the buffer.
     // We expect the buffer to be initialized with zeroes. If that's the
     // case, define a slice that spans the entire buffer and place it's header
-    // at offset 0, so the reader and writer don't get confused.
-    // Since the other user (reader/writer) may have gotten here first, only
+    // at offset 0, so the receiver and sender don't get confused.
+    // Since the other user (receiver/sender) may have gotten here first, only
     // do the initializtion if the first slot is still contains zero.
     Atomics.compareExchange(
       this.i32,
@@ -246,7 +249,7 @@ abstract class QueueAccess extends QueueDefaultOptions {
         );
         if (expect !== header) {
           // The buffer slot that holds the header has been modified after we
-          // last read it; compareExchange did not set the flag, but `header`
+          // last receive it; compareExchange did not set the flag, but `header`
           // is now up-to-date again.
           continue;
         }
@@ -286,7 +289,7 @@ abstract class QueueAccess extends QueueDefaultOptions {
   }
 
   protected releaseSlice(byteLength: number, flags: number = 0): void {
-    this.assert(byteLength >= QueueAccess.kHeaderByteLength);
+    this.assert(byteLength >= MsgRingAccess.kHeaderByteLength);
     this.assert(byteLength <= this.sliceByteLength);
 
     const tailEpoch = this.epoch + SliceHeader.EpochTransferDelta;
@@ -309,7 +312,7 @@ abstract class QueueAccess extends QueueDefaultOptions {
   protected getHeaderI32Offset(position: number): number {
     const headerByteOffset: number =
       this.fillDirectionBaseAdjustment *
-        (this.bufferByteLength - QueueAccess.kHeaderByteLength) +
+        (this.bufferByteLength - MsgRingAccess.kHeaderByteLength) +
       this.fillDirectionOffsetAdjustment * position;
     return headerByteOffset / this.i32.BYTES_PER_ELEMENT;
   }
@@ -318,14 +321,14 @@ abstract class QueueAccess extends QueueDefaultOptions {
   protected getMessage(sliceByteLength: number): Message {
     // Compute the length of the message itself. Note that when writing a
     // message, it's length is always rounded up to match the alignment.
-    const messageByteLength = sliceByteLength - QueueWriter.kHeaderByteLength;
+    const messageByteLength = sliceByteLength - MsgRingSender.kHeaderByteLength;
 
     // Compute the fill-direction adjusted offset of the message payload.
     const messageByteOffset =
       this.fillDirectionBaseAdjustment *
         (this.bufferByteLength - messageByteLength) +
       this.fillDirectionOffsetAdjustment *
-        (this.sliceTailPosition + QueueAccess.kHeaderByteLength);
+        (this.sliceTailPosition + MsgRingAccess.kHeaderByteLength);
 
     return {
       byteOffset: messageByteOffset,
@@ -334,17 +337,17 @@ abstract class QueueAccess extends QueueDefaultOptions {
   }
 }
 
-export class QueueWriter extends QueueAccess {
-  static readonly kEpochBase = SliceHeader.EpochBaseWriter;
+export class MsgRingSender extends MsgRingAccess {
+  static readonly kEpochBase = SliceHeader.EpochBaseSender;
   static readonly kNotWriting = -1;
 
   // Byte length of the allocation made for the message, which also includes
   // room for the slice header and alignment padding.
-  private allocationByteLength: number = QueueWriter.kNotWriting;
+  private allocationByteLength: number = MsgRingSender.kNotWriting;
 
   // Note: byteLength will be rounded up to alignment.
-  beginWrite(messageByteLength: number): Message {
-    if (this.allocationByteLength !== QueueWriter.kNotWriting) {
+  beginSend(messageByteLength: number): Message {
+    if (this.allocationByteLength !== MsgRingSender.kNotWriting) {
       throw new Error("Already writing.");
     }
     this.allocate(messageByteLength);
@@ -354,16 +357,16 @@ export class QueueWriter extends QueueAccess {
   // Note: byteLength will be rounded up to alignment.
   // Noto: already-written data is discarded when buffer wraps.
   // TODO: copy bytes when allocation wraps.
-  resizeWrite(messageByteLength: number): Message {
-    if (this.allocationByteLength === QueueWriter.kNotWriting) {
+  resizeSend(messageByteLength: number): Message {
+    if (this.allocationByteLength === MsgRingSender.kNotWriting) {
       throw new Error("Not writing.");
     }
     this.allocate(messageByteLength);
     return this.getMessage(this.allocationByteLength);
   }
 
-  endWrite(submit = true): void {
-    if (this.allocationByteLength === QueueWriter.kNotWriting) {
+  endSend(submit = true): void {
+    if (this.allocationByteLength === MsgRingSender.kNotWriting) {
       throw new Error("Not writing.");
     }
     if (submit) {
@@ -371,21 +374,21 @@ export class QueueWriter extends QueueAccess {
       this.releaseSlice(this.allocationByteLength, SliceHeader.HasMessageFlag);
       this.messageCounter++;
     }
-    this.allocationByteLength = QueueWriter.kNotWriting;
+    this.allocationByteLength = MsgRingSender.kNotWriting;
   }
 
-  write(data: ArrayBufferView): void {
+  send(data: ArrayBufferView): void {
     // Convert `data` to an Uint8Array view if necessary.
     const u8data: Uint8Array =
       data instanceof Uint8Array
         ? data
         : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
     // Allocate space.
-    const target = this.beginWrite(data.byteLength);
+    const target = this.beginSend(data.byteLength);
     // Copy data.
     this.u8.set(u8data, target.byteOffset);
-    // Close the write.
-    this.endWrite();
+    // Close the send.
+    this.endSend();
   }
 
   private allocate(messageByteLength: number): void {
@@ -397,7 +400,7 @@ export class QueueWriter extends QueueAccess {
 
     // Compute the total required length, including header and padding,
     this.allocationByteLength =
-      QueueWriter.kHeaderByteLength + this.align(messageByteLength);
+      MsgRingSender.kHeaderByteLength + this.align(messageByteLength);
 
     while (this.sliceByteLength < this.allocationByteLength) {
       // An allocation can't wrap around the end of the ring buffer.
@@ -412,19 +415,19 @@ export class QueueWriter extends QueueAccess {
   }
 
   private align(byteCount: number): number {
-    const alignmentMask = QueueAccess.kAlignmentByteLength - 1;
+    const alignmentMask = MsgRingAccess.kAlignmentByteLength - 1;
     return (byteCount + alignmentMask) & ~alignmentMask;
   }
 }
 
-export class QueueReader extends QueueAccess {
-  static readonly kEpochBase: number = SliceHeader.EpochBaseReader;
+export class MsgRingReceiver extends MsgRingAccess {
+  static readonly kEpochBase: number = SliceHeader.EpochBaseReceiver;
 
-  private isReading: boolean = false;
+  private isReceiving: boolean = false;
 
-  beginRead(): Message {
-    if (this.isReading) throw new Error("Already reading.");
-    this.isReading = true;
+  beginReceive(): Message {
+    if (this.isReceiving) throw new Error("Already receiving.");
+    this.isReceiving = true;
 
     while (!(this.acquireSlice() & SliceHeader.HasMessageFlag)) {
       this.releaseSlice(this.sliceByteLength);
@@ -432,9 +435,9 @@ export class QueueReader extends QueueAccess {
     return this.getMessage(this.sliceByteLength);
   }
 
-  endRead(release = true): void {
-    if (!this.isReading) throw new Error("Not reading.");
-    this.isReading = false;
+  endReceive(release = true): void {
+    if (!this.isReceiving) throw new Error("Not receiving.");
+    this.isReceiving = false;
 
     if (release) {
       this.releaseSlice(this.sliceByteLength);
@@ -442,8 +445,8 @@ export class QueueReader extends QueueAccess {
     }
   }
 
-  read<T extends TypedArray>(ctor: TypedArrayConstructor<T>): T {
-    const message = this.beginRead();
+  receive<T extends TypedArray>(ctor: TypedArrayConstructor<T>): T {
+    const message = this.beginReceive();
     let copy: T | undefined;
     try {
       // TODO: This is slow (>2x slowdown); find a more efficient solution.
@@ -456,7 +459,7 @@ export class QueueReader extends QueueAccess {
       return copy;
     } finally {
       // Only release the slice if creating the view succeeded.
-      this.endRead(copy !== undefined);
+      this.endReceive(copy !== undefined);
     }
   }
 }
