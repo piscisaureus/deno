@@ -31,6 +31,13 @@ export interface MsgRingCounters {
   wrap: number;
 }
 
+const enum Constant {
+  // Slice allocation alignment (in bytes).
+  AlignmentByteLength = 8,
+  // Length of slice header.
+  HeaderByteLength = 8
+}
+
 // prettier-ignore
 const enum SliceHeader {
   // Pseudo-header returned when no slice could be acquired.
@@ -53,14 +60,14 @@ const enum SliceHeader {
 }
 
 type OptionsObject<T> = { -readonly [P in keyof T]?: T[P] };
-export type MsgRingOptions = OptionsObject<MsgRingDefaultOptions>;
+export type MsgRingConfig = OptionsObject<MsgRingDefaultConfig>;
 
 export const enum FillDirection {
   TopDown,
   BottomUp
 }
 
-abstract class MsgRingDefaultOptions {
+abstract class MsgRingDefaultConfig {
   // Whether buffers are filled upwards or downwards.
   readonly fillDirection: FillDirection = FillDirection.BottomUp;
 
@@ -73,13 +80,7 @@ abstract class MsgRingDefaultOptions {
   readonly spinYieldCpuTime: number = 0;
 }
 
-abstract class MsgRingAccess extends MsgRingDefaultOptions {
-  // Slice allocation alignment (in bytes).
-  static readonly kAlignmentByteLength = 8;
-
-  // Length of slice header.
-  static readonly kHeaderByteLength = 8;
-
+abstract class MsgRingAccess extends MsgRingDefaultConfig {
   // Role-dependent initial epoch. Subclasses should assign a value to it.
   static readonly kEpochBase: number;
 
@@ -132,10 +133,7 @@ abstract class MsgRingAccess extends MsgRingDefaultOptions {
   private wrapCounter: number = 0;
 
   // `buffer` must be initialized with zeroes.
-  constructor(
-    readonly buffer: SharedArrayBuffer,
-    options: MsgRingOptions = {}
-  ) {
+  constructor(readonly buffer: SharedArrayBuffer, options: MsgRingConfig = {}) {
     // Initialize (default) options.
     super();
     Object.assign(this, options);
@@ -157,8 +155,8 @@ abstract class MsgRingAccess extends MsgRingDefaultOptions {
     this.bufferByteLength = buffer.byteLength;
     this.maxMessageByteLength =
       (Math.min(SliceHeader.ByteLengthMask, this.bufferByteLength) -
-        MsgRingAccess.kHeaderByteLength) &
-      ~(MsgRingAccess.kAlignmentByteLength - 1);
+        Constant.HeaderByteLength) &
+      ~(Constant.AlignmentByteLength - 1);
 
     // Create various views on the SharedArrayBuffer.
     this.u8 = new Uint8Array(buffer);
@@ -287,7 +285,7 @@ abstract class MsgRingAccess extends MsgRingDefaultOptions {
   }
 
   protected releaseSlice(byteLength: number, flags: number = 0): void {
-    this.assert(byteLength >= MsgRingAccess.kHeaderByteLength);
+    this.assert(byteLength >= Constant.HeaderByteLength);
     this.assert(byteLength <= this.sliceByteLength);
 
     const tailEpoch = this.epoch + SliceHeader.EpochTransferDelta;
@@ -310,7 +308,7 @@ abstract class MsgRingAccess extends MsgRingDefaultOptions {
   protected getHeaderI32Offset(position: number): number {
     const headerByteOffset: number =
       this.fillDirectionBaseAdjustment *
-        (this.bufferByteLength - MsgRingAccess.kHeaderByteLength) +
+        (this.bufferByteLength - Constant.HeaderByteLength) +
       this.fillDirectionOffsetAdjustment * position;
     return headerByteOffset / this.i32.BYTES_PER_ELEMENT;
   }
@@ -319,14 +317,14 @@ abstract class MsgRingAccess extends MsgRingDefaultOptions {
   protected getMessage(sliceByteLength: number): Message {
     // Compute the length of the message itself. Note that when writing a
     // message, it's length is always rounded up to match the alignment.
-    const messageByteLength = sliceByteLength - MsgRingSender.kHeaderByteLength;
+    const messageByteLength = sliceByteLength - Constant.HeaderByteLength;
 
     // Compute the fill-direction adjusted offset of the message payload.
     const messageByteOffset =
       this.fillDirectionBaseAdjustment *
         (this.bufferByteLength - messageByteLength) +
       this.fillDirectionOffsetAdjustment *
-        (this.sliceTailPosition + MsgRingAccess.kHeaderByteLength);
+        (this.sliceTailPosition + Constant.HeaderByteLength);
 
     return {
       byteOffset: messageByteOffset,
@@ -398,7 +396,7 @@ export class MsgRingSender extends MsgRingAccess {
 
     // Compute the total required length, including header and padding,
     this.allocationByteLength =
-      MsgRingSender.kHeaderByteLength + this.align(messageByteLength);
+      Constant.HeaderByteLength + this.align(messageByteLength);
 
     while (this.sliceByteLength < this.allocationByteLength) {
       // An allocation can't wrap around the end of the ring buffer.
@@ -413,7 +411,7 @@ export class MsgRingSender extends MsgRingAccess {
   }
 
   private align(byteCount: number): number {
-    const alignmentMask = MsgRingAccess.kAlignmentByteLength - 1;
+    const alignmentMask = Constant.AlignmentByteLength - 1;
     return (byteCount + alignmentMask) & ~alignmentMask;
   }
 }
