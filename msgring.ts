@@ -31,6 +31,14 @@ export interface MsgRingCounters {
   wrap: number;
 }
 
+export const enum FillDirection {
+  TopDown,
+  BottomUp
+}
+
+type OptionsObject<T> = { -readonly [P in keyof T]?: T[P] };
+export type MsgRingConfig = OptionsObject<MsgRingDefaultConfig>;
+
 const enum Constant {
   // Slice allocation alignment (in bytes).
   AlignmentByteLength = 8,
@@ -59,21 +67,11 @@ const enum SliceHeader {
   HasWaitersFlag     = 0x08000000,
 }
 
-type OptionsObject<T> = { -readonly [P in keyof T]?: T[P] };
-export type MsgRingConfig = OptionsObject<MsgRingDefaultConfig>;
-
-export const enum FillDirection {
-  TopDown,
-  BottomUp
-}
-
 abstract class MsgRingDefaultConfig {
   // Whether buffers are filled upwards or downwards.
   readonly fillDirection: FillDirection = FillDirection.BottomUp;
-
   // The maximum number of times acquireSlice() will spin before sleeping.
   readonly spinCount: number = 100;
-
   // When spinning, for how long the thread yields the CPU on each cycle, in
   // milliseconds. Yielding happens by calling Atomics.wait() with a time-out.
   // Set to zero to never yield the CPU.
