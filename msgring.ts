@@ -40,6 +40,8 @@ type OptionsObject<T> = { -readonly [P in keyof T]?: T[P] };
 export type MsgRingConfig = OptionsObject<MsgRingDefaultConfig>;
 
 const enum SliceAllocation {
+  // Placeholder value indicating the absence of an allocation.
+  None = 0,
   // Alignment (in bytes) of slice offset and slice length.
   Alignment = 8,
   // Length of slice header. Note: only 4 bytes are currently used.
@@ -48,7 +50,7 @@ const enum SliceAllocation {
 
 // prettier-ignore
 const enum SliceHeader {
-  // Pseudo-header returned when no slice could be acquired.
+  // Placeholder value indicating the absence of a header.
   None               = 0x00000000,
   // Low 24 bits are reserved for the length of the slice (including header).
   ByteLengthMask     = 0x00ffffff,
@@ -163,7 +165,7 @@ abstract class MsgRingAccess extends MsgRingDefaultConfig {
     this.i32 = new Int32Array(buffer);
     this.u32 = new Uint32Array(buffer);
 
-    3; // Initialize the slice structure inside the buffer.
+    // Initialize the slice structure inside the buffer.
     // We expect the buffer to be initialized with zeroes. If that's the
     // case, define a slice that spans the entire buffer and place it's header
     // at offset 0, so the receiver and sender don't get confused.
@@ -331,16 +333,15 @@ abstract class MsgRingAccess extends MsgRingDefaultConfig {
 }
 
 export class MsgRingSender extends MsgRingAccess {
-  protected epoch = SliceHeader.EpochInitSender;
+  protected epoch: number = SliceHeader.EpochInitSender;
 
-  // Byte length of the allocation made for the message, which also includes
-  // room for the slice header and alignment padding.
-  static readonly kNotWriting = -1;
-  private allocationByteLength: number = MsgRingSender.kNotWriting;
+  // Number of bytes allocated by beginSend()/resizeSend(). It includes space
+  // for the slice header and padding for alignment
+  private allocationByteLength: number = SliceAllocation.None;
 
   // Note: byteLength will be rounded up to alignment.
   beginSend(messageByteLength: number): Message {
-    if (this.allocationByteLength !== MsgRingSender.kNotWriting) {
+    if (this.allocationByteLength !== SliceAllocation.None) {
       throw new Error("Already writing.");
     }
     this.allocate(messageByteLength);
@@ -351,7 +352,7 @@ export class MsgRingSender extends MsgRingAccess {
   // Noto: already-written data is discarded when buffer wraps.
   // TODO: copy bytes when allocation wraps.
   resizeSend(messageByteLength: number): Message {
-    if (this.allocationByteLength === MsgRingSender.kNotWriting) {
+    if (this.allocationByteLength === SliceAllocation.None) {
       throw new Error("Not writing.");
     }
     this.allocate(messageByteLength);
@@ -359,7 +360,7 @@ export class MsgRingSender extends MsgRingAccess {
   }
 
   endSend(submit = true): void {
-    if (this.allocationByteLength === MsgRingSender.kNotWriting) {
+    if (this.allocationByteLength === SliceAllocation.None) {
       throw new Error("Not writing.");
     }
     if (submit) {
@@ -367,7 +368,7 @@ export class MsgRingSender extends MsgRingAccess {
       this.releaseSlice(this.allocationByteLength, SliceHeader.HasMessageFlag);
       this.messageCounter++;
     }
-    this.allocationByteLength = MsgRingSender.kNotWriting;
+    this.allocationByteLength = SliceAllocation.None;
   }
 
   send(data: ArrayBufferView): void {
