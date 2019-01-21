@@ -47,7 +47,7 @@ const enum SliceHeader {
   EpochBaseReader    = 0x01000000,
   // Flag that indicates to reader that a slice contains a message. It may not
   // due to an abandoned write or insufficient space at the end of the buffer.
-  ContainsMessage    = 0x04000000,
+  HasMessageFlag     = 0x04000000,
   // Flag that indicates that there are waiter(s) that expect to be notified.
   HasWaitersFlag     = 0x08000000,
 }
@@ -368,7 +368,7 @@ export class QueueWriter extends QueueAccess {
     }
     if (submit) {
       // Release a slice that contains the header plus message.
-      this.releaseSlice(this.allocationByteLength, SliceHeader.ContainsMessage);
+      this.releaseSlice(this.allocationByteLength, SliceHeader.HasMessageFlag);
       this.messageCounter++;
     }
     this.allocationByteLength = QueueWriter.kNotWriting;
@@ -426,7 +426,7 @@ export class QueueReader extends QueueAccess {
     if (this.isReading) throw new Error("Already reading.");
     this.isReading = true;
 
-    while (!(this.acquireSlice() & SliceHeader.ContainsMessage)) {
+    while (!(this.acquireSlice() & SliceHeader.HasMessageFlag)) {
       this.releaseSlice(this.sliceByteLength);
     }
     return this.getMessage(this.sliceByteLength);
