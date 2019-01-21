@@ -106,6 +106,12 @@ abstract class MsgRingAccess extends MsgRingDefaultConfig {
   private readonly fillDirectionBaseAdjustment: 0 | 1;
   private readonly fillDirectionOffsetAdjustment: 1 | -1;
 
+  // A slice's epoch identifies which role (receiver or sender) released a
+  // slice, and whether the buffer has since wrapped around. This epoch field
+  // tracks which epoch acquireSlice() will currently acquire slices from.
+  // Initialization is role-dependent, so it's done by our subclasses.
+  protected epoch!: number;
+
   // The head and tail position indicate the range of bytes (slice) that is
   // locked by this receiver/sender. The value indicates the offset in bytes
   // from the start of the ring buffer, ***NOT*** adjusted for fill direction of
@@ -119,20 +125,14 @@ abstract class MsgRingAccess extends MsgRingDefaultConfig {
   protected sliceByteLength: number = 0;
   protected sliceIsAtEndOfBuffer: boolean = false;
 
-  // A slice's epoch identifies which role (receiver or sender) released a
-  // slice, and whether the buffer has since wrapped around. This epoch field
-  // tracks which epoch acquireSlice() will currently acquire slices from.
-  // Initialization is role-dependent, so it's done by our subclasses.
-  protected epoch!: number;
-
   // Counters for debugging.
   protected messageCounter: number = 0;
   private acquireCounter: number = 0;
   private releaseCounter: number = 0;
+  private wrapCounter: number = 0;
   private waitCounter: number = 0;
   private wakeCounter: number = 0;
   private spinCounter: number = 0;
-  private wrapCounter: number = 0;
 
   // `buffer` must be initialized with zeroes.
   constructor(readonly buffer: SharedArrayBuffer, options: MsgRingConfig = {}) {
@@ -185,10 +185,10 @@ abstract class MsgRingAccess extends MsgRingDefaultConfig {
       message: this.messageCounter,
       acquire: this.acquireCounter,
       release: this.releaseCounter,
+      wrap: this.wrapCounter,
       wait: this.waitCounter,
       wake: this.wakeCounter,
-      spin: this.spinCounter,
-      wrap: this.wrapCounter
+      spin: this.spinCounter
     };
   }
 
@@ -206,15 +206,15 @@ abstract class MsgRingAccess extends MsgRingDefaultConfig {
       // bytes before attempting to acquire a new slice.
       this.assert(this.sliceByteLength === 0);
 
-      // Rewind the current slice to the start of the ring buffer.
-      this.sliceHeadPosition = 0;
-      this.sliceTailPosition = 0;
-      this.sliceIsAtEndOfBuffer = false;
-
       // Increment the epoch number. Note that the epoch number itself wraps
       // around on overflow, this is intentional.
       this.epoch =
         (this.epoch + SliceHeader.EpochIncrementWrap) & SliceHeader.EpochMask;
+
+      // Rewind the current slice to the start of the ring buffer.
+      this.sliceHeadPosition = 0;
+      this.sliceTailPosition = 0;
+      this.sliceIsAtEndOfBuffer = false;
       this.wrapCounter++;
     }
 
