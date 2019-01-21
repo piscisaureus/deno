@@ -1,16 +1,4 @@
-function assert(cond: false): never;
-function assert(cond: boolean): void;
-function assert(cond: boolean): void {
-  if (!cond) {
-    throw new Error("Assertion failed.");
-  }
-}
-
-function unreachable(): never {
-  throw new Error("Unreachable code reached.");
-}
-
-type TypedArray =
+export type TypedArray =
   | Int8Array
   | Uint8Array
   | Uint8ClampedArray
@@ -27,7 +15,12 @@ export interface TypedArrayConstructor<T extends TypedArray> {
   readonly BYTES_PER_ELEMENT: number;
 }
 
-export interface QueueCounters {
+export interface Message {
+  byteOffset: number;
+  byteLength: number;
+}
+
+export interface Counters {
   role: string;
   message: number;
   acquire: number;
@@ -38,76 +31,61 @@ export interface QueueCounters {
   wrap: number;
 }
 
-export interface PayloadSlice {
-  byteOffset: number;
-  byteLength: number;
-}
-
-interface SliceHeaderInfo {
-  byteLength: number;
-  isWaste?: boolean;
-}
-
-interface SliceInfo extends SliceHeaderInfo {
-  // `position` is counted in bytes, but it's not affected by whether the buffer
-  // is filled top-down or bottom-up.
-  // IOW, the first slice in a buffer always has position == 0.
-  position: number;
-  isEndOfBuffer: boolean;
-  isWaste: boolean;
-}
-
 // prettier-ignore
-const enum HeaderBits {
+const enum SliceHeader {
+  // Pseudo-header returned when no slice could be acquired.
+  None               = 0x00000000,
   // Low 24 bits are reserved for the length of the slice (including header).
-  kByteLengthMask     = 0x00ffffff,
+  ByteLengthMask     = 0x00ffffff,
   // Every time a slice changes hands between reader and writer, we add 1 to the
   // 2-bit epoch number, which wraps on overflow.
-  kEpochTransferDelta = 0x01000000,
-  kEpochBufWrapDelta  = 0x02000000,
-  kEpochMask          = 0x03000000,
+  EpochTransferDelta = 0x01000000,
+  EpochBufWrapDelta  = 0x02000000,
+  EpochMask          = 0x03000000,
   // Initial (acquire) epoch values for respectively the writer and the reader.
-  kEpochBaseWriter    = 0x00000000,
-  kEpochBaseReader    = 0x01000000,  
-  // Flag that indicates to reader that a slice does not have a payload, due to
-  // to an abandoned write or insufficient space at the end of the buffer.
-  kIsWasteFlag        = 0x04000000,
+  EpochBaseWriter    = 0x00000000,
+  EpochBaseReader    = 0x01000000,
+  // Flag that indicates to reader that a slice contains a message. It may not
+  // due to an abandoned write or insufficient space at the end of the buffer.
+  ContainsMessage    = 0x04000000,
   // Flag that indicates that there are waiter(s) that expect to be notified.
-  kHasWaitersFlag     = 0x08000000,
+  HasWaitersFlag     = 0x08000000,
 }
 
-const enum FillDirection {
-  kTopDown = 0,
-  kBottomUp = 1
+export const enum FillDirection {
+  TopDown,
+  BottomUp
 }
 
-abstract class QueueUser {
+abstract class QueueDefaultOptions {
   // Whether buffers are filled upwards or downwards.
-  static readonly kFillDirection: FillDirection = FillDirection.kBottomUp;
+  readonly fillDirection: FillDirection = FillDirection.BottomUp;
 
-  // These constants define spinning behaviour.
-  static readonly kSpinCount: number = 100;
-  static readonly kSpinYieldCpu: boolean = false;
+  // Spinning behaviour.
+  readonly spinCount: number = 100;
+  readonly spinYieldCpu: boolean = false;
+}
 
-  // Maximum number of threads that will access the ring buffer simultaneously.
-  // Currently we support one reader and one writer only.
-  static readonly kMaxConcurrentUsers = 2;
+type Options<T> = { -readonly [P in keyof T]?: T[P] };
+export type QueueOptions = Options<typeof QueueDefaultOptions.prototype>;
 
-  // Maximum fraction of the buffer that can be allocated to a single message.
-  static readonly kMaxMessageSizeFraction = 4; // Quarter of the buffer.
-
+abstract class QueueAccess extends QueueDefaultOptions {
   // Slice allocation alignment (in bytes).
-  static readonly kAlignmentBytes = 8;
+  static readonly kAlignmentByteLength = 8;
 
   // Length of slice header.
   static readonly kHeaderByteLength = 8;
 
-  // Subclasses need to provide a value for kEpochBase.
+  // Maximum fraction of the buffer that can be allocated to a single message.
+  static readonly kMaxMessageSizeDenom = 4; // Quarter of the buffer.
+
+  // Role-dependent initial epoch. Subclasses should assign a value to it.
   static readonly kEpochBase: number;
 
   // We'll create some (public) views on the underlying buffer. It's much
   // faster to recycle these than to create them on the spot every time, and
-  // also much faster than using a DataView.
+  // also much faster than using a DataView. They are public so whoever needs
+  // to read/write a message payload can use them too.
   public readonly u8: Uint8Array;
   public readonly i32: Int32Array;
   public readonly u32: Uint32Array;
@@ -118,14 +96,32 @@ abstract class QueueUser {
   // whether the buffer has been neutered.)
   public readonly bufferByteLength: number;
 
-  // The maximum payload size of a message.
-  public readonly maxPayloadByteLength: number;
+  // The maximum message size of a message.
+  public readonly maxMessageByteLength: number;
 
-  private acquireEpoch: number;
-  private releaseEpoch: number;
-  private acquirePosition: number = 0;
-  private releasePosition: number = 0;
+  // These constant properties are used to adjust adjust offsets based on the
+  // fill direction of the buffer.
+  private readonly fillDirectionBaseAdjustment: 0 | 1;
+  private readonly fillDirectionOffsetAdjustment: 1 | -1;
 
+  // The head and tail position indicate the range of bytes (slice) that is
+  // locked by this reader/writer. The value indicates the offset in bytes from
+  // the start of the ring buffer, ***NOT*** adjusted for fill direction of the
+  // buffer. Hence the first slice always starts at position 0.
+  protected sliceHeadPosition: number = 0;
+  protected sliceTailPosition: number = 0;
+
+  // The slice byte length and whether it's at the end of the buffer can be
+  // computed from the head and tail position. However we store them because
+  // they are used often.
+  protected sliceByteLength: number = 0;
+  protected sliceIsAtEndOfBuffer: boolean = false;
+
+  // The epoch number identifies who (reader or writer) released a slice and
+  // whether the header was written after wrapping around the end of the buffer.
+  private epoch: number;
+
+  // Counters for debugging.
   protected messageCounter: number = 0;
   private acquireCounter: number = 0;
   private releaseCounter: number = 0;
@@ -134,43 +130,43 @@ abstract class QueueUser {
   private spinCounter: number = 0;
   private wrapCounter: number = 0;
 
-  protected readonly fillDirectionBaseAdjustment: number;
-  protected readonly fillDirectionOffsetAdjustment: number;
-
   // `buffer` must be initialized with zeroes.
-  constructor(public readonly buffer: SharedArrayBuffer) {
+  constructor(readonly buffer: SharedArrayBuffer, options: QueueOptions = {}) {
+    // Initialize options.
+    super();
+    Object.assign(this, options);
+
     // Set fill direction adjustment constants.
-    switch (QueueUser.kFillDirection) {
-      case FillDirection.kTopDown:
+    switch (this.fillDirection) {
+      case FillDirection.TopDown:
         this.fillDirectionOffsetAdjustment = 1;
         this.fillDirectionBaseAdjustment = 0;
         break;
-      case FillDirection.kBottomUp:
+      case FillDirection.BottomUp:
         this.fillDirectionOffsetAdjustment = -1;
         this.fillDirectionBaseAdjustment = 1;
         break;
       default:
-        throw unreachable();
+        throw new Error("Invalid fill direction.");
     }
 
-    // Set initial acquire and release epoch numbers.
-    const Self = this.constructor as any;
-    this.acquireEpoch = Self.kEpochBase;
-    this.releaseEpoch = Self.kEpochBase + HeaderBits.kEpochTransferDelta;
-
     this.bufferByteLength = buffer.byteLength;
-    this.maxPayloadByteLength =
+    this.maxMessageByteLength =
       (Math.min(
-        HeaderBits.kByteLengthMask,
-        this.bufferByteLength / QueueUser.kMaxMessageSizeFraction
+        SliceHeader.ByteLengthMask,
+        this.bufferByteLength / QueueAccess.kMaxMessageSizeDenom
       ) -
-        QueueUser.kHeaderByteLength) &
-      ~(QueueUser.kAlignmentBytes - 1);
+        QueueAccess.kHeaderByteLength) &
+      ~(QueueAccess.kAlignmentByteLength - 1);
 
     // Create various views on the SharedArrayBuffer.
     this.u8 = new Uint8Array(buffer);
     this.i32 = new Int32Array(buffer);
     this.u32 = new Uint32Array(buffer);
+
+    // Set role-dependent initial epoch.
+    const Self = this.constructor as typeof QueueAccess;
+    this.epoch = Self.kEpochBase;
 
     // Initialize the slice structure inside the buffer.
     // We expect the buffer to be initialized with zeroes. If that's the
@@ -186,7 +182,7 @@ abstract class QueueUser {
     );
   }
 
-  get counters(): QueueCounters {
+  get counters(): Counters {
     return {
       role: this.constructor.name,
       message: this.messageCounter,
@@ -199,18 +195,41 @@ abstract class QueueUser {
     };
   }
 
-  protected acquireSlice(wait?: true): SliceInfo;
-  protected acquireSlice(wait: false): SliceInfo | null;
-  protected acquireSlice(wait = true): SliceInfo | null {
-    const position: number = this.acquirePosition;
-    const headerI32Offset: number = this.getHeaderI32Offset(position);
+  protected assert(condition: boolean): void {
+    if (!condition) {
+      throw new Error(`${this.constructor.name}: assertion failed.`);
+    }
+  }
 
-    let header: number = this.i32[headerI32Offset];
-    let spinCountRemaining: number = QueueUser.kSpinCount;
+  protected acquireSlice(wait = true): number {
+    let spinCountRemaining = this.spinCount;
 
-    while ((header & HeaderBits.kEpochMask) !== this.acquireEpoch) {
+    // Wrap around if the current head position is at the end of the buffer.
+    if (this.sliceIsAtEndOfBuffer) {
+      // A slice can't wrap around the end of the buffer; if the current slice
+      // is at the end of the buffer, the caller should release the remaining
+      // bytes before attempting to acquire a new slice.
+      this.assert(this.sliceByteLength === 0);
+
+      // Increment the epoch number. Note that the epoch number itself wraps
+      // around on overflow, this is intentional.
+      this.epoch =
+        (this.epoch + SliceHeader.EpochBufWrapDelta) & SliceHeader.EpochMask;
+
+      // Rewind the current slice to the start of the ring buffer.
+      this.sliceHeadPosition = 0;
+      this.sliceTailPosition = 0;
+      this.sliceIsAtEndOfBuffer = false;
+      this.wrapCounter++;
+    }
+
+    const headerI32Offset = this.getHeaderI32Offset(this.sliceHeadPosition);
+    let header = this.i32[headerI32Offset];
+
+    while ((header & SliceHeader.EpochMask) !== this.epoch) {
+      // Sleep nor spin when acquiring in non-blocking mode.
       if (!wait) {
-        return null;
+        return SliceHeader.None;
       }
 
       let futexWaitTime: number | null;
@@ -218,7 +237,7 @@ abstract class QueueUser {
         // We're going to put the thread to sleep.
         // Use compare-and-swap to set the kHasWaiters flag.
         const expect = header;
-        const target = header | HeaderBits.kHasWaitersFlag;
+        const target = header | SliceHeader.HasWaitersFlag;
         header = Atomics.compareExchange(
           this.i32,
           headerI32Offset,
@@ -238,7 +257,7 @@ abstract class QueueUser {
         // We're spinning. If CPU yielding is enabled, we'll call futexWait
         // as if we were going to sleep, but with a timeout of 0.1ms. If CPU
         // yielding is off we'll just refresh `header` from the ring buffer.
-        futexWaitTime = QueueUser.kSpinYieldCpu ? 0.1 : null;
+        futexWaitTime = this.spinYieldCpu ? 0.1 : null;
         spinCountRemaining--;
         this.spinCounter++;
       }
@@ -254,62 +273,35 @@ abstract class QueueUser {
       }
     }
 
-    const byteLength = header & HeaderBits.kByteLengthMask;
-    const isWaste = Boolean(header & HeaderBits.kIsWasteFlag);
+    const byteLength = header & SliceHeader.ByteLengthMask;
+    this.assert(byteLength <= this.bufferByteLength - this.sliceHeadPosition);
 
-    const nextPosition = position + byteLength;
-    assert(nextPosition <= this.bufferByteLength);
-    const isEndOfBuffer = nextPosition === this.bufferByteLength;
-
-    if (!isEndOfBuffer) {
-      this.acquirePosition = nextPosition;
-    } else {
-      this.acquireEpoch = this.wrapEpoch(this.acquireEpoch);
-      this.acquirePosition = 0;
-      this.wrapCounter++;
-    }
-
+    this.sliceHeadPosition += byteLength;
+    this.sliceByteLength += byteLength;
+    this.sliceIsAtEndOfBuffer =
+      this.sliceHeadPosition === this.bufferByteLength;
     this.acquireCounter++;
-    return { position, byteLength, isEndOfBuffer, isWaste };
+
+    return header;
   }
 
-  protected releaseSlice({
-    byteLength,
-    isWaste = false
-  }: SliceHeaderInfo): void {
-    const position: number = this.releasePosition;
-    const headerI32Offset: number = this.getHeaderI32Offset(position);
+  protected releaseSlice(byteLength: number, flags: number = 0): void {
+    this.assert(byteLength >= QueueAccess.kHeaderByteLength);
+    this.assert(byteLength <= this.sliceByteLength);
 
-    assert(byteLength >= QueueUser.kHeaderByteLength);
-    assert((byteLength & ~HeaderBits.kByteLengthMask) === 0);
-    assert(position + byteLength <= this.bufferByteLength);
+    const tailEpoch = this.epoch + SliceHeader.EpochTransferDelta;
+    const newHeader = byteLength | flags | tailEpoch;
 
-    const flags = isWaste ? HeaderBits.kIsWasteFlag : 0;
-    const header = byteLength | flags | this.releaseEpoch;
-    const previous = Atomics.exchange(this.i32, headerI32Offset, header);
+    const headerI32Offset = this.getHeaderI32Offset(this.sliceTailPosition);
+    const oldHeader = Atomics.exchange(this.i32, headerI32Offset, newHeader);
 
-    if (previous & HeaderBits.kHasWaitersFlag) {
-      Atomics.wake(
-        this.i32,
-        headerI32Offset,
-        // Subtract one because we're a user and we're definitely not sleeping.
-        QueueUser.kMaxConcurrentUsers - 1
-      );
+    if (oldHeader & SliceHeader.HasWaitersFlag) {
+      Atomics.wake(this.i32, headerI32Offset, 1);
       this.wakeCounter++;
     }
 
-    const nextPosition = position + byteLength;
-    assert(nextPosition <= this.bufferByteLength);
-    const isEndOfBuffer = nextPosition === this.bufferByteLength;
-
-    if (!isEndOfBuffer) {
-      this.releasePosition = nextPosition;
-    } else {
-      this.releaseEpoch = this.wrapEpoch(this.releaseEpoch);
-      this.releasePosition = 0;
-    }
-
-    this.releaseCounter++;
+    this.sliceTailPosition += byteLength;
+    this.sliceByteLength -= byteLength;
   }
 
   // Returns the byte offset of the header from the slice position, adjusted for
@@ -317,101 +309,68 @@ abstract class QueueUser {
   protected getHeaderI32Offset(position: number): number {
     const headerByteOffset: number =
       this.fillDirectionBaseAdjustment *
-        (this.bufferByteLength - QueueUser.kHeaderByteLength) +
+        (this.bufferByteLength - QueueAccess.kHeaderByteLength) +
       this.fillDirectionOffsetAdjustment * position;
     return headerByteOffset / this.i32.BYTES_PER_ELEMENT;
   }
 
-  // Creates a PayloadSlice object, adjusted for the fill direction of the
-  // buffer, given the position and byte length of the encapsulating slice.
-  protected getPayloadSlice(
-    position: number,
-    byteLength: number
-  ): PayloadSlice {
-    const payloadByteLength = byteLength - QueueWriter.kHeaderByteLength;
-    const payloadByteOffset =
-      this.fillDirectionBaseAdjustment *
-        (this.bufferByteLength - payloadByteLength) +
-      this.fillDirectionOffsetAdjustment *
-        (position + QueueUser.kHeaderByteLength);
-    return {
-      byteOffset: payloadByteOffset,
-      byteLength: payloadByteLength
-    };
-  }
+  // Creates a Message object, given the byte length of the encapsulating slice.
+  protected getMessage(sliceByteLength: number): Message {
+    // Compute the length of the message itself. Note that when writing a
+    // message, it's length is always rounded up to match the alignment.
+    const messageByteLength = sliceByteLength - QueueWriter.kHeaderByteLength;
 
-  private wrapEpoch(epoch: number) {
-    return (epoch + HeaderBits.kEpochBufWrapDelta) & HeaderBits.kEpochMask;
+    // Compute the fill-direction adjusted offset of the message payload.
+    const messageByteOffset =
+      this.fillDirectionBaseAdjustment *
+        (this.bufferByteLength - messageByteLength) +
+      this.fillDirectionOffsetAdjustment *
+        (this.sliceTailPosition + QueueAccess.kHeaderByteLength);
+
+    return {
+      byteOffset: messageByteOffset,
+      byteLength: messageByteLength
+    };
   }
 }
 
-export class QueueWriter extends QueueUser {
-  static readonly kEpochBase = HeaderBits.kEpochBaseWriter;
+export class QueueWriter extends QueueAccess {
+  static readonly kEpochBase = SliceHeader.EpochBaseWriter;
   static readonly kNotWriting = -1;
 
-  // The size of the allocation we made for the message, including header and
-  // alignment padding.
+  // Byte length of the allocation made to hold the written message, which
+  // includes room for the the slice header and alignment padding.
   private allocationByteLength: number = QueueWriter.kNotWriting;
 
-  // This slice spans the part of the buffer that has been reserved for the
-  // current (or next) message that will be written to the buffer. Note
-  // that writeSlice may be non-null even when we're not writing.
-  private writeSlice: SliceInfo;
-
-  constructor(buffer: SharedArrayBuffer) {
-    super(buffer);
-    this.writeSlice = this.acquireSlice();
-  }
-
   // Note: byteLength will be rounded up to alignment.
-  beginWrite(byteLength: number) {
-    if (this.allocationByteLength !== QueueWriter.kNotWriting)
+  beginWrite(messageByteLength: number): Message {
+    if (this.allocationByteLength !== QueueWriter.kNotWriting) {
       throw new Error("Already writing.");
-
-    // Compute the total required length, including header and padding,
-    if (byteLength > this.maxPayloadByteLength)
-      throw new RangeError("Message too big.");
-    this.allocationByteLength =
-      QueueWriter.kHeaderByteLength + this.align(byteLength);
-
-    // Allocate and return return PayloadSlice to the user.
-    return this.allocate();
+    }
+    this.allocate(messageByteLength);
+    return this.getMessage(this.allocationByteLength);
   }
 
   // Note: byteLength will be rounded up to alignment.
+  // Noto: already-written data is discarded when buffer wraps.
   // TODO: copy bytes when allocation wraps.
-  resizeWrite(byteLength: number) {
-    if (this.allocationByteLength === QueueWriter.kNotWriting)
+  resizeWrite(messageByteLength: number): Message {
+    if (this.allocationByteLength === QueueWriter.kNotWriting) {
       throw new Error("Not writing.");
-
-    // Compute the total required length, including header and padding,
-    if (byteLength > this.maxPayloadByteLength)
-      throw new RangeError("Message too big.");
-    this.allocationByteLength =
-      QueueWriter.kHeaderByteLength + this.align(byteLength);
-
-    // Allocate and return return PayloadSlice to the user.
-    return this.allocate();
+    }
+    this.allocate(messageByteLength);
+    return this.getMessage(this.allocationByteLength);
   }
 
   endWrite(submit = true): void {
     if (this.allocationByteLength === QueueWriter.kNotWriting) {
       throw new Error("Not writing.");
     }
-
     if (submit) {
-      const byteLength = this.allocationByteLength;
-
-      // Compute the length and offsets of the part of writeSlice that remains
-      // reserved after emitting the allocated part as a slice.
-      this.writeSlice.position += byteLength;
-      this.writeSlice.byteLength -= byteLength;
-
-      // Leave the message slice behind us.
-      this.releaseSlice({ byteLength });
+      // Release a slice that contains the header plus message.
+      this.releaseSlice(this.allocationByteLength, SliceHeader.ContainsMessage);
       this.messageCounter++;
     }
-
     this.allocationByteLength = QueueWriter.kNotWriting;
   }
 
@@ -429,77 +388,69 @@ export class QueueWriter extends QueueUser {
     this.endWrite();
   }
 
-  private allocate(): PayloadSlice {
-    while (this.writeSlice.byteLength < this.allocationByteLength) {
-      if (this.writeSlice.isEndOfBuffer) {
-        // Can't wrap around the end of the ring buffer. Discard what we got
-        // so far and start over at the beginning of the buffer.
-        if (this.writeSlice.byteLength > 0) {
-          this.releaseSlice({ ...this.writeSlice, isWaste: true });
-        }
+  private allocate(messageByteLength: number): void {
+    // Check whether messageByteLength is in range, and if so, store it.
+    if (messageByteLength > this.maxMessageByteLength)
+      throw new RangeError("Message too big.");
+    if (messageByteLength < 0)
+      throw new RangeError("Message must have positive byte length.");
 
-        // Create a new allocation from scratch.
-        this.writeSlice = this.acquireSlice();
-        return this.allocate();
+    // Compute the total required length, including header and padding,
+    this.allocationByteLength =
+      QueueWriter.kHeaderByteLength + this.align(messageByteLength);
+
+    while (this.sliceByteLength < this.allocationByteLength) {
+      // An allocation can't wrap around the end of the ring buffer.
+      if (this.sliceIsAtEndOfBuffer && this.sliceByteLength > 0) {
+        // Discard the allocation we've made so far. The allocation process will
+        // restart at the beginning of the ring buffer.
+        this.releaseSlice(this.sliceByteLength);
       }
-
-      // Acquire the next slice and use it to make `writeSlice` longer.
-      let h = this.acquireSlice();
-      this.writeSlice.byteLength += h.byteLength;
-      this.writeSlice.isEndOfBuffer = h.isEndOfBuffer;
+      // Consume the next slice to get closer to the target allocation length.
+      this.acquireSlice();
     }
-
-    return this.getPayloadSlice(
-      this.writeSlice.position,
-      this.allocationByteLength
-    );
   }
 
-  private align(byteCount: number) {
-    const alignmentMask = QueueUser.kAlignmentBytes - 1;
+  private align(byteCount: number): number {
+    const alignmentMask = QueueAccess.kAlignmentByteLength - 1;
     return (byteCount + alignmentMask) & ~alignmentMask;
   }
 }
 
-export class QueueReader extends QueueUser {
-  static readonly kEpochBase: number = HeaderBits.kEpochBaseReader;
+export class QueueReader extends QueueAccess {
+  static readonly kEpochBase: number = SliceHeader.EpochBaseReader;
 
-  private readSlice: SliceInfo | null = null;
+  private isReading: boolean = false;
 
-  beginRead(): PayloadSlice {
-    if (this.readSlice !== null) {
-      throw new Error("Already reading.");
+  beginRead(): Message {
+    if (this.isReading) throw new Error("Already reading.");
+    this.isReading = true;
+
+    while (!(this.acquireSlice() & SliceHeader.ContainsMessage)) {
+      this.releaseSlice(this.sliceByteLength);
     }
-
-    let readSlice = this.acquireSlice();
-    while (readSlice.isWaste) {
-      this.releaseSlice(readSlice);
-      readSlice = this.acquireSlice();
-    }
-    this.readSlice = readSlice;
-    return this.getPayloadSlice(readSlice.position, readSlice.byteLength);
+    return this.getMessage(this.sliceByteLength);
   }
 
   endRead(release = true): void {
-    if (this.readSlice === null) {
-      throw new Error("Not reading.");
-    }
+    if (!this.isReading) throw new Error("Not reading.");
+    this.isReading = false;
+
     if (release) {
-      this.releaseSlice(this.readSlice);
+      this.releaseSlice(this.sliceByteLength);
       this.messageCounter++;
     }
-    this.readSlice = null;
   }
 
   read<T extends TypedArray>(ctor: TypedArrayConstructor<T>): T {
-    const payload = this.beginRead();
+    const message = this.beginRead();
     let copy: T | undefined;
     try {
       // TODO: This is slow (>2x slowdown); find a more efficient solution.
       let view: T = new ctor(
         this.buffer,
-        payload.byteOffset,
-        payload.byteLength / ctor.BYTES_PER_ELEMENT
+        message.byteOffset,
+        message.byteLength / ctor.BYTES_PER_ELEMENT
       );
       copy = new ctor(view);
       return copy;

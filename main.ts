@@ -1,5 +1,5 @@
 import { Buf } from "./buf";
-import { QueueReader, QueueWriter, PayloadSlice } from "./queue";
+import { QueueReader, QueueWriter } from "./queue";
 
 async function main(
   threadId: number,
