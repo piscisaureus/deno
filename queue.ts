@@ -52,6 +52,9 @@ const enum SliceHeader {
   HasWaitersFlag     = 0x08000000,
 }
 
+type OptionsObject<T> = { -readonly [P in keyof T]?: T[P] };
+export type QueueOptions = OptionsObject<QueueDefaultOptions>;
+
 export const enum FillDirection {
   TopDown,
   BottomUp
@@ -65,9 +68,6 @@ abstract class QueueDefaultOptions {
   readonly spinCount: number = 100;
   readonly spinYieldCpu: boolean = false;
 }
-
-type Options<T> = { -readonly [P in keyof T]?: T[P] };
-export type QueueOptions = Options<typeof QueueDefaultOptions.prototype>;
 
 abstract class QueueAccess extends QueueDefaultOptions {
   // Slice allocation alignment (in bytes).
@@ -132,7 +132,7 @@ abstract class QueueAccess extends QueueDefaultOptions {
 
   // `buffer` must be initialized with zeroes.
   constructor(readonly buffer: SharedArrayBuffer, options: QueueOptions = {}) {
-    // Initialize options.
+    // Initialize (default) options.
     super();
     Object.assign(this, options);
 
