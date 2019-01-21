@@ -60,8 +60,8 @@ const enum SliceHeader {
   // Initial epoch values for respectively the sender and the receiver.
   EpochBaseSender    = 0x00000000,
   EpochBaseReceiver  = 0x01000000,
-  // Flag that indicates to receiver that a slice contains a message. It may not
-  // due to an abandoned send or insufficient space at the end of the buffer.
+  // Flag that indicates to receiver that a slice contains a message. If it
+  // doesn't, that's due to insufficient space at the end of the buffer.
   HasMessageFlag     = 0x04000000,
   // Flag that indicates that there are waiter(s) that expect to be notified.
   HasWaitersFlag     = 0x08000000,
