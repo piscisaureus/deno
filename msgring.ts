@@ -64,9 +64,13 @@ abstract class MsgRingDefaultOptions {
   // Whether buffers are filled upwards or downwards.
   readonly fillDirection: FillDirection = FillDirection.BottomUp;
 
-  // Spinning behaviour.
+  // The maximum number of times acquireSlice() will spin before sleeping.
   readonly spinCount: number = 100;
-  readonly spinYieldCpu: boolean = false;
+
+  // When spinning, for how long the thread yields the CPU on each cycle, in
+  // milliseconds. Yielding happens by calling Atomics.wait() with a time-out.
+  // Set to zero to never yield the CPU.
+  readonly spinYieldCpuTime: number = 0;
 }
 
 abstract class MsgRingAccess extends MsgRingDefaultOptions {
@@ -205,8 +209,6 @@ abstract class MsgRingAccess extends MsgRingDefaultOptions {
   }
 
   protected acquireSlice(wait = true): number {
-    let spinCountRemaining = this.spinCount;
-
     // Wrap around if the current head position is at the end of the buffer.
     if (this.sliceIsAtEndOfBuffer) {
       // A slice can't wrap around the end of the buffer; if the current slice
@@ -229,13 +231,15 @@ abstract class MsgRingAccess extends MsgRingDefaultOptions {
     const headerI32Offset = this.getHeaderI32Offset(this.sliceHeadPosition);
     let header = this.i32[headerI32Offset];
 
+    let spinCountRemaining: number = this.spinCount;
+    let futexWaitTime: number = this.spinYieldCpuTime;
+
     while ((header & SliceHeader.EpochMask) !== this.epoch) {
       // Sleep nor spin when acquiring in non-blocking mode.
       if (!wait) {
         return SliceHeader.None;
       }
 
-      let futexWaitTime: number | null;
       if (spinCountRemaining === 0) {
         // We're going to put the thread to sleep.
         // Use compare-and-swap to set the kHasWaiters flag.
@@ -257,16 +261,16 @@ abstract class MsgRingAccess extends MsgRingDefaultOptions {
         futexWaitTime = Infinity;
         this.waitCounter++;
       } else {
-        // We're spinning. If CPU yielding is enabled, we'll call futexWait
-        // as if we were going to sleep, but with a timeout of 0.1ms. If CPU
-        // yielding is off we'll just refresh `header` from the ring buffer.
-        futexWaitTime = this.spinYieldCpu ? 0.1 : null;
+        // We still have spins left.
         spinCountRemaining--;
         this.spinCounter++;
       }
 
+      // If we're spinning and CPU yielding is enabled, we'll call futexWait
+      // just as as if we were going to sleep, but with some very small time-out
+      // value. If yielding is off, just refresh `header` from the ring buffer.
       if (
-        futexWaitTime === null ||
+        futexWaitTime <= 0 ||
         Atomics.wait(this.i32, headerI32Offset, header, futexWaitTime) !==
           "timed-out"
       ) {
