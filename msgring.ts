@@ -15,7 +15,7 @@ export interface TypedArrayConstructor<T extends TypedArray> {
   readonly BYTES_PER_ELEMENT: number;
 }
 
-export interface Message {
+export interface Slice {
   byteOffset: number;
   byteLength: number;
 }
@@ -39,31 +39,34 @@ export const enum FillDirection {
 type OptionsObject<T> = { -readonly [P in keyof T]?: T[P] };
 export type MsgRingConfig = OptionsObject<MsgRingDefaultConfig>;
 
-const enum SliceAllocation {
+const enum FrameAllocation {
   // Placeholder value indicating the absence of an allocation.
   None = 0,
-  // Alignment (in bytes) of slice offset and slice length.
+  // Alignment (in bytes) of frame offset and frame length.
   Alignment = 8,
-  // Length of slice header. Note: only 4 bytes are currently used.
+  // Length of frame header. Note: only 4 bytes are currently used.
   HeaderByteLength = 8
 }
 
 // prettier-ignore
-const enum SliceHeader {
+const enum FrameHeader {
+  // Do not use the highest bit. On 64-bit systems, 32-bit signed ints are very
+  // efficient in v8, but numbers greater than 2**31-1 are heap allocated.
+
   // Placeholder value indicating the absence of a header.
   None               = 0x00000000,
-  // Low 24 bits are reserved for the length of the slice (including header).
+  // Low 24 bits are reserved for the length of the frame (including header).
   ByteLengthMask     = 0x00ffffff,
-  // The `epoch` serves as a filter for which slices are ready to be acquired.
+  // The `epoch` serves as a filter for which frames are ready to be acquired.
   EpochMask          = 0x03000000,
   // Initial epoch values for respectively the sender and the receiver.
   EpochInitSender    = 0x00000000,
   EpochInitReceiver  = 0x01000000,
-  // Every time a slice changes hands between receiver and sender, we add 1 to
+  // Every time a frame changes hands between receiver and sender, we add 1 to
   // the 2-bit epoch number; when the buffer wraps, add 2.
   EpochIncrementPass = 0x01000000,
   EpochIncrementWrap = 0x02000000,
-  // Flag that indicates to receiver that a slice contains a message. If it
+  // Flag that indicates to receiver that a frame contains a message. If it
   // doesn't, that's due to insufficient space at the end of the buffer.
   HasMessageFlag     = 0x04000000,
   // Flag that indicates that there are waiter(s) that expect to be notified.
@@ -74,7 +77,7 @@ abstract class MsgRingDefaultConfig {
   // Whether buffers are filled upwards or downwards.
   readonly fillDirection: FillDirection = FillDirection.BottomUp;
 
-  // The maximum number of times acquireSlice() will spin before sleeping.
+  // The maximum number of times acquireFrame() will spin before sleeping.
   readonly spinCount: number = 100;
 
   // When spinning, for how long the thread yields the CPU on each cycle, in
@@ -106,24 +109,24 @@ abstract class MsgRingCommon extends MsgRingDefaultConfig {
   private readonly fillDirectionBaseAdjustment: 0 | 1;
   private readonly fillDirectionOffsetAdjustment: 1 | -1;
 
-  // A slice's epoch identifies which role (receiver or sender) released a
-  // slice, and whether the buffer has since wrapped around. This epoch field
-  // tracks which epoch acquireSlice() will currently acquire slices from.
+  // A frame's epoch identifies which role (receiver or sender) released a
+  // frame, and whether the buffer has since wrapped around. This epoch field
+  // tracks which epoch acquireFrame() will currently acquire frames from.
   // Initialization is role-dependent, so it's done by our subclasses.
   protected epoch!: number;
 
-  // The head and tail position indicate the range of bytes (slice) that is
+  // The head and tail position indicate the range of bytes (frame) that is
   // locked by this receiver/sender. The value indicates the offset in bytes
   // from the start of the ring buffer, ***NOT*** adjusted for fill direction of
-  // the buffer. Hence the first slice always starts at position 0.
-  protected sliceHeadPosition: number = 0;
-  protected sliceTailPosition: number = 0;
+  // the buffer. Hence the first frame always starts at position 0.
+  protected frameHeadPosition: number = 0;
+  protected frameTailPosition: number = 0;
 
-  // The slice byte length and whether it's at the end of the buffer can be
+  // The frame byte length and whether it's at the end of the buffer can be
   // computed from the head and tail position. However we store them because
   // they are used often.
-  protected sliceByteLength: number = 0;
-  protected sliceIsAtEndOfBuffer: boolean = false;
+  protected frameByteLength: number = 0;
+  protected frameIsAtEndOfBuffer: boolean = false;
 
   // Counters for debugging.
   protected messageCounter: number = 0;
@@ -156,18 +159,18 @@ abstract class MsgRingCommon extends MsgRingDefaultConfig {
 
     this.bufferByteLength = buffer.byteLength;
     this.maxMessageByteLength =
-      (Math.min(SliceHeader.ByteLengthMask, this.bufferByteLength) -
-        SliceAllocation.HeaderByteLength) &
-      ~(SliceAllocation.Alignment - 1);
+      (Math.min(FrameHeader.ByteLengthMask, this.bufferByteLength) -
+        FrameAllocation.HeaderByteLength) &
+      ~(FrameAllocation.Alignment - 1);
 
     // Create various views on the SharedArrayBuffer.
     this.u8 = new Uint8Array(buffer);
     this.i32 = new Int32Array(buffer);
     this.u32 = new Uint32Array(buffer);
 
-    // Initialize the slice structure inside the buffer.
+    // Initialize the frame structure inside the buffer.
     // We expect the buffer to be initialized with zeroes. If that's the
-    // case, define a slice that spans the entire buffer and place it's header
+    // case, define a frame that spans the entire buffer and place it's header
     // at offset 0, so the receiver and sender don't get confused.
     // Since the other user (receiver/sender) may have gotten here first, only
     // do the initializtion if the first slot is still contains zero.
@@ -198,43 +201,43 @@ abstract class MsgRingCommon extends MsgRingDefaultConfig {
     }
   }
 
-  protected acquireSlice(wait = true): number {
+  protected acquireFrame(wait = true): number {
     // Wrap around if the current head position is at the end of the buffer.
-    if (this.sliceIsAtEndOfBuffer) {
-      // A slice can't wrap around the end of the buffer; if the current slice
+    if (this.frameIsAtEndOfBuffer) {
+      // A frame can't wrap around the end of the buffer; if the current frame
       // is at the end of the buffer, the caller should release the remaining
-      // bytes before attempting to acquire a new slice.
-      this.assert(this.sliceByteLength === 0);
+      // bytes before attempting to acquire a new frame.
+      this.assert(this.frameByteLength === 0);
 
       // Increment the epoch number. Note that the epoch number itself wraps
       // around on overflow, this is intentional.
       this.epoch =
-        (this.epoch + SliceHeader.EpochIncrementWrap) & SliceHeader.EpochMask;
+        (this.epoch + FrameHeader.EpochIncrementWrap) & FrameHeader.EpochMask;
 
-      // Rewind the current slice to the start of the ring buffer.
-      this.sliceHeadPosition = 0;
-      this.sliceTailPosition = 0;
-      this.sliceIsAtEndOfBuffer = false;
+      // Rewind the current frame to the start of the ring buffer.
+      this.frameHeadPosition = 0;
+      this.frameTailPosition = 0;
+      this.frameIsAtEndOfBuffer = false;
       this.wrapCounter++;
     }
 
-    const headerI32Offset = this.getHeaderI32Offset(this.sliceHeadPosition);
+    const headerI32Offset = this.getHeaderI32Offset(this.frameHeadPosition);
     let header = this.i32[headerI32Offset];
 
     let spinCountRemaining: number = this.spinCount;
     let futexWaitTime: number = this.spinYieldCpuTime;
 
-    while ((header & SliceHeader.EpochMask) !== this.epoch) {
+    while ((header & FrameHeader.EpochMask) !== this.epoch) {
       // Sleep nor spin when acquiring in non-blocking mode.
       if (!wait) {
-        return SliceHeader.None;
+        return FrameHeader.None;
       }
 
       if (spinCountRemaining === 0) {
         // We're going to put the thread to sleep.
         // Use compare-and-swap to set the kHasWaiters flag.
         const expect = header;
-        const target = header | SliceHeader.HasWaitersFlag;
+        const target = header | FrameHeader.HasWaitersFlag;
         header = Atomics.compareExchange(
           this.i32,
           headerI32Offset,
@@ -270,60 +273,60 @@ abstract class MsgRingCommon extends MsgRingDefaultConfig {
       }
     }
 
-    const byteLength = header & SliceHeader.ByteLengthMask;
-    this.assert(byteLength <= this.bufferByteLength - this.sliceHeadPosition);
+    const byteLength = header & FrameHeader.ByteLengthMask;
+    this.assert(byteLength <= this.bufferByteLength - this.frameHeadPosition);
 
-    this.sliceHeadPosition += byteLength;
-    this.sliceByteLength += byteLength;
-    this.sliceIsAtEndOfBuffer =
-      this.sliceHeadPosition === this.bufferByteLength;
+    this.frameHeadPosition += byteLength;
+    this.frameByteLength += byteLength;
+    this.frameIsAtEndOfBuffer =
+      this.frameHeadPosition === this.bufferByteLength;
     this.acquireCounter++;
 
     return header;
   }
 
-  protected releaseSlice(byteLength: number, flags: number = 0): void {
-    this.assert(byteLength >= SliceAllocation.HeaderByteLength);
-    this.assert(byteLength <= this.sliceByteLength);
+  protected releaseFrame(byteLength: number, flags: number = 0): void {
+    this.assert(byteLength >= FrameAllocation.HeaderByteLength);
+    this.assert(byteLength <= this.frameByteLength);
 
-    const tailEpoch = this.epoch + SliceHeader.EpochIncrementPass;
+    const tailEpoch = this.epoch + FrameHeader.EpochIncrementPass;
     const newHeader = byteLength | flags | tailEpoch;
 
-    const headerI32Offset = this.getHeaderI32Offset(this.sliceTailPosition);
+    const headerI32Offset = this.getHeaderI32Offset(this.frameTailPosition);
     const oldHeader = Atomics.exchange(this.i32, headerI32Offset, newHeader);
 
-    if (oldHeader & SliceHeader.HasWaitersFlag) {
+    if (oldHeader & FrameHeader.HasWaitersFlag) {
       Atomics.wake(this.i32, headerI32Offset, 1);
       this.wakeCounter++;
     }
 
-    this.sliceTailPosition += byteLength;
-    this.sliceByteLength -= byteLength;
+    this.frameTailPosition += byteLength;
+    this.frameByteLength -= byteLength;
   }
 
-  // Returns the byte offset of the header from the slice position, adjusted for
+  // Returns the byte offset of the header from the frame position, adjusted for
   // the fill direction of the buffer.
   protected getHeaderI32Offset(position: number): number {
     const headerByteOffset: number =
       this.fillDirectionBaseAdjustment *
-        (this.bufferByteLength - SliceAllocation.HeaderByteLength) +
+        (this.bufferByteLength - FrameAllocation.HeaderByteLength) +
       this.fillDirectionOffsetAdjustment * position;
     return headerByteOffset / this.i32.BYTES_PER_ELEMENT;
   }
 
-  // Creates a Message object, given the byte length of the encapsulating slice.
-  protected getMessage(sliceByteLength: number): Message {
+  // Creates a Slice object, given the byte length of the encapsulating frame.
+  protected getMessageSlice(frameByteLength: number): Slice {
     // Compute the length of the message itself. Note that when writing a
     // message, it's length is always rounded up to match the alignment.
     const messageByteLength =
-      sliceByteLength - SliceAllocation.HeaderByteLength;
+      frameByteLength - FrameAllocation.HeaderByteLength;
 
     // Compute the fill-direction adjusted offset of the message payload.
     const messageByteOffset =
       this.fillDirectionBaseAdjustment *
         (this.bufferByteLength - messageByteLength) +
       this.fillDirectionOffsetAdjustment *
-        (this.sliceTailPosition + SliceAllocation.HeaderByteLength);
+        (this.frameTailPosition + FrameAllocation.HeaderByteLength);
 
     return {
       byteOffset: messageByteOffset,
@@ -333,42 +336,42 @@ abstract class MsgRingCommon extends MsgRingDefaultConfig {
 }
 
 export class MsgRingSender extends MsgRingCommon {
-  protected epoch: number = SliceHeader.EpochInitSender;
+  protected epoch: number = FrameHeader.EpochInitSender;
 
   // Number of bytes allocated by beginSend()/resizeSend(). It includes space
-  // for the slice header and padding for alignment
-  private allocationByteLength: number = SliceAllocation.None;
+  // for the frame header and padding for alignment
+  private allocationByteLength: number = FrameAllocation.None;
 
   // Note: byteLength will be rounded up to alignment.
-  beginSend(messageByteLength: number): Message {
-    if (this.allocationByteLength !== SliceAllocation.None) {
+  beginSend(messageByteLength: number): Slice {
+    if (this.allocationByteLength !== FrameAllocation.None) {
       throw new Error("Already writing.");
     }
     this.allocate(messageByteLength);
-    return this.getMessage(this.allocationByteLength);
+    return this.getMessageSlice(this.allocationByteLength);
   }
 
   // Note: byteLength will be rounded up to alignment.
   // Noto: already-written data is discarded when buffer wraps.
   // TODO: copy bytes when allocation wraps.
-  resizeSend(messageByteLength: number): Message {
-    if (this.allocationByteLength === SliceAllocation.None) {
+  resizeSend(messageByteLength: number): Slice {
+    if (this.allocationByteLength === FrameAllocation.None) {
       throw new Error("Not writing.");
     }
     this.allocate(messageByteLength);
-    return this.getMessage(this.allocationByteLength);
+    return this.getMessageSlice(this.allocationByteLength);
   }
 
   endSend(submit = true): void {
-    if (this.allocationByteLength === SliceAllocation.None) {
+    if (this.allocationByteLength === FrameAllocation.None) {
       throw new Error("Not writing.");
     }
     if (submit) {
-      // Release a slice that contains the header plus message.
-      this.releaseSlice(this.allocationByteLength, SliceHeader.HasMessageFlag);
+      // Release a frame that contains the header plus message.
+      this.releaseFrame(this.allocationByteLength, FrameHeader.HasMessageFlag);
       this.messageCounter++;
     }
-    this.allocationByteLength = SliceAllocation.None;
+    this.allocationByteLength = FrameAllocation.None;
   }
 
   send(data: ArrayBufferView): void {
@@ -388,44 +391,44 @@ export class MsgRingSender extends MsgRingCommon {
   private allocate(messageByteLength: number): void {
     // Check whether messageByteLength is in range, and if so, store it.
     if (messageByteLength > this.maxMessageByteLength)
-      throw new RangeError("Message too big.");
+      throw new RangeError("Slice too big.");
     if (messageByteLength < 0)
-      throw new RangeError("Message must have positive byte length.");
+      throw new RangeError("Slice must have positive byte length.");
 
     // Compute the total required length, including header and padding,
     this.allocationByteLength =
-      SliceAllocation.HeaderByteLength + this.align(messageByteLength);
+      FrameAllocation.HeaderByteLength + this.align(messageByteLength);
 
-    while (this.sliceByteLength < this.allocationByteLength) {
+    while (this.frameByteLength < this.allocationByteLength) {
       // An allocation can't wrap around the end of the ring buffer.
-      if (this.sliceIsAtEndOfBuffer && this.sliceByteLength > 0) {
+      if (this.frameIsAtEndOfBuffer && this.frameByteLength > 0) {
         // Discard the allocation we've made so far. The allocation process will
         // restart at the beginning of the ring buffer.
-        this.releaseSlice(this.sliceByteLength);
+        this.releaseFrame(this.frameByteLength);
       }
-      // Consume the next slice to get closer to the target allocation length.
-      this.acquireSlice();
+      // Consume the next frame to get closer to the target allocation length.
+      this.acquireFrame();
     }
   }
 
   private align(byteCount: number): number {
-    const alignmentMask = SliceAllocation.Alignment - 1;
+    const alignmentMask = FrameAllocation.Alignment - 1;
     return (byteCount + alignmentMask) & ~alignmentMask;
   }
 }
 
 export class MsgRingReceiver extends MsgRingCommon {
-  protected epoch: number = SliceHeader.EpochInitReceiver;
+  protected epoch: number = FrameHeader.EpochInitReceiver;
   private isReceiving: boolean = false;
 
-  beginReceive(): Message {
+  beginReceive(): Slice {
     if (this.isReceiving) throw new Error("Already receiving.");
     this.isReceiving = true;
 
-    while (!(this.acquireSlice() & SliceHeader.HasMessageFlag)) {
-      this.releaseSlice(this.sliceByteLength);
+    while (!(this.acquireFrame() & FrameHeader.HasMessageFlag)) {
+      this.releaseFrame(this.frameByteLength);
     }
-    return this.getMessage(this.sliceByteLength);
+    return this.getMessageSlice(this.frameByteLength);
   }
 
   endReceive(release = true): void {
@@ -433,25 +436,25 @@ export class MsgRingReceiver extends MsgRingCommon {
     this.isReceiving = false;
 
     if (release) {
-      this.releaseSlice(this.sliceByteLength);
+      this.releaseFrame(this.frameByteLength);
       this.messageCounter++;
     }
   }
 
   receive<T extends TypedArray>(ctor: TypedArrayConstructor<T>): T {
-    const message = this.beginReceive();
+    const messageSlice = this.beginReceive();
     let copy: T | undefined;
     try {
       // TODO: This is slow (>2x slowdown); find a more efficient solution.
       let view: T = new ctor(
         this.buffer,
-        message.byteOffset,
-        message.byteLength / ctor.BYTES_PER_ELEMENT
+        messageSlice.byteOffset,
+        messageSlice.byteLength / ctor.BYTES_PER_ELEMENT
       );
       copy = new ctor(view);
       return copy;
     } finally {
-      // Only release the slice if creating the view succeeded.
+      // Only release the frame if creating the view succeeded.
       this.endReceive(copy !== undefined);
     }
   }
