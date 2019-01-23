@@ -1,40 +1,9 @@
-#[macro_use]
 extern crate integer_atomics;
 
 use integer_atomics::AtomicI32;
-use std::marker::PhantomData;
-use std::mem::size_of;
 use std::ops::{Deref, DerefMut};
-use std::sync::atomic::{AtomicUsize, Ordering};
-
-// Slice should not implement Copy.
-pub struct Slice<'a, T> {
-    inner: T,
-    phantom: PhantomData<&'a i8>,
-}
-
-impl<'a, T> Slice<'a, T> {
-    fn new(inner: T) -> Self {
-        Self {
-            inner,
-            phantom: PhantomData,
-        }
-    }
-}
-
-impl<'a, T> Deref for Slice<'a, T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
-
-impl<'a, T> DerefMut for Slice<'a, T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inner
-    }
-}
+use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Default)]
 pub struct MsgRingCounters {
@@ -54,13 +23,20 @@ pub enum FillDirection {
 }
 
 struct FrameAllocation;
+#[allow(non_upper_case_globals)]
 impl FrameAllocation {
-    pub const None: i32 = 0;
     pub const Alignment: i32 = 8;
     pub const HeaderByteLength: i32 = 8;
+
+    pub fn align<T: From<usize> + Into<usize>>(value: T) -> T {
+        let alignment_mask = Self::Alignment as usize - 1;
+        let aligned_value = (value.into() + alignment_mask) & !alignment_mask;
+        aligned_value.into()
+    }
 }
 
 struct FrameHeader;
+#[allow(non_upper_case_globals)]
 impl FrameHeader {
     // Using i32 since that's what's used on the JS side.
     pub const None: i32 = 0x00000000;
@@ -76,17 +52,17 @@ impl FrameHeader {
 
 #[derive(Clone, Copy)]
 pub struct MsgRingConfig {
-    pub fillDirection: FillDirection,
-    pub spinCount: u32,
-    pub spinYieldCpuTime: u32,
+    pub fill_direction: FillDirection,
+    pub spin_count: u32,
+    pub spin_yield_cpu_time: u32,
 }
 
 impl Default for MsgRingConfig {
     fn default() -> Self {
         Self {
-            fillDirection: FillDirection::TopDown,
-            spinCount: 10,
-            spinYieldCpuTime: 0, // Disabled.
+            fill_direction: FillDirection::TopDown,
+            spin_count: 10,
+            spin_yield_cpu_time: 0, // Disabled.
         }
     }
 }
@@ -98,6 +74,8 @@ struct MsgRingCommon<'buf> {
 
     pub buffer: &'buf [u8],
     pub epoch: i32,
+
+    pub test_buf: [u8; 10],
 
     // Head and tail position are in bytes, but always starting at zero and
     // not adjusted for buffer fill direction (see TypeScript implementation).
@@ -111,29 +89,31 @@ struct MsgRingCommon<'buf> {
 impl<'buf> MsgRingCommon<'buf> {
     pub fn new(buffer: &'buf [u8], config: MsgRingConfig, epoch: i32) -> Self {
         let (fill_direction_base_adjustment, fill_direction_offset_adjustment) =
-            match config.fillDirection {
+            match config.fill_direction {
                 FillDirection::TopDown => (0, 1),
                 FillDirection::BottomUp => (1, -1),
             };
-        Self {
+        let mut this = Self {
             config,
             buffer,
             epoch,
             fill_direction_base_adjustment,
             fill_direction_offset_adjustment,
             ..Default::default()
-        }
+        };
+        this.init();
+        this
     }
 
     #[inline]
     pub fn buffer_byte_length(&self) -> i32 {
-        debug_assert!(self.buffer.len() < std::i32::MAX as usize);
+        debug_assert!(self.buffer.len() <= std::i32::MAX as usize);
         return self.buffer.len() as i32;
     }
 
     #[inline]
     pub fn frame_byte_length(&self) -> i32 {
-        self.frame_tail_position - self.frame_head_position
+        self.frame_head_position - self.frame_tail_position
     }
 
     #[inline]
@@ -145,6 +125,7 @@ impl<'buf> MsgRingCommon<'buf> {
         self.acquire_frame_impl(true)
     }
 
+    #[allow(dead_code)]
     pub fn try_acquire_frame(&mut self) -> i32 {
         self.acquire_frame_impl(false)
     }
@@ -155,6 +136,13 @@ impl<'buf> MsgRingCommon<'buf> {
             * (self.buffer_byte_length() - FrameAllocation::HeaderByteLength)
             + self.fill_direction_offset_adjustment * position;
         self.buffer[byte_offset as usize..].as_ptr() as *mut i32
+    }
+
+    fn init(&mut self) -> () {
+        let header_ptr = self.header_ptr(0);
+        let header_slot = unsafe { &mut *(header_ptr as *mut AtomicI32) };
+        let target: i32 = self.buffer_byte_length();
+        header_slot.compare_and_swap(0, target, Ordering::AcqRel);
     }
 
     #[inline]
@@ -173,7 +161,7 @@ impl<'buf> MsgRingCommon<'buf> {
         let header_slot = unsafe { &mut *(header_ptr as *mut AtomicI32) };
         let mut header = *header_slot.get_mut();
 
-        let mut spin_count_remaining = self.config.spinCount;
+        let mut spin_count_remaining = self.config.spin_count;
         let mut sleep = false;
 
         // Note that operator precendece in Rust is different than in C and
@@ -223,7 +211,7 @@ impl<'buf> MsgRingCommon<'buf> {
         let tail_epoch = self.epoch + FrameHeader::EpochIncrementPass;
         let new_header = byte_length | flags | tail_epoch;
 
-        let header_ptr = self.header_ptr(self.frame_head_position);
+        let header_ptr = self.header_ptr(self.frame_tail_position);
         let header_slot = unsafe { &mut *(header_ptr as *mut integer_atomics::AtomicI32) };
         let old_header = header_slot.swap(new_header, Ordering::AcqRel);
 
@@ -232,19 +220,17 @@ impl<'buf> MsgRingCommon<'buf> {
             // Atomics.wake(this.i32, headerI32Offset, 1);
             self.counters.wake += 1;
         }
+
+        self.frame_tail_position += byte_length;
     }
 
-    pub fn get_message_slice_mut(&self, frame_byte_length: i32) -> &'buf mut [u8] {
+    pub fn get_message_slice_impl<'a, 'b: 'buf>(&'a self, frame_byte_length: i32) -> &'b mut [u8] {
         let message_byte_length = frame_byte_length - FrameAllocation::HeaderByteLength;
         let message_byte_offset = self.fill_direction_base_adjustment
             * (self.buffer_byte_length() - message_byte_length)
             + self.fill_direction_offset_adjustment
                 * (self.frame_tail_position + FrameAllocation::HeaderByteLength);
         let message_end = message_byte_offset + message_byte_length;
-        eprintln!(
-            "{}-{}={}",
-            message_byte_offset, message_end, message_byte_length
-        );
         let message_frame = &self.buffer[message_byte_offset as usize..message_end as usize];
         unsafe {
             // Although our synchronization mechanism ensures that there can
@@ -252,144 +238,191 @@ impl<'buf> MsgRingCommon<'buf> {
             // this transmute isn't pretty and appears to be un-idiomatic.
             // TODO: use more idiomatic rust.
             #[allow(mutable_transmutes)]
-            std::mem::transmute::<&'buf [u8], &'buf mut [u8]>(message_frame)
+            std::mem::transmute::<&[u8], &'b mut [u8]>(message_frame)
         }
     }
 
-    pub fn get_message_slice(&self, frame_byte_length: i32) -> &'buf [u8] {
-        self.get_message_slice_mut(frame_byte_length)
+    pub fn get_message_slice<'a, 'b: 'buf>(&'a self, frame_byte_length: i32) -> &'b [u8] {
+        self.get_message_slice_impl(frame_byte_length)
+    }
+
+    pub fn get_message_slice_mut<'a, 'b: 'buf>(
+        &'a mut self,
+        frame_byte_length: i32,
+    ) -> &'b mut [u8] {
+        self.get_message_slice_impl(frame_byte_length)
     }
 }
 
 pub struct MsgRingSender<'buf> {
     common: MsgRingCommon<'buf>,
-    allocation_byte_length: i32,
 }
-
-pub struct Stom {}
 
 impl<'buf> MsgRingSender<'buf> {
     pub fn new(buffer: &'buf [u8], config: MsgRingConfig) -> Self {
         Self {
             common: MsgRingCommon::new(buffer, config, FrameHeader::EpochInitSender),
-            allocation_byte_length: 0,
         }
     }
 
-    pub fn begin_send(&mut self) -> Slice<&mut [u8]> {
-        Slice::new(self.common.get_message_slice_mut(12))
+    pub fn begin_send<'a>(&'a mut self, byte_length: usize) -> Send<'a, 'buf> {
+        Send::new(self, byte_length)
     }
-
-    pub fn begin_receive(&mut self) -> Slice<&[u8]> {
-        Slice::new(self.common.get_message_slice(12))
-    }
-
-    pub fn end_send(&mut self, slice: Slice<&mut [u8]>) {}
 }
 
-/*
-export class MsgRingSender extends MsgRingCommon {
-  protected epoch: number = FrameHeader.EpochInitSender;
-
-  // Number of bytes allocated by beginSend()/resizeSend(). It includes space
-  // for the frame header and padding for alignment
-  private allocationByteLength: number = FrameAllocation.None;
-
-  // Note: byteLength will be rounded up to alignment.
-  beginSend(messageByteLength: number): Slice {
-    if (this.allocationByteLength !== FrameAllocation.None) {
-      throw new Error("Already writing.");
-    }
-    this.allocate(messageByteLength);
-    return this.getMessageSlice(this.allocationByteLength);
-  }
-
-  // Note: byteLength will be rounded up to alignment.
-  // Noto: already-written data is discarded when buffer wraps.
-  // TODO: copy bytes when allocation wraps.
-  resizeSend(messageByteLength: number): Slice {
-    if (this.allocationByteLength === FrameAllocation.None) {
-      throw new Error("Not writing.");
-    }
-    this.allocate(messageByteLength);
-    return this.getMessageSlice(this.allocationByteLength);
-  }
-
-  endSend(submit = true): void {
-    if (this.allocationByteLength === FrameAllocation.None) {
-      throw new Error("Not writing.");
-    }
-    if (submit) {
-      // Release a frame that contains the header plus message.
-      this.releaseFrame(this.allocationByteLength, FrameHeader.HasMessageFlag);
-      this.messageCounter++;
-    }
-    this.allocationByteLength = FrameAllocation.None;
-  }
-
-  send(data: ArrayBufferView): void {
-    // Convert `data` to an Uint8Array view if necessary.
-    const u8data: Uint8Array =
-      data instanceof Uint8Array
-        ? data
-        : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-    // Allocate space.
-    const target = this.beginSend(data.byteLength);
-    // Copy data.
-    this.u8.set(u8data, target.byteOffset);
-    // Close the send.
-    this.endSend();
-  }
-
-  private allocate(messageByteLength: number): void {
-    // Check whether messageByteLength is in range, and if so, store it.
-    if (messageByteLength > this.maxMessageByteLength)
-      throw new RangeError("Slice too big.");
-    if (messageByteLength < 0)
-      throw new RangeError("Slice must have positive byte length.");
-
-    // Compute the total required length, including header and padding,
-    this.allocationByteLength =
-      FrameAllocation.HeaderByteLength + this.align(messageByteLength);
-
-    while (this.frameByteLength < this.allocationByteLength) {
-      // An allocation can't wrap around the end of the ring buffer.
-      if (this.frameIsAtEndOfBuffer && this.frameByteLength > 0) {
-        // Discard the allocation we've made so far. The allocation process will
-        // restart at the beginning of the ring buffer.
-        this.releaseFrame(this.frameByteLength);
-      }
-      // Consume the next frame to get closer to the target allocation length.
-      this.acquireFrame();
-    }
-  }
-
-  private align(byteCount: number): number {
-    const alignmentMask = FrameAllocation.Alignment - 1;
-    return (byteCount + alignmentMask) & ~alignmentMask;
-  }
+pub struct Send<'a, 'buf: 'a> {
+    sender: &'a mut MsgRingSender<'buf>,
+    allocation_byte_length: i32,
 }
-*/
+
+impl<'a, 'buf> Send<'a, 'buf> {
+    pub fn new(sender: &'a mut MsgRingSender<'buf>, message_byte_length: usize) -> Self {
+        let mut this = Self {
+            sender,
+            allocation_byte_length: 0,
+        };
+        this.allocate(message_byte_length);
+        this
+    }
+
+    pub fn resize(&mut self, message_byte_length: usize) {
+        self.allocate(message_byte_length)
+    }
+
+    pub fn finish(self) -> () {
+        self.sender
+            .common
+            .release_frame(self.allocation_byte_length, FrameHeader::HasMessageFlag);
+    }
+
+    pub fn abort(self) -> () {}
+
+    fn allocate(&mut self, byte_length: usize) {
+        let allocation_byte_length =
+            FrameAllocation::HeaderByteLength as usize + FrameAllocation::align(byte_length);
+        assert!(allocation_byte_length <= FrameHeader::ByteLengthMask as usize);
+        self.allocation_byte_length = allocation_byte_length as i32;
+        while self.sender.common.frame_byte_length() < self.allocation_byte_length {
+            if self.sender.common.frame_is_at_end_of_buffer()
+                && self.sender.common.frame_byte_length() > 0
+            {
+                self.sender
+                    .common
+                    .release_frame(self.sender.common.frame_byte_length(), FrameHeader::None);
+            }
+            self.sender.common.acquire_frame();
+        }
+    }
+}
+
+impl<'a, 'buf> Deref for Send<'a, 'buf> {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        self.sender
+            .common
+            .get_message_slice(self.allocation_byte_length)
+    }
+}
+
+impl<'a, 'buf> DerefMut for Send<'a, 'buf> {
+    fn deref_mut(&mut self) -> &mut [u8] {
+        self.sender
+            .common
+            .get_message_slice_mut(self.allocation_byte_length)
+    }
+}
+
+pub struct MsgRingReceiver<'buf> {
+    common: MsgRingCommon<'buf>,
+}
+
+impl<'buf> MsgRingReceiver<'buf> {
+    pub fn new(buffer: &'buf [u8], config: MsgRingConfig) -> Self {
+        Self {
+            common: MsgRingCommon::new(buffer, config, FrameHeader::EpochInitReceiver),
+        }
+    }
+
+    pub fn receive<'a>(&'a mut self) -> Receive<'a, 'buf> {
+        Receive::new(self)
+    }
+}
+
+pub struct Receive<'a, 'buf: 'a> {
+    receiver: &'a mut MsgRingReceiver<'buf>,
+}
+
+impl<'a, 'buf> Receive<'a, 'buf> {
+    fn new(receiver: &'a mut MsgRingReceiver<'buf>) -> Self {
+        let mut this = Self { receiver };
+        this.acquire();
+        this
+    }
+
+    fn acquire(&mut self) -> () {
+        // Bug: what happens when previous frame not released?
+        while self.receiver.common.acquire_frame() & FrameHeader::HasMessageFlag == 0 {
+            self.receiver
+                .common
+                .release_frame(self.receiver.common.frame_byte_length(), FrameHeader::None);
+        }
+    }
+
+    pub fn finish(self) -> () {
+        self.receiver
+            .common
+            .release_frame(self.receiver.common.frame_byte_length(), FrameHeader::None);
+    }
+
+    pub fn abort(self) -> () {}
+}
+
+impl<'a, 'buf> Deref for Receive<'a, 'buf> {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        self.receiver
+            .common
+            .get_message_slice(self.receiver.common.frame_byte_length())
+    }
+}
+
+const PER_ROUND: u64 = 1e7 as u64;
+const PER_SUBROUND: usize = 1;
 
 fn main() {
-    println!("Hello, world!");
-}
-
-#[test]
-fn ttt() {
-    let x = b"abcdefgh 0123";
+    let ab = [0u8; PER_SUBROUND * 100];
     let config = MsgRingConfig {
         ..Default::default()
     };
-    let muts: &mut [u8];
-    let v: u8 = 0;
-    {
-        let mut sender = MsgRingSender::new(x, config);
-        let mut slice = sender.begin_send();
-        sender.end_send(slice);
-        //muts = slice.deref_mut();
-        //muts[0] += 1;
-        //v = muts[0];
+    let mut mq_in = MsgRingReceiver::new(&ab, config);
+    let mut mq_out = MsgRingSender::new(&ab, config);
+
+    let start = Instant::now();
+    let mut received = 0;
+
+    for round in 0..100 {
+        eprintln!("====== single-thread round {} ======", round);
+        for _ in (0..PER_ROUND).step_by(PER_SUBROUND) {
+            let out_len = 32;
+            for _ in 0..PER_SUBROUND {
+                let mut sl = mq_out.begin_send(out_len);
+                sl[3] = 4;
+                sl.finish();
+            }
+            for _ in 0..PER_SUBROUND {
+                let sl = mq_in.receive();
+                sl.finish();
+            }
+        }
+        received += PER_ROUND;
+        eprintln!("messages processed: {}", received);
+        let elapsed: Duration = Instant::now() - start;
+        let elapsed = elapsed.as_millis() as f64 / 1000f64;
+        eprintln!(
+            "throughput (msg/sec): {}",
+            (received as f64 / elapsed) as u64
+        );
     }
-    eprintln!("{}", v)
 }

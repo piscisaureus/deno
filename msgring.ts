@@ -425,6 +425,7 @@ export class MsgRingReceiver extends MsgRingCommon {
     if (this.isReceiving) throw new Error("Already receiving.");
     this.isReceiving = true;
 
+    // Bug: what happens when previous frame not released?
     while (!(this.acquireFrame() & FrameHeader.HasMessageFlag)) {
       this.releaseFrame(this.frameByteLength);
     }
