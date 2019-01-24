@@ -67,7 +67,7 @@ impl Default for MsgRingConfig {
 }
 
 #[derive(Default)]
-struct MsgRingCommon<'buf> {
+struct MsgRing<'buf> {
     pub config: MsgRingConfig,
     pub counters: MsgRingCounters,
 
@@ -85,7 +85,7 @@ struct MsgRingCommon<'buf> {
     pub fill_direction_offset_adjustment: i32,
 }
 
-impl<'buf> MsgRingCommon<'buf> {
+impl<'buf> MsgRing<'buf> {
     pub fn new(buffer: &'buf [u8], config: MsgRingConfig, epoch: i32) -> Self {
         let (fill_direction_base_adjustment, fill_direction_offset_adjustment) =
             match config.fill_direction {
@@ -254,30 +254,30 @@ impl<'buf> MsgRingCommon<'buf> {
 }
 
 pub struct MsgRingSender<'buf> {
-    common: MsgRingCommon<'buf>,
+    ring: MsgRing<'buf>,
 }
 
 impl<'buf> MsgRingSender<'buf> {
     pub fn new(buffer: &'buf [u8], config: MsgRingConfig) -> Self {
         Self {
-            common: MsgRingCommon::new(buffer, config, FrameHeader::EpochInitSender),
+            ring: MsgRing::new(buffer, config, FrameHeader::EpochInitSender),
         }
     }
 
     pub fn begin_send<'a>(&'a mut self, byte_length: usize) -> Send<'a, 'buf> {
-        Send::new(self, byte_length)
+        Send::new(&mut self.ring, byte_length)
     }
 }
 
 pub struct Send<'a, 'buf: 'a> {
-    sender: &'a mut MsgRingSender<'buf>,
+    ring: &'a mut MsgRing<'buf>,
     allocation_byte_length: i32,
 }
 
 impl<'a, 'buf> Send<'a, 'buf> {
-    pub fn new(sender: &'a mut MsgRingSender<'buf>, message_byte_length: usize) -> Self {
+    fn new(ring: &'a mut MsgRing<'buf>, message_byte_length: usize) -> Self {
         let mut this = Self {
-            sender,
+            ring,
             allocation_byte_length: 0,
         };
         this.allocate(message_byte_length);
@@ -289,8 +289,7 @@ impl<'a, 'buf> Send<'a, 'buf> {
     }
 
     pub fn finish(self) -> () {
-        self.sender
-            .common
+        self.ring
             .release_frame(self.allocation_byte_length, FrameHeader::HasMessageFlag);
     }
 
@@ -301,15 +300,12 @@ impl<'a, 'buf> Send<'a, 'buf> {
             FrameAllocation::HeaderByteLength as usize + FrameAllocation::align(byte_length);
         assert!(allocation_byte_length <= FrameHeader::ByteLengthMask as usize);
         self.allocation_byte_length = allocation_byte_length as i32;
-        while self.sender.common.frame_byte_length() < self.allocation_byte_length {
-            if self.sender.common.frame_is_at_end_of_buffer()
-                && self.sender.common.frame_byte_length() > 0
-            {
-                self.sender
-                    .common
-                    .release_frame(self.sender.common.frame_byte_length(), FrameHeader::None);
+        while self.ring.frame_byte_length() < self.allocation_byte_length {
+            if self.ring.frame_is_at_end_of_buffer() && self.ring.frame_byte_length() > 0 {
+                self.ring
+                    .release_frame(self.ring.frame_byte_length(), FrameHeader::None);
             }
-            self.sender.common.acquire_frame();
+            self.ring.acquire_frame();
         }
     }
 }
@@ -318,60 +314,54 @@ impl<'a, 'buf> Deref for Send<'a, 'buf> {
     type Target = [u8];
 
     fn deref(&self) -> &[u8] {
-        self.sender
-            .common
-            .get_message_slice(self.allocation_byte_length)
+        self.ring.get_message_slice(self.allocation_byte_length)
     }
 }
 
 impl<'a, 'buf> DerefMut for Send<'a, 'buf> {
     fn deref_mut(&mut self) -> &mut [u8] {
-        self.sender
-            .common
-            .get_message_slice_mut(self.allocation_byte_length)
+        self.ring.get_message_slice_mut(self.allocation_byte_length)
     }
 }
 
 pub struct MsgRingReceiver<'buf> {
-    common: MsgRingCommon<'buf>,
+    ring: MsgRing<'buf>,
 }
 
 impl<'buf> MsgRingReceiver<'buf> {
     pub fn new(buffer: &'buf [u8], config: MsgRingConfig) -> Self {
         Self {
-            common: MsgRingCommon::new(buffer, config, FrameHeader::EpochInitReceiver),
+            ring: MsgRing::new(buffer, config, FrameHeader::EpochInitReceiver),
         }
     }
 
     pub fn receive<'a>(&'a mut self) -> Receive<'a, 'buf> {
-        Receive::new(self)
+        Receive::new(&mut self.ring)
     }
 }
 
 pub struct Receive<'a, 'buf: 'a> {
-    receiver: &'a mut MsgRingReceiver<'buf>,
+    ring: &'a mut MsgRing<'buf>,
 }
 
 impl<'a, 'buf> Receive<'a, 'buf> {
-    fn new(receiver: &'a mut MsgRingReceiver<'buf>) -> Self {
-        let mut this = Self { receiver };
+    fn new(ring: &'a mut MsgRing<'buf>) -> Self {
+        let mut this = Self { ring };
         this.acquire();
         this
     }
 
     fn acquire(&mut self) -> () {
         // Bug: what happens when previous frame not released?
-        while self.receiver.common.acquire_frame() & FrameHeader::HasMessageFlag == 0 {
-            self.receiver
-                .common
-                .release_frame(self.receiver.common.frame_byte_length(), FrameHeader::None);
+        while self.ring.acquire_frame() & FrameHeader::HasMessageFlag == 0 {
+            self.ring
+                .release_frame(self.ring.frame_byte_length(), FrameHeader::None);
         }
     }
 
     pub fn finish(self) -> () {
-        self.receiver
-            .common
-            .release_frame(self.receiver.common.frame_byte_length(), FrameHeader::None);
+        self.ring
+            .release_frame(self.ring.frame_byte_length(), FrameHeader::None);
     }
 
     pub fn abort(self) -> () {}
@@ -381,9 +371,7 @@ impl<'a, 'buf> Deref for Receive<'a, 'buf> {
     type Target = [u8];
 
     fn deref(&self) -> &[u8] {
-        self.receiver
-            .common
-            .get_message_slice(self.receiver.common.frame_byte_length())
+        self.ring.get_message_slice(self.ring.frame_byte_length())
     }
 }
 
