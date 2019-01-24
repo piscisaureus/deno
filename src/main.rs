@@ -3,7 +3,6 @@ extern crate integer_atomics;
 use integer_atomics::AtomicI32;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::Ordering;
-use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Default)]
 pub struct MsgRingCounters {
@@ -186,7 +185,7 @@ impl<'buf> MsgRingCommon<'buf> {
                 self.counters.spin += 1;
             }
 
-            if sleep {
+            if sleep && false {
                 // TODO
                 //Atomics.wait(this.i32, headerI32Offset, header, futexWaitTime) !==
                 //  "timed-out"
@@ -390,8 +389,11 @@ impl<'a, 'buf> Deref for Receive<'a, 'buf> {
 
 const PER_ROUND: u64 = 1e7 as u64;
 const PER_SUBROUND: usize = 1;
+static mut BUF1: [u8; 10240] = [0; 10240];
+static mut BUF2: [u8; 10240] = [0; 10240];
 
-fn main() {
+#[test]
+fn single_threaded_test() {
     let ab = [0u8; PER_SUBROUND * 100];
     let config = MsgRingConfig {
         ..Default::default()
@@ -425,4 +427,107 @@ fn main() {
             (received as f64 / elapsed) as u64
         );
     }
+}
+
+use std::fmt::Display;
+use std::thread;
+use std::time::{Duration, Instant};
+
+fn test_loop<N: Display, A, B, F: Fn(&mut A, &mut B) -> ()>(
+    name: N,
+    a: &mut A,
+    b: &mut B,
+    f: F,
+) -> () {
+    let tid = thread::current().id();
+    let start = Instant::now();
+    let mut received = 0;
+
+    for round in 0..100 {
+        for _ in (0..PER_ROUND).step_by(PER_SUBROUND) {
+            f(a, b);
+        }
+        received += PER_ROUND;
+        let elapsed: Duration = Instant::now() - start;
+        let elapsed = elapsed.as_millis() as f64 / 1000f64;
+        let throughput = (received as f64 / elapsed) as u64;
+        eprintln!(
+            "{:?}:{}, round {}, count: {}, throughput: {}",
+            tid, name, round, received, throughput
+        );
+    }
+}
+
+#[test]
+fn simplex_flow_test() {
+    let config = MsgRingConfig {
+        ..Default::default()
+    };
+
+    let th1 = thread::spawn(move || {
+        let mut mrs = MsgRingSender::new(unsafe { &BUF1 }, config);
+        test_loop(
+            &"sender",
+            &mut mrs,
+            &mut (),
+            |mrs: &mut MsgRingSender, _| {
+                let send = mrs.begin_send(32);
+                send.finish();
+            },
+        );
+    });
+
+    let th2 = thread::spawn(move || {
+        let mut mrr = MsgRingReceiver::new(unsafe { &BUF1 }, config);
+        test_loop(
+            &"receiver",
+            &mut mrr,
+            &mut (),
+            |mrr: &mut MsgRingReceiver, _| {
+                let recv = mrr.receive();
+                recv.finish();
+            },
+        );
+    });
+
+    th1.join().unwrap();
+    th2.join().unwrap();
+}
+
+//#[test]
+fn main() {
+    let config = MsgRingConfig {
+        ..Default::default()
+    };
+
+    let th1 = thread::spawn(move || {
+        let mut mrs = MsgRingSender::new(unsafe { &BUF1 }, config);
+        let mut mrr = MsgRingReceiver::new(unsafe { &BUF2 }, config);
+        test_loop(
+            &"send..recv",
+            &mut mrs,
+            &mut mrr,
+            |mrs: &mut MsgRingSender, mrr: &mut MsgRingReceiver| {
+                mrs.begin_send(32).finish();
+                mrr.receive().finish();
+            },
+        );
+    });
+
+    let th2 = thread::spawn(move || {
+        let mut mrs = MsgRingSender::new(unsafe { &BUF2 }, config);
+        let mut mrr = MsgRingReceiver::new(unsafe { &BUF1 }, config);
+        test_loop(
+            &"recv..send",
+            &mut mrs,
+            &mut mrr,
+            |mrs: &mut MsgRingSender, mrr: &mut MsgRingReceiver| {
+                mrr.receive().finish();
+                mrs.begin_send(32).finish();
+            },
+        );
+    });
+
+    th1.join().unwrap();
+    th2.join().unwrap();
 }
