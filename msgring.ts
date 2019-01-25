@@ -1,3 +1,7 @@
+// Todo: frame(_head|_tail) -> window.
+// Remove endReceive(false)
+// Copy when wrapping
+
 export type TypedArray =
   | Int8Array
   | Uint8Array

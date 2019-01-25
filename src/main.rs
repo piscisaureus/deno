@@ -67,26 +67,24 @@ impl Default for MsgRingConfig {
 }
 
 #[derive(Default)]
-struct MsgRing<'buf> {
+struct Window<'wnd> {
     pub config: MsgRingConfig,
     pub counters: MsgRingCounters,
 
-    pub buffer: &'buf [u8],
+    pub buffer: &'wnd [u8],
     pub epoch: i32,
-
-    pub test_buf: [u8; 10],
 
     // Head and tail position are in bytes, but always starting at zero and
     // not adjusted for buffer fill direction (see TypeScript implementation).
-    pub frame_tail_position: i32,
-    pub frame_head_position: i32,
+    pub tail_position: i32,
+    pub head_position: i32,
 
     pub fill_direction_base_adjustment: i32,
     pub fill_direction_offset_adjustment: i32,
 }
 
-impl<'buf> MsgRing<'buf> {
-    pub fn new(buffer: &'buf [u8], config: MsgRingConfig, epoch: i32) -> Self {
+impl<'wnd> Window<'wnd> {
+    pub fn new(buffer: &'wnd [u8], config: MsgRingConfig, epoch: i32) -> Self {
         let (fill_direction_base_adjustment, fill_direction_offset_adjustment) =
             match config.fill_direction {
                 FillDirection::TopDown => (0, 1),
@@ -111,22 +109,13 @@ impl<'buf> MsgRing<'buf> {
     }
 
     #[inline]
-    pub fn frame_byte_length(&self) -> i32 {
-        self.frame_head_position - self.frame_tail_position
+    pub fn byte_length(&self) -> i32 {
+        self.head_position - self.tail_position
     }
 
     #[inline]
-    fn frame_is_at_end_of_buffer(&self) -> bool {
-        self.frame_head_position == self.buffer_byte_length()
-    }
-
-    pub fn acquire_frame(&mut self) -> i32 {
-        self.acquire_frame_impl(true)
-    }
-
-    #[allow(dead_code)]
-    pub fn try_acquire_frame(&mut self) -> i32 {
-        self.acquire_frame_impl(false)
+    fn is_at_end_of_buffer(&self) -> bool {
+        self.head_position == self.buffer_byte_length()
     }
 
     #[inline]
@@ -144,19 +133,18 @@ impl<'buf> MsgRing<'buf> {
         header_slot.compare_and_swap(0, target, Ordering::AcqRel);
     }
 
-    #[inline]
-    fn acquire_frame_impl(&mut self, wait: bool) -> i32 {
-        if self.frame_is_at_end_of_buffer() {
-            assert!(self.frame_byte_length() == 0);
+    pub fn acquire_frame(&mut self, wait: bool) -> i32 {
+        if self.is_at_end_of_buffer() {
+            assert!(self.byte_length() == 0);
 
             self.epoch = (self.epoch + FrameHeader::EpochIncrementWrap) & FrameHeader::EpochMask;
 
-            self.frame_head_position = 0;
-            self.frame_tail_position = 0;
+            self.head_position = 0;
+            self.tail_position = 0;
             self.counters.wrap += 1;
         }
 
-        let header_ptr = self.header_ptr(self.frame_head_position);
+        let header_ptr = self.header_ptr(self.head_position);
         let header_slot = unsafe { &mut *(header_ptr as *mut AtomicI32) };
         let mut header = *header_slot.get_mut();
 
@@ -195,9 +183,9 @@ impl<'buf> MsgRing<'buf> {
         }
 
         let byte_length = header & FrameHeader::ByteLengthMask;
-        assert!(byte_length <= self.buffer_byte_length() - self.frame_head_position);
+        assert!(byte_length <= self.buffer_byte_length() - self.head_position);
 
-        self.frame_head_position += byte_length;
+        self.head_position += byte_length;
         self.counters.acquire += 1;
 
         return header;
@@ -205,12 +193,12 @@ impl<'buf> MsgRing<'buf> {
 
     pub fn release_frame(&mut self, byte_length: i32, flags: i32) -> () {
         assert!(byte_length >= FrameAllocation::HeaderByteLength);
-        assert!(byte_length <= self.frame_byte_length());
+        assert!(byte_length <= self.byte_length());
 
         let tail_epoch = self.epoch + FrameHeader::EpochIncrementPass;
         let new_header = byte_length | flags | tail_epoch;
 
-        let header_ptr = self.header_ptr(self.frame_tail_position);
+        let header_ptr = self.header_ptr(self.tail_position);
         let header_slot = unsafe { &mut *(header_ptr as *mut integer_atomics::AtomicI32) };
         let old_header = header_slot.swap(new_header, Ordering::AcqRel);
 
@@ -220,15 +208,15 @@ impl<'buf> MsgRing<'buf> {
             self.counters.wake += 1;
         }
 
-        self.frame_tail_position += byte_length;
+        self.tail_position += byte_length;
     }
 
-    pub fn get_message_slice_impl<'a, 'b: 'buf>(&'a self, frame_byte_length: i32) -> &'b mut [u8] {
+    pub fn get_message_slice_impl(&self, frame_byte_length: i32) -> &mut [u8] {
         let message_byte_length = frame_byte_length - FrameAllocation::HeaderByteLength;
         let message_byte_offset = self.fill_direction_base_adjustment
             * (self.buffer_byte_length() - message_byte_length)
             + self.fill_direction_offset_adjustment
-                * (self.frame_tail_position + FrameAllocation::HeaderByteLength);
+                * (self.tail_position + FrameAllocation::HeaderByteLength);
         let message_end = message_byte_offset + message_byte_length;
         let message_frame = &self.buffer[message_byte_offset as usize..message_end as usize];
         unsafe {
@@ -237,47 +225,44 @@ impl<'buf> MsgRing<'buf> {
             // this transmute isn't pretty and appears to be un-idiomatic.
             // TODO: use more idiomatic rust.
             #[allow(mutable_transmutes)]
-            std::mem::transmute::<&[u8], &'b mut [u8]>(message_frame)
+            std::mem::transmute::<&[u8], &mut [u8]>(message_frame)
         }
     }
 
-    pub fn get_message_slice<'a, 'b: 'buf>(&'a self, frame_byte_length: i32) -> &'b [u8] {
+    pub fn get_message_slice(&self, frame_byte_length: i32) -> &[u8] {
         self.get_message_slice_impl(frame_byte_length)
     }
 
-    pub fn get_message_slice_mut<'a, 'b: 'buf>(
-        &'a mut self,
-        frame_byte_length: i32,
-    ) -> &'b mut [u8] {
+    pub fn get_message_slice_mut(&mut self, frame_byte_length: i32) -> &mut [u8] {
         self.get_message_slice_impl(frame_byte_length)
     }
 }
 
-pub struct MsgRingSender<'buf> {
-    ring: MsgRing<'buf>,
+pub struct MsgRingSender<'wnd> {
+    window: Window<'wnd>,
 }
 
-impl<'buf> MsgRingSender<'buf> {
-    pub fn new(buffer: &'buf [u8], config: MsgRingConfig) -> Self {
+impl<'wnd> MsgRingSender<'wnd> {
+    pub fn new(buffer: &'wnd [u8], config: MsgRingConfig) -> Self {
         Self {
-            ring: MsgRing::new(buffer, config, FrameHeader::EpochInitSender),
+            window: Window::new(buffer, config, FrameHeader::EpochInitSender),
         }
     }
 
-    pub fn begin_send<'a>(&'a mut self, byte_length: usize) -> Send<'a, 'buf> {
-        Send::new(&mut self.ring, byte_length)
+    pub fn compose<'msg>(&'msg mut self, byte_length: usize) -> Send<'msg, 'wnd> {
+        Send::new(&mut self.window, byte_length)
     }
 }
 
-pub struct Send<'a, 'buf: 'a> {
-    ring: &'a mut MsgRing<'buf>,
+pub struct Send<'msg, 'wnd: 'msg> {
+    window: &'msg mut Window<'wnd>,
     allocation_byte_length: i32,
 }
 
-impl<'a, 'buf> Send<'a, 'buf> {
-    fn new(ring: &'a mut MsgRing<'buf>, message_byte_length: usize) -> Self {
+impl<'msg, 'wnd> Send<'msg, 'wnd> {
+    fn new(window: &'msg mut Window<'wnd>, message_byte_length: usize) -> Self {
         let mut this = Self {
-            ring,
+            window,
             allocation_byte_length: 0,
         };
         this.allocate(message_byte_length);
@@ -288,234 +273,209 @@ impl<'a, 'buf> Send<'a, 'buf> {
         self.allocate(message_byte_length)
     }
 
-    pub fn finish(self) -> () {
-        self.ring
+    pub fn send(self) -> () {
+        self.window
             .release_frame(self.allocation_byte_length, FrameHeader::HasMessageFlag);
     }
 
-    pub fn abort(self) -> () {}
+    pub fn dispose(self) -> () {}
 
     fn allocate(&mut self, byte_length: usize) {
         let allocation_byte_length =
             FrameAllocation::HeaderByteLength as usize + FrameAllocation::align(byte_length);
         assert!(allocation_byte_length <= FrameHeader::ByteLengthMask as usize);
         self.allocation_byte_length = allocation_byte_length as i32;
-        while self.ring.frame_byte_length() < self.allocation_byte_length {
-            if self.ring.frame_is_at_end_of_buffer() && self.ring.frame_byte_length() > 0 {
-                self.ring
-                    .release_frame(self.ring.frame_byte_length(), FrameHeader::None);
+        while self.window.byte_length() < self.allocation_byte_length {
+            if self.window.is_at_end_of_buffer() && self.window.byte_length() > 0 {
+                self.window
+                    .release_frame(self.window.byte_length(), FrameHeader::None);
             }
-            self.ring.acquire_frame();
+            self.window.acquire_frame(true);
         }
     }
 }
 
-impl<'a, 'buf> Deref for Send<'a, 'buf> {
+impl<'msg, 'wnd> Deref for Send<'msg, 'wnd> {
     type Target = [u8];
 
     fn deref(&self) -> &[u8] {
-        self.ring.get_message_slice(self.allocation_byte_length)
+        self.window.get_message_slice(self.allocation_byte_length)
     }
 }
 
-impl<'a, 'buf> DerefMut for Send<'a, 'buf> {
+impl<'msg, 'wnd> DerefMut for Send<'msg, 'wnd> {
     fn deref_mut(&mut self) -> &mut [u8] {
-        self.ring.get_message_slice_mut(self.allocation_byte_length)
+        self.window
+            .get_message_slice_mut(self.allocation_byte_length)
     }
 }
 
-pub struct MsgRingReceiver<'buf> {
-    ring: MsgRing<'buf>,
+pub struct MsgRingReceiver<'wnd> {
+    window: Window<'wnd>,
 }
 
-impl<'buf> MsgRingReceiver<'buf> {
-    pub fn new(buffer: &'buf [u8], config: MsgRingConfig) -> Self {
+impl<'wnd> MsgRingReceiver<'wnd> {
+    pub fn new(buffer: &'wnd [u8], config: MsgRingConfig) -> Self {
         Self {
-            ring: MsgRing::new(buffer, config, FrameHeader::EpochInitReceiver),
+            window: Window::new(buffer, config, FrameHeader::EpochInitReceiver),
         }
     }
 
-    pub fn receive<'a>(&'a mut self) -> Receive<'a, 'buf> {
-        Receive::new(&mut self.ring)
+    pub fn receive<'msg>(&'msg mut self) -> Receive<'msg, 'wnd> {
+        Receive::new(&mut self.window)
     }
 }
 
-pub struct Receive<'a, 'buf: 'a> {
-    ring: &'a mut MsgRing<'buf>,
+pub struct Receive<'msg, 'wnd: 'msg> {
+    window: &'msg mut Window<'wnd>,
 }
 
-impl<'a, 'buf> Receive<'a, 'buf> {
-    fn new(ring: &'a mut MsgRing<'buf>) -> Self {
-        let mut this = Self { ring };
+impl<'msg, 'wnd> Receive<'msg, 'wnd> {
+    fn new(window: &'msg mut Window<'wnd>) -> Self {
+        let mut this = Self { window };
         this.acquire();
         this
     }
 
     fn acquire(&mut self) -> () {
         // Bug: what happens when previous frame not released?
-        while self.ring.acquire_frame() & FrameHeader::HasMessageFlag == 0 {
-            self.ring
-                .release_frame(self.ring.frame_byte_length(), FrameHeader::None);
+        while self.window.acquire_frame(true) & FrameHeader::HasMessageFlag == 0 {
+            self.window
+                .release_frame(self.window.byte_length(), FrameHeader::None);
         }
     }
 
-    pub fn finish(self) -> () {
-        self.ring
-            .release_frame(self.ring.frame_byte_length(), FrameHeader::None);
+    fn release(&mut self) -> () {
+        self.window
+            .release_frame(self.window.byte_length(), FrameHeader::None);
     }
 
-    pub fn abort(self) -> () {}
+    pub fn dispose(mut self) -> () {
+        self.release()
+    }
 }
 
-impl<'a, 'buf> Deref for Receive<'a, 'buf> {
+impl<'msg, 'wnd> Deref for Receive<'msg, 'wnd> {
     type Target = [u8];
 
     fn deref(&self) -> &[u8] {
-        self.ring.get_message_slice(self.ring.frame_byte_length())
+        self.window.get_message_slice(self.window.byte_length())
     }
 }
 
-const PER_ROUND: u64 = 1e7 as u64;
-const PER_SUBROUND: usize = 1;
-static mut BUF1: [u8; 10240] = [0; 10240];
-static mut BUF2: [u8; 10240] = [0; 10240];
+impl<'msg, 'wnd> Drop for Receive<'msg, 'wnd> {
+    fn drop(&mut self) -> () {
+        self.release();
+    }
+}
 
-#[test]
-fn single_threaded_test() {
-    let ab = [0u8; PER_SUBROUND * 100];
-    let config = MsgRingConfig {
-        ..Default::default()
-    };
-    let mut mq_in = MsgRingReceiver::new(&ab, config);
-    let mut mq_out = MsgRingSender::new(&ab, config);
+#[cfg(test)]
+#[macro_use]
+extern crate lazy_static;
 
-    let start = Instant::now();
-    let mut received = 0;
+#[cfg(test)]
+mod test {
+    use super::{MsgRingConfig, MsgRingReceiver, MsgRingSender};
+    use std::sync::{Mutex, MutexGuard};
+    use std::thread;
+    use std::time::{Duration, Instant};
 
-    for round in 0..100 {
-        eprintln!("====== single-thread round {} ======", round);
-        for _ in (0..PER_ROUND).step_by(PER_SUBROUND) {
-            let out_len = 32;
-            for _ in 0..PER_SUBROUND {
-                let mut sl = mq_out.begin_send(out_len);
-                sl[3] = 4;
-                sl.finish();
+    const ROUNDS: usize = 10;
+    const PER_ROUND: usize = 1e7 as usize;
+
+    #[test] // TODO: use #[bench].
+    fn uni_flow_benchmark() {
+        let _guard = unparallelize_test();
+
+        static mut BUF: [u8; 10240] = [0; 10240];
+
+        let config = MsgRingConfig {
+            ..Default::default()
+        };
+
+        let th1 = thread::spawn(move || {
+            let mut mrs = MsgRingSender::new(unsafe { &BUF }, config);
+            benchmark_loop("sender", &mut mrs, |mrs| {
+                let mut send = mrs.compose(32);
+                send.send();
+            });
+        });
+
+        let th2 = thread::spawn(move || {
+            let mut mrr = MsgRingReceiver::new(unsafe { &BUF }, config);
+            benchmark_loop("receiver", &mut mrr, |mrr| {
+                mrr.receive();
+            });
+        });
+
+        th1.join().unwrap();
+        th2.join().unwrap();
+    }
+
+    #[test] // TODO: use #[bench]
+    fn ping_pong_benchmark() {
+        let _guard = unparallelize_test();
+
+        static mut BUF1: [u8; 10240] = [0; 10240];
+        static mut BUF2: [u8; 10240] = [0; 10240];
+
+        let config = MsgRingConfig {
+            ..Default::default()
+        };
+
+        let th1 = thread::spawn(move || {
+            let mut mrs = MsgRingSender::new(unsafe { &BUF1 }, config);
+            let mut mrr = MsgRingReceiver::new(unsafe { &BUF2 }, config);
+            benchmark_loop("send..recv", &mut (&mut mrs, &mut mrr), |(mrs, mrr)| {
+                mrs.compose(32).send();
+                mrr.receive();
+            });
+        });
+
+        let th2 = thread::spawn(move || {
+            let mut mrs = MsgRingSender::new(unsafe { &BUF2 }, config);
+            let mut mrr = MsgRingReceiver::new(unsafe { &BUF1 }, config);
+            benchmark_loop("recv..send", &mut (&mut mrs, &mut mrr), |(mrs, mrr)| {
+                mrr.receive();
+                mrs.compose(32).send();
+            });
+        });
+
+        th1.join().unwrap();
+        th2.join().unwrap();
+    }
+
+    fn unparallelize_test() -> MutexGuard<'static, ()> {
+        lazy_static! {
+            static ref m: Mutex<()> = Mutex::new(());
+        };
+        m.lock().unwrap()
+    }
+
+    fn benchmark_loop<A, F: Fn(&mut A) -> ()>(name: &str, a: &mut A, f: F) -> () {
+        let tid = thread::current().id();
+
+        for round in 0..ROUNDS {
+            let start_time = Instant::now();
+
+            for _ in 0..PER_ROUND {
+                f(a);
             }
-            for _ in 0..PER_SUBROUND {
-                let sl = mq_in.receive();
-                sl.finish();
-            }
+
+            let elapsed_time: Duration = Instant::now() - start_time;
+            let elapsed_time = elapsed_time.as_millis() as f64 / 1000f64;
+            let rate = (PER_ROUND as f64 / elapsed_time) as u64;
+            eprintln!(
+                "round {}, {:?}, {}, count: {}, rate: {} s\u{207b}\u{b9}",
+                round, tid, name, PER_ROUND, rate
+            );
         }
-        received += PER_ROUND;
-        eprintln!("messages processed: {}", received);
-        let elapsed: Duration = Instant::now() - start;
-        let elapsed = elapsed.as_millis() as f64 / 1000f64;
-        eprintln!(
-            "throughput (msg/sec): {}",
-            (received as f64 / elapsed) as u64
-        );
     }
 }
 
-use std::fmt::Display;
-use std::thread;
-use std::time::{Duration, Instant};
-
-fn test_loop<N: Display, A, B, F: Fn(&mut A, &mut B) -> ()>(
-    name: N,
-    a: &mut A,
-    b: &mut B,
-    f: F,
-) -> () {
-    let tid = thread::current().id();
-    let start = Instant::now();
-    let mut received = 0;
-
-    for round in 0..100 {
-        for _ in (0..PER_ROUND).step_by(PER_SUBROUND) {
-            f(a, b);
-        }
-        received += PER_ROUND;
-        let elapsed: Duration = Instant::now() - start;
-        let elapsed = elapsed.as_millis() as f64 / 1000f64;
-        let throughput = (received as f64 / elapsed) as u64;
-        eprintln!(
-            "{:?}:{}, round {}, count: {}, throughput: {}",
-            tid, name, round, received, throughput
-        );
-    }
-}
-
-#[test]
-fn simplex_flow_test() {
-    let config = MsgRingConfig {
-        ..Default::default()
-    };
-
-    let th1 = thread::spawn(move || {
-        let mut mrs = MsgRingSender::new(unsafe { &BUF1 }, config);
-        test_loop(
-            &"sender",
-            &mut mrs,
-            &mut (),
-            |mrs: &mut MsgRingSender, _| {
-                let send = mrs.begin_send(32);
-                send.finish();
-            },
-        );
-    });
-
-    let th2 = thread::spawn(move || {
-        let mut mrr = MsgRingReceiver::new(unsafe { &BUF1 }, config);
-        test_loop(
-            &"receiver",
-            &mut mrr,
-            &mut (),
-            |mrr: &mut MsgRingReceiver, _| {
-                let recv = mrr.receive();
-                recv.finish();
-            },
-        );
-    });
-
-    th1.join().unwrap();
-    th2.join().unwrap();
-}
-
-//#[test]
-fn main() {
-    let config = MsgRingConfig {
-        ..Default::default()
-    };
-
-    let th1 = thread::spawn(move || {
-        let mut mrs = MsgRingSender::new(unsafe { &BUF1 }, config);
-        let mut mrr = MsgRingReceiver::new(unsafe { &BUF2 }, config);
-        test_loop(
-            &"send..recv",
-            &mut mrs,
-            &mut mrr,
-            |mrs: &mut MsgRingSender, mrr: &mut MsgRingReceiver| {
-                mrs.begin_send(32).finish();
-                mrr.receive().finish();
-            },
-        );
-    });
-
-    let th2 = thread::spawn(move || {
-        let mut mrs = MsgRingSender::new(unsafe { &BUF2 }, config);
-        let mut mrr = MsgRingReceiver::new(unsafe { &BUF1 }, config);
-        test_loop(
-            &"recv..send",
-            &mut mrs,
-            &mut mrr,
-            |mrs: &mut MsgRingSender, mrr: &mut MsgRingReceiver| {
-                mrr.receive().finish();
-                mrs.begin_send(32).finish();
-            },
-        );
-    });
-
-    th1.join().unwrap();
-    th2.join().unwrap();
-}
+//fn main() {
+//    let sl = [0u8; 23];
+//    let a = &sl[..];
+//    let b = Box::new(a.into_boxed_slice());
+//    println!("size:{}", std::mem::size_of_val(&*b));
+//}
