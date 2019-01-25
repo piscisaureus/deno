@@ -76,14 +76,10 @@ async function extra(stopBuf: Uint32Array) {
       let outLen = (Math.ceil(Math.random() * 30) | 0) + 8;
       for (let j = 0; j < PER_SUBROUND; j++) {
         let slOut = mqOut.beginSend(outLen);
-        i32[slOut.byteOffset / 4 + 1] = 1e6 + 1e3 * (i % 10) + j;
-        i32[slOut.byteOffset / 4 + 2] = 0;
         mqOut.endSend();
       }
       for (let j = 0; j < PER_SUBROUND; j++) {
         let slIn = mqIn.beginReceive();
-        i32[slIn.byteOffset / 4 + 1] *= -1;
-        i32[slIn.byteOffset / 4 + 2] = -(1e6 + 1e3 * (i % 10) + j);
         mqIn.endReceive();
       }
     }

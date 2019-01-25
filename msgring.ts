@@ -1,7 +1,3 @@
-// Todo: frame(_head|_tail) -> window.
-// Remove endReceive(false)
-// Copy when wrapping
-
 export type TypedArray =
   | Int8Array
   | Uint8Array
@@ -119,18 +115,18 @@ abstract class MsgRingCommon extends MsgRingDefaultConfig {
   // Initialization is role-dependent, so it's done by our subclasses.
   protected epoch!: number;
 
-  // The head and tail position indicate the range of bytes (frame) that is
-  // locked by this receiver/sender. The value indicates the offset in bytes
-  // from the start of the ring buffer, ***NOT*** adjusted for fill direction of
-  // the buffer. Hence the first frame always starts at position 0.
-  protected frameHeadPosition: number = 0;
-  protected frameTailPosition: number = 0;
+  // The head and tail position of the 'window': the range of bytes locked by a
+  // sender/receiver. The value indicates the offset in bytes from the start of
+  // ring buffer, ***NOT*** adjusted for fill direction of the buffer. Hence
+  // the initial (empty) window always starts and ends at position 0.
+  protected windowHeadPosition: number = 0;
+  protected windowTailPosition: number = 0;
 
-  // The frame byte length and whether it's at the end of the buffer can be
+  // The window's byte length and whether it's at the end of the buffer can be
   // computed from the head and tail position. However we store them because
   // they are used often.
-  protected frameByteLength: number = 0;
-  protected frameIsAtEndOfBuffer: boolean = false;
+  protected windowByteLength: number = 0;
+  protected windowIsAtEndOfBuffer: boolean = false;
 
   // Counters for debugging.
   protected messageCounter: number = 0;
@@ -207,11 +203,11 @@ abstract class MsgRingCommon extends MsgRingDefaultConfig {
 
   protected acquireFrame(wait = true): number {
     // Wrap around if the current head position is at the end of the buffer.
-    if (this.frameIsAtEndOfBuffer) {
-      // A frame can't wrap around the end of the buffer; if the current frame
+    if (this.windowIsAtEndOfBuffer) {
+      // A frame can't wrap around the end of the buffer; if the current window
       // is at the end of the buffer, the caller should release the remaining
-      // bytes before attempting to acquire a new frame.
-      this.assert(this.frameByteLength === 0);
+      // bytes before attempting to grow the window.
+      this.assert(this.windowByteLength === 0);
 
       // Increment the epoch number. Note that the epoch number itself wraps
       // around on overflow, this is intentional.
@@ -219,13 +215,13 @@ abstract class MsgRingCommon extends MsgRingDefaultConfig {
         (this.epoch + FrameHeader.EpochIncrementWrap) & FrameHeader.EpochMask;
 
       // Rewind the current frame to the start of the ring buffer.
-      this.frameHeadPosition = 0;
-      this.frameTailPosition = 0;
-      this.frameIsAtEndOfBuffer = false;
+      this.windowHeadPosition = 0;
+      this.windowTailPosition = 0;
+      this.windowIsAtEndOfBuffer = false;
       this.wrapCounter++;
     }
 
-    const headerI32Offset = this.getHeaderI32Offset(this.frameHeadPosition);
+    const headerI32Offset = this.getHeaderI32Offset(this.windowHeadPosition);
     let header = this.i32[headerI32Offset];
 
     let spinCountRemaining: number = this.spinCount;
@@ -278,12 +274,12 @@ abstract class MsgRingCommon extends MsgRingDefaultConfig {
     }
 
     const byteLength = header & FrameHeader.ByteLengthMask;
-    this.assert(byteLength <= this.bufferByteLength - this.frameHeadPosition);
+    this.assert(byteLength <= this.bufferByteLength - this.windowHeadPosition);
 
-    this.frameHeadPosition += byteLength;
-    this.frameByteLength += byteLength;
-    this.frameIsAtEndOfBuffer =
-      this.frameHeadPosition === this.bufferByteLength;
+    this.windowHeadPosition += byteLength;
+    this.windowByteLength += byteLength;
+    this.windowIsAtEndOfBuffer =
+      this.windowHeadPosition === this.bufferByteLength;
     this.acquireCounter++;
 
     return header;
@@ -291,12 +287,12 @@ abstract class MsgRingCommon extends MsgRingDefaultConfig {
 
   protected releaseFrame(byteLength: number, flags: number = 0): void {
     this.assert(byteLength >= FrameAllocation.HeaderByteLength);
-    this.assert(byteLength <= this.frameByteLength);
+    this.assert(byteLength <= this.windowByteLength);
 
     const tailEpoch = this.epoch + FrameHeader.EpochIncrementPass;
     const newHeader = byteLength | flags | tailEpoch;
 
-    const headerI32Offset = this.getHeaderI32Offset(this.frameTailPosition);
+    const headerI32Offset = this.getHeaderI32Offset(this.windowTailPosition);
     const oldHeader = Atomics.exchange(this.i32, headerI32Offset, newHeader);
 
     if (oldHeader & FrameHeader.HasWaitersFlag) {
@@ -304,12 +300,12 @@ abstract class MsgRingCommon extends MsgRingDefaultConfig {
       this.wakeCounter++;
     }
 
-    this.frameTailPosition += byteLength;
-    this.frameByteLength -= byteLength;
+    this.windowTailPosition += byteLength;
+    this.windowByteLength -= byteLength;
   }
 
-  // Returns the byte offset of the header from the frame position, adjusted for
-  // the fill direction of the buffer.
+  // Returns the byte offset of a frame header, adjusted for the fill direction
+  // of the buffer, given it's position.
   protected getHeaderI32Offset(position: number): number {
     const headerByteOffset: number =
       this.fillDirectionBaseAdjustment *
@@ -330,7 +326,7 @@ abstract class MsgRingCommon extends MsgRingDefaultConfig {
       this.fillDirectionBaseAdjustment *
         (this.bufferByteLength - messageByteLength) +
       this.fillDirectionOffsetAdjustment *
-        (this.frameTailPosition + FrameAllocation.HeaderByteLength);
+        (this.windowTailPosition + FrameAllocation.HeaderByteLength);
 
     return {
       byteOffset: messageByteOffset,
@@ -403,12 +399,12 @@ export class MsgRingSender extends MsgRingCommon {
     this.allocationByteLength =
       FrameAllocation.HeaderByteLength + this.align(messageByteLength);
 
-    while (this.frameByteLength < this.allocationByteLength) {
+    while (this.windowByteLength < this.allocationByteLength) {
       // An allocation can't wrap around the end of the ring buffer.
-      if (this.frameIsAtEndOfBuffer && this.frameByteLength > 0) {
+      if (this.windowIsAtEndOfBuffer && this.windowByteLength > 0) {
         // Discard the allocation we've made so far. The allocation process will
         // restart at the beginning of the ring buffer.
-        this.releaseFrame(this.frameByteLength);
+        this.releaseFrame(this.windowByteLength);
       }
       // Consume the next frame to get closer to the target allocation length.
       this.acquireFrame();
@@ -423,44 +419,35 @@ export class MsgRingSender extends MsgRingCommon {
 
 export class MsgRingReceiver extends MsgRingCommon {
   protected epoch: number = FrameHeader.EpochInitReceiver;
-  private isReceiving: boolean = false;
 
   beginReceive(): Slice {
-    if (this.isReceiving) throw new Error("Already receiving.");
-    this.isReceiving = true;
-
-    // Bug: what happens when previous frame not released?
-    while (!(this.acquireFrame() & FrameHeader.HasMessageFlag)) {
-      this.releaseFrame(this.frameByteLength);
+    if (this.windowByteLength !== FrameAllocation.None) {
+      throw new Error("Already receiving.");
     }
-    return this.getMessageSlice(this.frameByteLength);
+    while (!(this.acquireFrame() & FrameHeader.HasMessageFlag)) {
+      this.releaseFrame(this.windowByteLength);
+    }
+    return this.getMessageSlice(this.windowByteLength);
   }
 
-  endReceive(release = true): void {
-    if (!this.isReceiving) throw new Error("Not receiving.");
-    this.isReceiving = false;
-
-    if (release) {
-      this.releaseFrame(this.frameByteLength);
-      this.messageCounter++;
+  endReceive(): void {
+    if (this.windowByteLength === FrameAllocation.None) {
+      throw new Error("Not receiving.");
     }
+    this.releaseFrame(this.windowByteLength);
+    this.messageCounter++;
   }
 
   receive<T extends TypedArray>(ctor: TypedArrayConstructor<T>): T {
     const messageSlice = this.beginReceive();
-    let copy: T | undefined;
-    try {
-      // TODO: This is slow (>2x slowdown); find a more efficient solution.
-      let view: T = new ctor(
-        this.buffer,
-        messageSlice.byteOffset,
-        messageSlice.byteLength / ctor.BYTES_PER_ELEMENT
-      );
-      copy = new ctor(view);
-      return copy;
-    } finally {
-      // Only release the frame if creating the view succeeded.
-      this.endReceive(copy !== undefined);
-    }
+    // Create a view of the the requested type on the ring's backing buffer.
+    // TODO: This is slow (>2x slowdown); find a more efficient solution.
+    const view: T = new ctor(
+      this.buffer,
+      messageSlice.byteOffset,
+      messageSlice.byteLength / ctor.BYTES_PER_ELEMENT
+    );
+    // Copy the view, implicitly creating a new allocation backing buffer.
+    return new ctor(view);
   }
 }
