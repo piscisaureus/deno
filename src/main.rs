@@ -473,9 +473,3 @@ mod test {
     }
 }
 
-//fn main() {
-//    let sl = [0u8; 23];
-//    let a = &sl[..];
-//    let b = Box::new(a.into_boxed_slice());
-//    println!("size:{}", std::mem::size_of_val(&*b));
-//}
