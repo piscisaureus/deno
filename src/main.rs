@@ -1,12 +1,15 @@
+//#![feature(integer_atomics)]
+//use std::sync::atomic::AtomicI32;
+
+extern crate integer_atomics;
+use integer_atomics::AtomicI32;
+
 use std::marker;
 use std::mem::{forget, size_of};
 use std::ops::{Add, BitAnd, Deref, DerefMut, Not, Sub};
 use std::slice;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-
-extern crate integer_atomics;
-use integer_atomics::AtomicI32;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Counters {
@@ -533,6 +536,15 @@ mod test {
     const ROUNDS: usize = 10;
     const PER_ROUND: usize = 5e5 as usize;
 
+    trait AsFloat {
+        fn as_float(&self) -> f64;
+    }
+    impl AsFloat for Duration {
+        fn as_float(&self) -> f64 {
+            self.as_secs() as f64 + self.subsec_nanos() as f64 / 1e9
+        }
+    }
+
     #[test] // TODO: use #[bench].
     fn uni_flow_benchmark() {
         let _guard = unparallelize_test();
@@ -606,7 +618,7 @@ mod test {
             }
 
             let elapsed_time: Duration = Instant::now() - start_time;
-            let elapsed_time = elapsed_time.as_millis() as f64 / 1000f64;
+            let elapsed_time = elapsed_time.as_float();
             let rate = (PER_ROUND as f64 / elapsed_time) as u64;
             eprintln!(
                 "round {}, {:?}, {}, count: {}, rate: {} s\u{207b}\u{b9}",
