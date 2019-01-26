@@ -15,10 +15,12 @@ pub mod flags;
 mod fs;
 mod http_body;
 mod http_util;
+
 pub mod isolate;
 pub mod js_errors;
 pub mod libdeno;
 pub mod msg;
+pub mod msg_ring;
 pub mod msg_util;
 pub mod ops;
 pub mod permissions;

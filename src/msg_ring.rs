@@ -135,7 +135,7 @@ impl Buffer {
     }
   }
 
-  pub unsafe fn from_raw(ptr: *mut u8, byte_length: usize) -> Self {
+  pub unsafe fn from_raw_parts(ptr: *mut u8, byte_length: usize) -> Self {
     assert!(byte_length.is_aligned(FrameAllocation::Alignment as usize));
     Self {
       ptr,
@@ -465,7 +465,7 @@ impl<'msg> Send<'msg> {
           .window
           .release_frame(self.window.byte_length(), FrameHeader::None);
       }
-      self.window .acquire_frame(true);
+      self.window.acquire_frame(true);
     }
   }
 }
@@ -550,10 +550,6 @@ impl<'msg> Drop for Receive<'msg> {
     self.release();
   }
 }
-
-#[cfg(test)]
-#[macro_use]
-extern crate lazy_static;
 
 #[cfg(test)]
 mod test {
@@ -663,8 +659,3 @@ mod test {
     m.lock().unwrap()
   }
 }
-
-enum Role { A { const F:  u8 = 9; }, B } 
-trait EndPoint {type Y;} 
-impl EndPoint<Y= Role::A> {  }
-

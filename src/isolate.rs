@@ -12,6 +12,7 @@ use crate::flags;
 use crate::js_errors::JSError;
 use crate::libdeno;
 use crate::msg;
+use crate::msg_ring;
 use crate::permissions::DenoPermissions;
 use crate::tokio_util;
 
@@ -24,6 +25,7 @@ use std::cell::Cell;
 use std::env;
 use std::ffi::CStr;
 use std::ffi::CString;
+use std::mem;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -160,6 +162,8 @@ pub struct Metrics {
 static DENO_INIT: Once = ONCE_INIT;
 
 impl Isolate {
+  const SHARED_BUF_LEN: usize = 4 << 20; // 4 mb.
+
   pub fn new(
     snapshot: libdeno::deno_buf,
     state: Arc<IsolateState>,
@@ -168,10 +172,23 @@ impl Isolate {
     DENO_INIT.call_once(|| {
       unsafe { libdeno::deno_init() };
     });
+    // Allocate unmanaged memory for the shared buffer by creating a Vec<u8>,
+    // grabbing the raw pointer, and then leaking the Vec so it is never freed.
+    let mut vec = Vec::<u8>::new();
+    vec.resize(Self::SHARED_BUF_LEN, 0);
+    let ptr = vec.as_mut_ptr();
+    let len = vec.len();
+    mem::forget(vec);
+    // This wrapper will be used by the message ring on the rust side.
+    // TODO: cut in pieces.
+    let _shared_buf_rs = unsafe { msg_ring::Buffer::from_raw_parts(ptr, len) };
+    // This deno_buf will be sent to the javascript side.
+    let shared_buf_js = unsafe { libdeno::deno_buf::from_raw_parts(ptr, len) };
+    // Create the libdeno isolate.
     let config = libdeno::deno_config {
       will_snapshot: 0,
       load_snapshot: snapshot,
-      shared: libdeno::deno_buf::empty(), // TODO Use for message passing.
+      shared: shared_buf_js,
       recv_cb: pre_dispatch,
       resolve_cb,
     };
