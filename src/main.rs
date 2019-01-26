@@ -8,6 +8,58 @@ use std::sync::Arc;
 extern crate integer_atomics;
 use integer_atomics::AtomicI32;
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Counters {
+    pub message: usize,
+    pub acquire: usize,
+    pub release: usize,
+    pub spin: usize,
+    pub wait: usize,
+    pub wake: usize,
+    pub wrap: usize,
+}
+
+#[derive(Clone, Copy)]
+pub enum FillDirection {
+    TopDown,
+    BottomUp,
+}
+
+trait MapOffset {
+    fn map_offset(&self, offset: usize, length: usize, end: usize) -> usize;
+}
+
+impl MapOffset for FillDirection {
+    fn map_offset(&self, offset: usize, length: usize, end: usize) -> usize {
+        match self {
+            FillDirection::TopDown => offset,
+            FillDirection::BottomUp => end - length - offset,
+        }
+    }
+}
+
+struct FrameAllocation;
+#[allow(non_upper_case_globals)]
+impl FrameAllocation {
+    pub const Alignment: usize = 8;
+    pub const HeaderByteLength: usize = 8;
+}
+
+struct FrameHeader;
+#[allow(non_upper_case_globals)]
+impl FrameHeader {
+    // Using i32 since that's what's used on the JS side.
+    pub const None: i32 = 0x00000000;
+    pub const ByteLengthMask: i32 = 0x00ffffff;
+    pub const EpochMask: i32 = 0x03000000;
+    pub const EpochInitSender: i32 = 0x00000000;
+    pub const EpochInitReceiver: i32 = 0x01000000;
+    pub const EpochIncrementPass: i32 = 0x01000000;
+    pub const EpochIncrementWrap: i32 = 0x02000000;
+    pub const HasMessageFlag: i32 = 0x04000000;
+    pub const HasWaitersFlag: i32 = 0x08000000;
+}
+
 trait Align<T> {
     fn align(self, to: T) -> Self;
     fn is_aligned(self, to: T) -> bool;
@@ -33,87 +85,50 @@ where
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-pub struct MsgRingCounters {
-    pub message: usize,
-    pub acquire: usize,
-    pub release: usize,
-    pub spin: usize,
-    pub wait: usize,
-    pub wake: usize,
-    pub wrap: usize,
-}
-
-#[derive(Clone, Copy)]
-pub enum FillDirection {
-    TopDown,
-    BottomUp,
-}
-
-struct FrameAllocation;
-#[allow(non_upper_case_globals)]
-impl FrameAllocation {
-    pub const Alignment: usize = 8;
-    pub const HeaderByteLength: usize = 8;
-}
-
-struct FrameHeader;
-#[allow(non_upper_case_globals)]
-impl FrameHeader {
-    // Using i32 since that's what's used on the JS side.
-    pub const None: i32 = 0x00000000;
-    pub const ByteLengthMask: i32 = 0x00ffffff;
-    pub const EpochMask: i32 = 0x03000000;
-    pub const EpochInitSender: i32 = 0x00000000;
-    pub const EpochInitReceiver: i32 = 0x01000000;
-    pub const EpochIncrementPass: i32 = 0x01000000;
-    pub const EpochIncrementWrap: i32 = 0x02000000;
-    pub const HasMessageFlag: i32 = 0x04000000;
-    pub const HasWaitersFlag: i32 = 0x08000000;
-}
-
-enum PointerOwned {
-    NotOwned,
-    Owned {
+enum Dealloc {
+    Void,
+    Vec {
         ptr: *mut u8,
         len: usize,
         cap: usize,
     },
 }
 
-impl Drop for PointerOwned {
+impl Drop for Dealloc {
     fn drop(&mut self) {
-        if let &mut PointerOwned::Owned { ptr, len, cap } = self {
+        if let &mut Dealloc::Vec { ptr, len, cap } = self {
             unsafe { Vec::<u8>::from_raw_parts(ptr, len, cap) };
         }
     }
 }
 
-pub struct MsgRingBuffer {
+pub struct Buffer {
     ptr: *mut u8,
     byte_length: usize,
-    owned: Arc<PointerOwned>,
+    dealloc: Arc<Dealloc>,
 }
 
-unsafe impl marker::Send for MsgRingBuffer {}
+unsafe impl marker::Send for Buffer {}
 
-impl MsgRingBuffer {
+impl Buffer {
     pub fn new(byte_length: usize) -> Self {
         assert!(byte_length > 0);
         assert!(byte_length.is_aligned(FrameAllocation::Alignment));
+
         let mut vec: Vec<u8> = Vec::new();
         vec.resize(byte_length, 0);
         let ptr = vec.as_mut_ptr();
-        let owned = PointerOwned::Owned {
+        let dealloc = Dealloc::Vec {
             ptr,
             len: vec.len(),
             cap: vec.capacity(),
         };
         forget(vec);
+
         Self {
             ptr,
             byte_length,
-            owned: Arc::new(owned),
+            dealloc: Arc::new(dealloc),
         }
     }
 
@@ -122,15 +137,15 @@ impl MsgRingBuffer {
         Self {
             ptr,
             byte_length,
-            owned: Arc::new(PointerOwned::NotOwned),
+            dealloc: Arc::new(Dealloc::Void),
         }
     }
 
-    unsafe fn dup(&mut self) -> Self {
+    unsafe fn dup(&self) -> Self {
         Self {
             ptr: self.ptr,
             byte_length: self.byte_length,
-            owned: self.owned.clone(),
+            dealloc: self.dealloc.clone(),
         }
     }
 
@@ -138,29 +153,43 @@ impl MsgRingBuffer {
         return self.byte_length;
     }
 
-    unsafe fn borrow_slice<'a>(&'a self, offset: usize, byte_length: usize) -> &'a [u8] {
-        assert!(offset + byte_length <= self.byte_length);
-        std::slice::from_raw_parts(self.ptr.offset(offset as isize), byte_length)
+    #[allow(dead_code)]
+    unsafe fn get<'a, T>(&'a self, byte_offset: usize) -> &T {
+        self.slice(byte_offset, size_of::<T>()).get_unchecked(0)
     }
 
-    unsafe fn borrow_slice_mut<'a>(
-        &'a mut self,
-        offset: usize,
-        byte_length: usize,
-    ) -> &'a mut [u8] {
-        assert!(offset + byte_length <= self.byte_length);
-        slice::from_raw_parts_mut(self.ptr.offset(offset as isize), byte_length)
+    unsafe fn get_mut<'a, T>(&'a self, byte_offset: usize) -> &mut T {
+        self.slice_mut(byte_offset, size_of::<T>())
+            .get_unchecked_mut(0)
+    }
+
+    unsafe fn slice<'a, T>(&'a self, byte_offset: usize, byte_length: usize) -> &'a [T] {
+        let (offset, count) = self.map_bytes_to::<T>(byte_offset, byte_length);
+        slice::from_raw_parts((self.ptr as *mut T).add(offset), count)
+    }
+
+    unsafe fn slice_mut<'a, T>(&'a self, byte_offset: usize, byte_length: usize) -> &'a mut [T] {
+        let (offset, count) = self.map_bytes_to::<T>(byte_offset, byte_length);
+        slice::from_raw_parts_mut((self.ptr as *mut T).add(offset), count)
+    }
+
+    fn map_bytes_to<T>(&self, byte_offset: usize, byte_length: usize) -> (usize, usize) {
+        let bytes_per_item = size_of::<T>();
+        assert!(byte_offset + byte_length <= self.byte_length);
+        debug_assert!(byte_offset.is_aligned(bytes_per_item));
+        debug_assert!(byte_length.is_aligned(bytes_per_item));
+        (byte_offset / bytes_per_item, byte_length / bytes_per_item)
     }
 }
 
 #[derive(Clone, Copy)]
-pub struct MsgRingConfig {
+pub struct Config {
     pub fill_direction: FillDirection,
     pub spin_count: u32,
     pub spin_yield_cpu_time: u32,
 }
 
-impl Default for MsgRingConfig {
+impl Default for Config {
     fn default() -> Self {
         Self {
             fill_direction: FillDirection::BottomUp,
@@ -172,71 +201,55 @@ impl Default for MsgRingConfig {
 
 // TODO: probably should use builder pattern.
 pub struct MsgRing {
-    buffer: MsgRingBuffer,
-    config: MsgRingConfig,
+    buffer: Buffer,
+    config: Config,
 }
 
 impl MsgRing {
-    pub fn new_with(buffer: MsgRingBuffer, config: MsgRingConfig) -> Self {
+    pub fn new_with(buffer: Buffer, config: Config) -> Self {
         Self { buffer, config }
     }
 
-    pub fn new(buffer: MsgRingBuffer) -> Self {
+    pub fn new(buffer: Buffer) -> Self {
         Self {
             buffer,
             config: Default::default(),
         }
     }
 
-    pub fn split(mut self) -> (MsgRingSender, MsgRingReceiver) {
-        let sender = MsgRingSender::new(unsafe { self.buffer.dup() }, self.config);
-        let receiver = MsgRingReceiver::new(self.buffer, self.config);
+    pub fn split(self) -> (Sender, Receiver) {
+        let sender = Sender::new(unsafe { self.buffer.dup() }, self.config);
+        let receiver = Receiver::new(self.buffer, self.config);
         (sender, receiver)
     }
 }
 
 struct Window {
-    pub config: MsgRingConfig,
-    pub counters: MsgRingCounters,
-
-    pub buffer: MsgRingBuffer,
-    pub epoch: i32,
+    pub buffer: Buffer,
+    pub config: Config,
+    pub counters: Counters,
 
     // Head and tail position are in bytes, but always starting at zero and
     // not adjusted for buffer fill direction (see TypeScript implementation).
+    pub epoch: i32,
     pub tail_position: usize,
     pub head_position: usize,
-
-    pub fill_direction_base_adjustment: isize,
-    pub fill_direction_offset_adjustment: isize,
 }
 
 impl Window {
-    pub fn new(buffer: MsgRingBuffer, config: MsgRingConfig, epoch: i32) -> Self {
-        let (fill_direction_base_adjustment, fill_direction_offset_adjustment) =
-            match config.fill_direction {
-                FillDirection::TopDown => (0, 1),
-                FillDirection::BottomUp => (1, -1),
-            };
+    pub fn new(buffer: Buffer, config: Config, epoch: i32) -> Self {
         let mut this = Self {
             buffer,
             config,
-            counters: MsgRingCounters {
+            counters: Counters {
                 ..Default::default()
             },
             epoch,
             head_position: 0,
             tail_position: 0,
-            fill_direction_base_adjustment,
-            fill_direction_offset_adjustment,
         };
         this.init();
         this
-    }
-
-    #[inline]
-    pub fn buffer_byte_length(&self) -> usize {
-        return self.buffer.byte_length();
     }
 
     #[inline]
@@ -246,25 +259,22 @@ impl Window {
 
     #[inline]
     fn is_at_end_of_buffer(&self) -> bool {
-        self.head_position == self.buffer_byte_length()
+        self.head_position == self.buffer.byte_length()
     }
 
     #[inline]
-    fn header_ptr(&mut self, position: usize) -> *mut i32 {
-        let byte_offset = self.fill_direction_base_adjustment
-            * (self.buffer_byte_length() - FrameAllocation::HeaderByteLength) as isize
-            + self.fill_direction_offset_adjustment * position as isize;
-        let slice = unsafe {
-            self.buffer
-                .borrow_slice_mut(byte_offset as usize, size_of::<i32>())
-        };
-        slice.as_ptr() as *mut i32
+    fn header_byte_offset(&self, position: usize) -> usize {
+        self.config.fill_direction.map_offset(
+            position,
+            FrameAllocation::HeaderByteLength,
+            self.buffer.byte_length(),
+        )
     }
 
     fn init(&mut self) -> () {
-        let header_ptr = self.header_ptr(0);
-        let header_slot = unsafe { &mut *(header_ptr as *mut AtomicI32) };
         let target = self.buffer.byte_length() as i32;
+        let header_byte_offset = self.header_byte_offset(0);
+        let header_slot: &mut AtomicI32 = unsafe { self.buffer.get_mut(header_byte_offset) };
         header_slot.compare_and_swap(0, target, Ordering::AcqRel);
     }
 
@@ -279,8 +289,8 @@ impl Window {
             self.counters.wrap += 1;
         }
 
-        let header_ptr = self.header_ptr(self.head_position);
-        let header_slot = unsafe { &mut *(header_ptr as *mut AtomicI32) };
+        let header_byte_offset = self.header_byte_offset(self.head_position);
+        let header_slot: &mut AtomicI32 = unsafe { self.buffer.get_mut(header_byte_offset) };
         let mut header = *header_slot.get_mut();
 
         let mut spin_count_remaining = self.config.spin_count;
@@ -319,7 +329,7 @@ impl Window {
 
         let byte_length = header & FrameHeader::ByteLengthMask;
         let byte_length = byte_length as usize;
-        assert!(byte_length <= self.buffer_byte_length() - self.head_position);
+        assert!(byte_length <= self.buffer.byte_length() - self.head_position);
 
         self.head_position += byte_length;
         self.counters.acquire += 1;
@@ -334,8 +344,9 @@ impl Window {
         let tail_epoch = self.epoch + FrameHeader::EpochIncrementPass;
         let new_header = byte_length as i32 | flags | tail_epoch;
 
-        let header_ptr = self.header_ptr(self.tail_position);
-        let header_slot = unsafe { &mut *(header_ptr as *mut integer_atomics::AtomicI32) };
+        let header_byte_offset = self.header_byte_offset(self.tail_position);
+        let header_slot: &mut AtomicI32 = unsafe { self.buffer.get_mut(header_byte_offset) };
+
         let old_header = header_slot.swap(new_header, Ordering::AcqRel);
 
         if old_header & FrameHeader::HasWaitersFlag != 0 {
@@ -349,31 +360,32 @@ impl Window {
     }
 
     fn get_message_byte_range(&self, frame_byte_length: usize) -> (usize, usize) {
-        let message_byte_length = (frame_byte_length - FrameAllocation::HeaderByteLength) as isize;
-        let message_byte_offset = self.fill_direction_base_adjustment
-            * (self.buffer_byte_length() as isize - message_byte_length)
-            + self.fill_direction_offset_adjustment
-                * (self.tail_position + FrameAllocation::HeaderByteLength) as isize;
-        (message_byte_offset as usize, message_byte_length as usize)
+        let message_byte_length = frame_byte_length - FrameAllocation::HeaderByteLength;
+        let message_byte_offset = self.config.fill_direction.map_offset(
+            self.tail_position + FrameAllocation::HeaderByteLength,
+            message_byte_length,
+            self.buffer.byte_length(),
+        );
+        (message_byte_offset, message_byte_length)
     }
 
     pub fn get_message_slice(&self, frame_byte_length: usize) -> &[u8] {
         let (byte_offset, byte_length) = self.get_message_byte_range(frame_byte_length);
-        unsafe { self.buffer.borrow_slice(byte_offset, byte_length) }
+        unsafe { self.buffer.slice(byte_offset, byte_length) }
     }
 
-    pub fn get_message_slice_mut(&mut self, frame_byte_length: usize) -> &mut [u8] {
+    pub fn get_message_slice_mut(&self, frame_byte_length: usize) -> &mut [u8] {
         let (byte_offset, byte_length) = self.get_message_byte_range(frame_byte_length);
-        unsafe { self.buffer.borrow_slice_mut(byte_offset, byte_length) }
+        unsafe { self.buffer.slice_mut(byte_offset, byte_length) }
     }
 }
 
-pub struct MsgRingSender {
+pub struct Sender {
     window: Window,
 }
 
-impl MsgRingSender {
-    pub fn new(buffer: MsgRingBuffer, config: MsgRingConfig) -> Self {
+impl Sender {
+    pub fn new(buffer: Buffer, config: Config) -> Self {
         Self {
             window: Window::new(buffer, config, FrameHeader::EpochInitSender),
         }
@@ -383,7 +395,7 @@ impl MsgRingSender {
         Send::new(&mut self.window, byte_length)
     }
 
-    pub fn counters(&self) -> MsgRingCounters {
+    pub fn counters(&self) -> Counters {
         self.window.counters
     }
 }
@@ -444,23 +456,22 @@ impl<'msg> DerefMut for Send<'msg> {
     }
 }
 
-pub struct MsgRingReceiver {
+pub struct Receiver {
     window: Window,
 }
 
-impl MsgRingReceiver {
-    pub fn new(buffer: MsgRingBuffer, config: MsgRingConfig) -> Self {
+impl Receiver {
+    pub fn new(buffer: Buffer, config: Config) -> Self {
         Self {
             window: Window::new(buffer, config, FrameHeader::EpochInitReceiver),
         }
     }
 
     pub fn receive<'msg>(&'msg mut self) -> Receive<'msg> {
-        let r = Receive::new(&mut self.window);
-        r
+        Receive::new(&mut self.window)
     }
 
-    pub fn counters(&self) -> MsgRingCounters {
+    pub fn counters(&self) -> Counters {
         self.window.counters
     }
 }
@@ -486,7 +497,7 @@ impl<'msg> Receive<'msg> {
     }
 
     fn release(&mut self) -> () {
-        //if (self.window.buffer_byte_length())
+        //if (self.window.buffer.byte_length())
         self.window
             .release_frame(self.window.byte_length(), FrameHeader::None);
     }
@@ -514,34 +525,36 @@ extern crate lazy_static;
 
 #[cfg(test)]
 mod test {
-    use super::{MsgRing, MsgRingBuffer};
+    use super::{Buffer, MsgRing};
     use std::sync::{Mutex, MutexGuard};
     use std::thread;
     use std::time::{Duration, Instant};
 
     const ROUNDS: usize = 10;
-    const PER_ROUND: usize = 1e5 as usize;
+    const PER_ROUND: usize = 5e5 as usize;
 
     #[test] // TODO: use #[bench].
     fn uni_flow_benchmark() {
         let _guard = unparallelize_test();
 
-        let buffer = MsgRingBuffer::new(240);
+        let buffer = Buffer::new(240);
         let ring = MsgRing::new(buffer);
         let (mut sender, mut receiver) = ring.split();
 
         let thread1 = thread::spawn(move || {
-            benchmark_loop("sender", &mut sender, |sender| {
+            benchmark_loop("sender", &mut (&mut sender, 0), |(sender, ctr)| {
                 let mut send = sender.compose(32);
-                send[1] = 2;
+                send[*ctr >> 8 & 7] = *ctr as u8;
+                *ctr += 1;
                 send.send();
             });
         });
 
         let thread2 = thread::spawn(move || {
-            benchmark_loop("receiver", &mut receiver, |receiver| {
-                let m = receiver.receive();
-                m.dispose();
+            benchmark_loop("recver", &mut (&mut receiver, 0), |(receiver, ctr)| {
+                let msg = receiver.receive();
+                assert_eq!(msg[*ctr >> 8 & 7], *ctr as u8);
+                *ctr += 1;
             });
         });
 
@@ -553,8 +566,8 @@ mod test {
     fn ping_pong_benchmark() {
         let _guard = unparallelize_test();
 
-        let (mut sender1, mut receiver1) = MsgRing::new(MsgRingBuffer::new(10240)).split();
-        let (mut sender2, mut receiver2) = MsgRing::new(MsgRingBuffer::new(10240)).split();
+        let (mut sender1, mut receiver1) = MsgRing::new(Buffer::new(10240)).split();
+        let (mut sender2, mut receiver2) = MsgRing::new(Buffer::new(10240)).split();
 
         let thread1 = thread::spawn(move || {
             benchmark_loop(
@@ -582,13 +595,6 @@ mod test {
         thread2.join().unwrap();
     }
 
-    fn unparallelize_test() -> MutexGuard<'static, ()> {
-        lazy_static! {
-            static ref m: Mutex<()> = Mutex::new(());
-        };
-        m.lock().unwrap()
-    }
-
     fn benchmark_loop<A, F: Fn(&mut A) -> ()>(name: &str, a: &mut A, f: F) -> () {
         let tid = thread::current().id();
 
@@ -607,5 +613,12 @@ mod test {
                 round, tid, name, PER_ROUND, rate
             );
         }
+    }
+
+    fn unparallelize_test() -> MutexGuard<'static, ()> {
+        lazy_static! {
+            static ref m: Mutex<()> = Mutex::new(());
+        };
+        m.lock().unwrap()
     }
 }
