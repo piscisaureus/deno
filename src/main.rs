@@ -74,13 +74,17 @@ impl FrameHeader {
 
 enum PointerOwned {
     NotOwned,
-    Owned(*mut u8),
+    Owned {
+        ptr: *mut u8,
+        len: usize,
+        cap: usize,
+    },
 }
 
 impl Drop for PointerOwned {
     fn drop(&mut self) {
-        if let PointerOwned::Owned(ptr) = self {
-            unsafe { Box::from_raw(ptr) };
+        if let &mut PointerOwned::Owned { ptr, len, cap } = self {
+            unsafe { Vec::<u8>::from_raw_parts(ptr, len, cap) };
         }
     }
 }
@@ -99,12 +103,17 @@ impl MsgRingBuffer {
         assert!(byte_length.is_aligned(FrameAllocation::Alignment));
         let mut vec: Vec<u8> = Vec::new();
         vec.resize(byte_length, 0);
-        let ptr = vec.as_mut_ptr() as *mut u8;
+        let ptr = vec.as_mut_ptr();
+        let owned = PointerOwned::Owned {
+            ptr,
+            len: vec.len(),
+            cap: vec.capacity(),
+        };
         forget(vec);
         Self {
             ptr,
             byte_length,
-            owned: Arc::new(PointerOwned::Owned(ptr)),
+            owned: Arc::new(owned),
         }
     }
 
@@ -131,7 +140,7 @@ impl MsgRingBuffer {
 
     unsafe fn borrow_slice<'a>(&'a self, offset: usize, byte_length: usize) -> &'a [u8] {
         assert!(offset + byte_length <= self.byte_length);
-        std::slice::from_raw_parts(self.ptr, byte_length)
+        std::slice::from_raw_parts(self.ptr.offset(offset as isize), byte_length)
     }
 
     unsafe fn borrow_slice_mut<'a>(
@@ -140,7 +149,7 @@ impl MsgRingBuffer {
         byte_length: usize,
     ) -> &'a mut [u8] {
         assert!(offset + byte_length <= self.byte_length);
-        slice::from_raw_parts_mut(self.ptr, byte_length)
+        slice::from_raw_parts_mut(self.ptr.offset(offset as isize), byte_length)
     }
 }
 
@@ -154,7 +163,7 @@ pub struct MsgRingConfig {
 impl Default for MsgRingConfig {
     fn default() -> Self {
         Self {
-            fill_direction: FillDirection::TopDown,
+            fill_direction: FillDirection::BottomUp,
             spin_count: 100,
             spin_yield_cpu_time: 0, // Disabled.
         }
@@ -279,19 +288,7 @@ impl Window {
 
         // Note that operator precendece in Rust is different than in C and
         // JavaScript (& has higher precedence than ==), so this is correct.
-        let mut f = false;
         while header & FrameHeader::EpochMask != self.epoch {
-            if !f {
-                eprintln!(
-                    "  p={} h={:x} h.ep={:x} ; s.ep={:x}",
-                    self.head_position,
-                    header,
-                    header & FrameHeader::EpochMask,
-                    self.epoch,
-                );
-                f = true;
-            }
-
             if !wait {
                 return FrameHeader::None;
             }
@@ -319,13 +316,6 @@ impl Window {
                 header = header_slot.load(Ordering::Acquire);
             }
         }
-        eprintln!(
-            "= p={} ; h={:x} h.ep={:x} ; s.ep={:x}",
-            self.head_position,
-            header,
-            header & FrameHeader::EpochMask,
-            self.epoch,
-        );
 
         let byte_length = header & FrameHeader::ByteLengthMask;
         let byte_length = byte_length as usize;
@@ -347,14 +337,6 @@ impl Window {
         let header_ptr = self.header_ptr(self.tail_position);
         let header_slot = unsafe { &mut *(header_ptr as *mut integer_atomics::AtomicI32) };
         let old_header = header_slot.swap(new_header, Ordering::AcqRel);
-        eprintln!(
-            "<= p={}  h={:x} h.ep={:x}  self.ep={:x}  found.ep={:x}",
-            self.tail_position,
-            new_header,
-            new_header & FrameHeader::EpochMask,
-            self.epoch,
-            old_header & FrameHeader::EpochMask,
-        );
 
         if old_header & FrameHeader::HasWaitersFlag != 0 {
             // TODO
@@ -372,7 +354,7 @@ impl Window {
             * (self.buffer_byte_length() as isize - message_byte_length)
             + self.fill_direction_offset_adjustment
                 * (self.tail_position + FrameAllocation::HeaderByteLength) as isize;
-        (message_byte_length as usize, message_byte_offset as usize)
+        (message_byte_offset as usize, message_byte_length as usize)
     }
 
     pub fn get_message_slice(&self, frame_byte_length: usize) -> &[u8] {
@@ -427,16 +409,8 @@ impl<'msg> Send<'msg> {
 
     pub fn send(self) -> () {
         self.window.counters.message += 1;
-        eprintln!("alloca = {}", self.allocation_byte_length);
         self.window
             .release_frame(self.allocation_byte_length, FrameHeader::HasMessageFlag);
-        eprintln!(
-            "alloca={} wnd={} tail={} head={}",
-            self.allocation_byte_length,
-            self.window.byte_length(),
-            self.window.tail_position,
-            self.window.head_position
-        );
     }
 
     pub fn dispose(self) -> () {}
@@ -512,13 +486,12 @@ impl<'msg> Receive<'msg> {
     }
 
     fn release(&mut self) -> () {
+        //if (self.window.buffer_byte_length())
         self.window
             .release_frame(self.window.byte_length(), FrameHeader::None);
     }
 
-    pub fn dispose(mut self) -> () {
-        self.release()
-    }
+    pub fn dispose(self) -> () {}
 }
 
 impl<'msg> Deref for Receive<'msg> {
@@ -529,11 +502,11 @@ impl<'msg> Deref for Receive<'msg> {
     }
 }
 
-//impl<'msg> Drop for Receive<'msg> {
-//    fn drop(&mut self) -> () {
-//        //self.release();
-//    }
-//}
+impl<'msg> Drop for Receive<'msg> {
+    fn drop(&mut self) -> () {
+        self.release();
+    }
+}
 
 #[cfg(test)]
 #[macro_use]
@@ -547,22 +520,21 @@ mod test {
     use std::time::{Duration, Instant};
 
     const ROUNDS: usize = 10;
-    const PER_ROUND: usize = 1e7 as usize;
+    const PER_ROUND: usize = 1e5 as usize;
 
     #[test] // TODO: use #[bench].
     fn uni_flow_benchmark() {
         let _guard = unparallelize_test();
 
-        let buffer = MsgRingBuffer::new(1024);
+        let buffer = MsgRingBuffer::new(240);
         let ring = MsgRing::new(buffer);
         let (mut sender, mut receiver) = ring.split();
 
         let thread1 = thread::spawn(move || {
             benchmark_loop("sender", &mut sender, |sender| {
                 let mut send = sender.compose(32);
-                //send[1] = 2;
+                send[1] = 2;
                 send.send();
-                eprintln!("S {:?}", sender.counters());
             });
         });
 
@@ -570,7 +542,6 @@ mod test {
             benchmark_loop("receiver", &mut receiver, |receiver| {
                 let m = receiver.receive();
                 m.dispose();
-                eprintln!("R {:?}", receiver.counters());
             });
         });
 
