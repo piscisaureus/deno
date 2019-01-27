@@ -75,7 +75,7 @@ class DenoIsolate {
   v8::Persistent<v8::Function> recv_;
   v8::StartupData snapshot_;
   v8::Persistent<v8::ArrayBuffer> global_import_buf_;
-  v8::Persistent<v8::ArrayBuffer> shared_ab_;
+  v8::Persistent<v8::SharedArrayBuffer> shared_ab_;
 };
 
 class UserDataScope {
