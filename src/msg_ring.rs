@@ -52,15 +52,15 @@ struct FrameHeader;
 #[allow(non_upper_case_globals)]
 impl FrameHeader {
   // Using i32 since that's what's used on the JS side.
-  pub const None: i32 = 0x00000000;
-  pub const ByteLengthMask: i32 = 0x00ffffff;
-  pub const EpochMask: i32 = 0x03000000;
-  pub const EpochInitSender: i32 = 0x00000000;
-  pub const EpochInitReceiver: i32 = 0x01000000;
-  pub const EpochIncrementPass: i32 = 0x01000000;
-  pub const EpochIncrementWrap: i32 = 0x02000000;
-  pub const HasMessageFlag: i32 = 0x04000000;
-  pub const HasWaitersFlag: i32 = 0x08000000;
+  pub const None: i32 = 0x00_00_00_00;
+  pub const ByteLengthMask: i32 = 0x00_ff_ff_ff;
+  pub const EpochMask: i32 = 0x03_00_00_00;
+  pub const EpochInitSender: i32 = 0x00_00_00_00;
+  pub const EpochInitReceiver: i32 = 0x01_00_00_00;
+  pub const EpochIncrementPass: i32 = 0x01_00_00_00;
+  pub const EpochIncrementWrap: i32 = 0x02_00_00_00;
+  pub const HasMessageFlag: i32 = 0x04_00_00_00;
+  pub const HasWaitersFlag: i32 = 0x08_00_00_00;
 }
 
 trait Align<T> {
@@ -97,7 +97,10 @@ enum Dealloc {
   },
 }
 
+unsafe impl marker::Send for Dealloc {}
+
 impl Drop for Dealloc {
+  //#[allow(clippy::match_ref_pats)] // Clippy is wrong, `&mut` is necessary.
   fn drop(&mut self) {
     if let &mut Dealloc::Vec { ptr, len, cap } = self {
       unsafe { Vec::<u8>::from_raw_parts(ptr, len, cap) };
@@ -112,6 +115,7 @@ pub struct Buffer {
 }
 
 unsafe impl marker::Send for Buffer {}
+unsafe impl marker::Sync for Buffer {}
 
 impl Buffer {
   pub fn new(byte_length: usize) -> Self {
@@ -153,43 +157,31 @@ impl Buffer {
   }
 
   pub fn byte_length(&self) -> usize {
-    return self.byte_length;
+    self.byte_length
   }
 
   #[allow(dead_code)]
-  unsafe fn get<'a, T>(&'a self, byte_offset: usize) -> &T {
+  unsafe fn get<T>(&self, byte_offset: usize) -> &T {
     self.slice(byte_offset, size_of::<T>()).get_unchecked(0)
   }
 
-  unsafe fn get_mut<'a, T>(&'a self, byte_offset: usize) -> &mut T {
+  unsafe fn get_mut<T>(&mut self, byte_offset: usize) -> &mut T {
     self
       .slice_mut(byte_offset, size_of::<T>())
       .get_unchecked_mut(0)
   }
 
-  unsafe fn slice<'a, T>(
-    &'a self,
-    byte_offset: usize,
-    byte_length: usize,
-  ) -> &'a [T] {
+  unsafe fn slice<T>(&self, byte_offset: usize, byte_length: usize) -> &[T] {
     let (offset, count) = self.map_bytes_to::<T>(byte_offset, byte_length);
     slice::from_raw_parts((self.ptr as *mut T).add(offset), count)
   }
 
-  unsafe fn slice_mut<'a, T>(
-    &'a self,
-    byte_offset: usize,
-    byte_length: usize,
-  ) -> &'a mut [T] {
+  unsafe fn slice_mut<T>(&mut self, byte_offset: usize, byte_length: usize) -> &mut [T] {
     let (offset, count) = self.map_bytes_to::<T>(byte_offset, byte_length);
     slice::from_raw_parts_mut((self.ptr as *mut T).add(offset), count)
   }
 
-  fn map_bytes_to<T>(
-    &self,
-    byte_offset: usize,
-    byte_length: usize,
-  ) -> (usize, usize) {
+  fn map_bytes_to<T>(&self, byte_offset: usize, byte_length: usize) -> (usize, usize) {
     let bytes_per_item = size_of::<T>();
     assert!(byte_offset + byte_length <= self.byte_length);
     debug_assert!(byte_offset.is_aligned(bytes_per_item));
@@ -208,7 +200,7 @@ pub struct Config {
 impl Default for Config {
   fn default() -> Self {
     Self {
-      fill_direction: FillDirection::BottomUp,
+      fill_direction: FillDirection::TopDown,
       spin_count: 100,
       spin_yield_cpu_time: 0, // Disabled.
     }
@@ -289,8 +281,7 @@ impl Window {
 
   #[inline]
   fn get_message_byte_range(&self, frame_byte_length: usize) -> (usize, usize) {
-    let message_byte_length =
-      frame_byte_length - FrameAllocation::HeaderByteLength;
+    let message_byte_length = frame_byte_length - FrameAllocation::HeaderByteLength;
     let message_byte_offset = self.config.fill_direction.map_offset(
       self.tail_position + FrameAllocation::HeaderByteLength,
       message_byte_length,
@@ -300,22 +291,19 @@ impl Window {
   }
 
   pub fn get_message_slice(&self, frame_byte_length: usize) -> &[u8] {
-    let (byte_offset, byte_length) =
-      self.get_message_byte_range(frame_byte_length);
+    let (byte_offset, byte_length) = self.get_message_byte_range(frame_byte_length);
     unsafe { self.buffer.slice(byte_offset, byte_length) }
   }
 
-  pub fn get_message_slice_mut(&self, frame_byte_length: usize) -> &mut [u8] {
-    let (byte_offset, byte_length) =
-      self.get_message_byte_range(frame_byte_length);
+  pub fn get_message_slice_mut(&mut self, frame_byte_length: usize) -> &mut [u8] {
+    let (byte_offset, byte_length) = self.get_message_byte_range(frame_byte_length);
     unsafe { self.buffer.slice_mut(byte_offset, byte_length) }
   }
 
-  fn init(&mut self) -> () {
+  fn init(&mut self) {
     let target = self.buffer.byte_length() as i32;
     let header_byte_offset = self.header_byte_offset(0);
-    let header_atomic: &mut AtomicI32 =
-      unsafe { self.buffer.get_mut(header_byte_offset) };
+    let header_atomic: &mut AtomicI32 = unsafe { self.buffer.get_mut(header_byte_offset) };
     header_atomic.compare_and_swap(0, target, Ordering::AcqRel);
   }
 
@@ -323,8 +311,7 @@ impl Window {
     if self.is_at_end_of_buffer() {
       assert!(self.byte_length() == 0);
 
-      self.epoch =
-        (self.epoch + FrameHeader::EpochIncrementWrap) & FrameHeader::EpochMask;
+      self.epoch = (self.epoch + FrameHeader::EpochIncrementWrap) & FrameHeader::EpochMask;
 
       self.head_position = 0;
       self.tail_position = 0;
@@ -332,8 +319,7 @@ impl Window {
     }
 
     let header_byte_offset = self.header_byte_offset(self.head_position);
-    let header_atomic: &mut AtomicI32 =
-      unsafe { self.buffer.get_mut(header_byte_offset) };
+    let header_atomic: &mut AtomicI32 = unsafe { self.buffer.get_mut(header_byte_offset) };
     let mut header = *header_atomic.get_mut();
 
     let mut spin_count_remaining = self.config.spin_count;
@@ -349,8 +335,7 @@ impl Window {
       if spin_count_remaining == 0 {
         let expect = header;
         let target = header | FrameHeader::HasWaitersFlag;
-        header =
-          header_atomic.compare_and_swap(expect, target, Ordering::AcqRel);
+        header = header_atomic.compare_and_swap(expect, target, Ordering::AcqRel);
         if expect != header {
           continue;
         }
@@ -378,10 +363,10 @@ impl Window {
     self.head_position += byte_length;
     self.counters.acquire += 1;
 
-    return header;
+    header
   }
 
-  pub fn release_frame(&mut self, byte_length: usize, flags: i32) -> () {
+  pub fn release_frame(&mut self, byte_length: usize, flags: i32) {
     assert!(byte_length >= FrameAllocation::HeaderByteLength);
     assert!(byte_length <= self.byte_length());
 
@@ -389,8 +374,7 @@ impl Window {
     let new_header = byte_length as i32 | flags | tail_epoch;
 
     let header_byte_offset = self.header_byte_offset(self.tail_position);
-    let header_atomic: &mut AtomicI32 =
-      unsafe { self.buffer.get_mut(header_byte_offset) };
+    let header_atomic: &mut AtomicI32 = unsafe { self.buffer.get_mut(header_byte_offset) };
 
     let old_header = header_atomic.swap(new_header, Ordering::AcqRel);
 
@@ -416,7 +400,7 @@ impl Sender {
     }
   }
 
-  pub fn compose<'msg>(&'msg mut self, byte_length: usize) -> Send<'msg> {
+  pub fn compose(&mut self, byte_length: usize) -> Send {
     Send::new(&mut self.window, byte_length)
   }
 
@@ -444,21 +428,19 @@ impl<'msg> Send<'msg> {
     self.allocate(message_byte_length)
   }
 
-  pub fn send(self) -> () {
+  pub fn send(self) {
     self.window.counters.message += 1;
     self
       .window
       .release_frame(self.allocation_byte_length, FrameHeader::HasMessageFlag);
   }
 
-  pub fn dispose(self) -> () {}
+  pub fn dispose(self) {}
 
   fn allocate(&mut self, byte_length: usize) {
     self.allocation_byte_length = FrameAllocation::HeaderByteLength as usize
       + byte_length.align(FrameAllocation::Alignment as usize);
-    assert!(
-      self.allocation_byte_length <= FrameHeader::ByteLengthMask as usize
-    );
+    assert!(self.allocation_byte_length <= FrameHeader::ByteLengthMask as usize);
     while self.window.byte_length() < self.allocation_byte_length {
       if self.window.is_at_end_of_buffer() && self.window.byte_length() > 0 {
         self
@@ -490,6 +472,10 @@ pub struct Receiver {
   window: Window,
 }
 
+// TODO: validate this.
+// I suspect Receiver is Send but not Sync.
+unsafe impl marker::Send for Receiver {}
+
 impl Receiver {
   pub fn new(buffer: Buffer, config: Config) -> Self {
     Self {
@@ -497,7 +483,7 @@ impl Receiver {
     }
   }
 
-  pub fn receive<'msg>(&'msg mut self) -> Receive<'msg> {
+  pub fn receive(&mut self) -> Receive {
     Receive::new(&mut self.window)
   }
 
@@ -517,7 +503,7 @@ impl<'msg> Receive<'msg> {
     this
   }
 
-  fn acquire(&mut self) -> () {
+  fn acquire(&mut self) {
     // Bug: what happens when previous frame not released?
     while self.window.acquire_frame(true) & FrameHeader::HasMessageFlag == 0 {
       self
@@ -527,14 +513,13 @@ impl<'msg> Receive<'msg> {
     self.window.counters.message += 1;
   }
 
-  fn release(&mut self) -> () {
-    //if (self.window.buffer.byte_length())
+  fn release(&mut self) {
     self
       .window
       .release_frame(self.window.byte_length(), FrameHeader::None);
   }
 
-  pub fn dispose(self) -> () {}
+  pub fn dispose(self) {}
 }
 
 impl<'msg> Deref for Receive<'msg> {
@@ -546,7 +531,7 @@ impl<'msg> Deref for Receive<'msg> {
 }
 
 impl<'msg> Drop for Receive<'msg> {
-  fn drop(&mut self) -> () {
+  fn drop(&mut self) {
     self.release();
   }
 }
@@ -632,7 +617,7 @@ mod test {
     thread2.join().unwrap();
   }
 
-  fn benchmark_loop<A, F: Fn(&mut A) -> ()>(name: &str, a: &mut A, f: F) -> () {
+  fn benchmark_loop<A, F: Fn(&mut A)>(name: &str, a: &mut A, f: F) {
     let tid = thread::current().id();
 
     for round in 0..ROUNDS {
@@ -654,8 +639,8 @@ mod test {
 
   fn unparallelize_test() -> MutexGuard<'static, ()> {
     lazy_static! {
-      static ref m: Mutex<()> = Mutex::new(());
+      static ref GLOBAL_MUTEX: Mutex<()> = Mutex::new(());
     };
-    m.lock().unwrap()
+    GLOBAL_MUTEX.lock().unwrap()
   }
 }

@@ -31,6 +31,7 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::{Once, ONCE_INIT};
+use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 use tokio;
@@ -47,14 +48,14 @@ pub type Op = dyn Future<Item = Buf, Error = DenoError> + Send;
 
 // Returns (is_sync, op)
 pub type Dispatch =
-  fn(isolate: &Isolate, buf: libdeno::deno_buf, data_buf: libdeno::deno_buf)
-    -> (bool, Box<Op>);
+  fn(isolate: &Isolate, buf: libdeno::deno_buf, data_buf: libdeno::deno_buf) -> (bool, Box<Op>);
 
 pub struct Isolate {
   libdeno_isolate: *const libdeno::isolate,
   dispatch: Dispatch,
   rx: mpsc::Receiver<(i32, Buf)>,
   tx: mpsc::Sender<(i32, Buf)>,
+  pub ring_rx: Arc<Mutex<msg_ring::Receiver>>,
   ntasks: Cell<i32>,
   timeout_due: Cell<Option<Instant>>,
   pub state: Arc<IsolateState>,
@@ -124,11 +125,7 @@ impl IsolateState {
     self.permissions.check_run()
   }
 
-  fn metrics_op_dispatched(
-    &self,
-    bytes_sent_control: usize,
-    bytes_sent_data: usize,
-  ) {
+  fn metrics_op_dispatched(&self, bytes_sent_control: usize, bytes_sent_data: usize) {
     self.metrics.ops_dispatched.fetch_add(1, Ordering::SeqCst);
     self
       .metrics
@@ -164,11 +161,7 @@ static DENO_INIT: Once = ONCE_INIT;
 impl Isolate {
   const SHARED_BUF_LEN: usize = 4 << 20; // 4 mb.
 
-  pub fn new(
-    snapshot: libdeno::deno_buf,
-    state: Arc<IsolateState>,
-    dispatch: Dispatch,
-  ) -> Self {
+  pub fn new(snapshot: libdeno::deno_buf, state: Arc<IsolateState>, dispatch: Dispatch) -> Self {
     DENO_INIT.call_once(|| {
       unsafe { libdeno::deno_init() };
     });
@@ -181,7 +174,7 @@ impl Isolate {
     mem::forget(vec);
     // This wrapper will be used by the message ring on the rust side.
     // TODO: cut in pieces.
-    let _shared_buf_rs = unsafe { msg_ring::Buffer::from_raw_parts(ptr, len) };
+    let shared_buf_rs = unsafe { msg_ring::Buffer::from_raw_parts(ptr, len) };
     // This deno_buf will be sent to the javascript side.
     let shared_buf_js = unsafe { libdeno::deno_buf::from_raw_parts(ptr, len) };
     // Create the libdeno isolate.
@@ -195,12 +188,14 @@ impl Isolate {
     let libdeno_isolate = unsafe { libdeno::deno_new(config) };
     // This channel handles sending async messages back to the runtime.
     let (tx, rx) = mpsc::channel::<(i32, Buf)>();
-
+    let ring = msg_ring::MsgRing::new(shared_buf_rs);
+    let (_, ring_rx) = ring.split();
     Self {
       libdeno_isolate,
       dispatch,
       rx,
       tx,
+      ring_rx: Arc::new(Mutex::new(ring_rx)),
       ntasks: Cell::new(0),
       timeout_due: Cell::new(None),
       state,
@@ -242,6 +237,18 @@ impl Isolate {
     }
   }
 
+  pub fn spawn_receive(&self) {
+    let rx = self.ring_rx.clone();
+    let builder = thread::Builder::new().name("msg_ring_receive".to_string());
+    builder
+      .spawn(move || loop {
+        let mut locked_rx = rx.lock().unwrap();
+        let m = locked_rx.receive();
+        eprintln!("Received {}", m.len());
+      })
+      .expect("Failed to spawn thread.");
+  }
+
   /// Same as execute2() but the filename defaults to "<anonymous>".
   pub fn execute(&self, js_source: &str) -> Result<(), JSError> {
     self.execute2("<anonymous>", js_source)
@@ -249,11 +256,7 @@ impl Isolate {
 
   /// Executes the provided JavaScript source code. The js_filename argument is
   /// provided only for debugging purposes.
-  pub fn execute2(
-    &self,
-    js_filename: &str,
-    js_source: &str,
-  ) -> Result<(), JSError> {
+  pub fn execute2(&self, js_filename: &str, js_source: &str) -> Result<(), JSError> {
     let filename = CString::new(js_filename).unwrap();
     let source = CString::new(js_source).unwrap();
     let r = unsafe {
@@ -272,13 +275,8 @@ impl Isolate {
   }
 
   /// Executes the provided JavaScript module.
-  pub fn execute_mod(
-    &self,
-    js_filename: &str,
-    is_prefetch: bool,
-  ) -> Result<(), JSError> {
-    let out =
-      code_fetch_and_maybe_compile(&self.state, js_filename, ".").unwrap();
+  pub fn execute_mod(&self, js_filename: &str, is_prefetch: bool) -> Result<(), JSError> {
+    let out = code_fetch_and_maybe_compile(&self.state, js_filename, ".").unwrap();
 
     let filename = CString::new(out.filename.clone()).unwrap();
     let filename_ptr = filename.as_ptr() as *const i8;
@@ -327,14 +325,7 @@ impl Isolate {
 
   fn timeout(&self) {
     let dummy_buf = libdeno::deno_buf::empty();
-    unsafe {
-      libdeno::deno_respond(
-        self.libdeno_isolate,
-        self.as_raw_ptr(),
-        -1,
-        dummy_buf,
-      )
-    }
+    unsafe { libdeno::deno_respond(self.libdeno_isolate, self.as_raw_ptr(), -1, dummy_buf) }
   }
 
   fn check_promise_errors(&self) {
@@ -396,8 +387,7 @@ fn code_fetch_and_maybe_compile(
   referrer: &str,
 ) -> Result<CodeFetchOutput, DenoError> {
   let mut out = state.dir.code_fetch(specifier, referrer)?;
-  if (out.media_type == msg::MediaType::TypeScript
-    && out.maybe_output_code.is_none())
+  if (out.media_type == msg::MediaType::TypeScript && out.maybe_output_code.is_none())
     || state.flags.recompile
   {
     debug!(">>>>> compile_sync START");
@@ -421,8 +411,7 @@ extern "C" fn resolve_cb(
   debug!("module_resolve callback {} {}", specifier, referrer);
   let isolate = unsafe { Isolate::from_raw_ptr(user_data) };
 
-  let maybe_out =
-    code_fetch_and_maybe_compile(&isolate.state, specifier, referrer);
+  let maybe_out = code_fetch_and_maybe_compile(&isolate.state, specifier, referrer);
 
   if maybe_out.is_err() {
     // Resolution failure
@@ -437,13 +426,7 @@ extern "C" fn resolve_cb(
   let js_source = CString::new(out.js_source().clone()).unwrap();
   let js_source_ptr = js_source.as_ptr() as *const i8;
 
-  unsafe {
-    libdeno::deno_resolve_ok(
-      isolate.libdeno_isolate,
-      filename_ptr,
-      js_source_ptr,
-    )
-  };
+  unsafe { libdeno::deno_resolve_ok(isolate.libdeno_isolate, filename_ptr, js_source_ptr) };
 }
 
 // Dereferences the C pointer into the Rust Isolate object.
@@ -493,7 +476,8 @@ extern "C" fn pre_dispatch(
         let sender = tx; // tx is moved to new thread
         sender.send((req_id, buf)).expect("tx.send error");
         Ok(())
-      }).map_err(|_| ());
+      })
+      .map_err(|_| ());
     tokio::spawn(task);
   }
 }
@@ -543,7 +527,8 @@ mod tests {
             throw Error("assert error");
           }
         "#,
-        ).expect("execute error");
+        )
+        .expect("execute error");
       isolate.event_loop().ok();
     });
   }
@@ -587,7 +572,8 @@ mod tests {
           const data = new Uint8Array([42, 43, 44, 45, 46]);
           libdeno.send(control, data);
         "#,
-        ).expect("execute error");;
+        )
+        .expect("execute error");;
       isolate.event_loop().unwrap();
       let metrics = &isolate.state.metrics;
       assert_eq!(metrics.ops_dispatched.load(Ordering::SeqCst), 1);
@@ -623,7 +609,8 @@ mod tests {
           libdeno.recv(() => {});
           if (r != null) throw Error("expected null");
         "#,
-        ).expect("execute error");
+        )
+        .expect("execute error");
 
       // Make sure relevant metrics are updated before task is executed.
       {

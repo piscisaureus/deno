@@ -64,11 +64,10 @@ fn print_err_and_exit(err: js_errors::JSError) {
 fn main() {
   log::set_logger(&LOGGER).unwrap();
   let args = env::args().collect();
-  let (flags, rest_argv, usage_string) =
-    flags::set_flags(args).unwrap_or_else(|err| {
-      eprintln!("{}", err);
-      std::process::exit(1)
-    });
+  let (flags, rest_argv, usage_string) = flags::set_flags(args).unwrap_or_else(|err| {
+    eprintln!("{}", err);
+    std::process::exit(1)
+  });
 
   if flags.help {
     println!("{}", &usage_string);
@@ -88,6 +87,8 @@ fn main() {
   let isolate = isolate::Isolate::new(snapshot, state, ops::dispatch);
 
   tokio_util::init(|| {
+    isolate.spawn_receive();
+
     // Setup runtime.
     isolate
       .execute("denoMain();")
