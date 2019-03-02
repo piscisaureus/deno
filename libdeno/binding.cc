@@ -15,7 +15,7 @@
 #define GLOBAL_IMPORT_BUF_SIZE 1024
 
 #ifdef _WIN32
-#include <wchar.h>
+#include <io.h>
 #include <windows.h>
 #endif
 
@@ -103,49 +103,87 @@ void Print(const v8::FunctionCallbackInfo<v8::Value>& args) {
       args.Length() >= 2 ? args[1]->BooleanValue(context).ToChecked() : false;
   bool prints_newline =
       args.Length() >= 3 ? args[2]->BooleanValue(context).ToChecked() : true;
+
+  FILE* file = is_err ? stderr : stdout;
+
 #ifdef _WIN32
-  int len = str.length() * sizeof(**str);
-  char* buf = (char*)malloc(len + 2);
-  memcpy(buf, *str, len);
+  int fd = _fileno(file);
+  if (fd < 0) return;
 
-  if (prints_newline) {
-    buf[len++] = '\r';
-    buf[len++] = '\n';
-  }
+  HANDLE h = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
+  if (h == INVALID_HANDLE_VALUE) return;
 
-  HANDLE std_handle =
-      GetStdHandle(is_err ? STD_ERROR_HANDLE : STD_OUTPUT_HANDLE);
+  DWORD mode;
+  if (GetConsoleMode(h, &mode)) {
+    // Print to the Windows console.
+    // * Since fwrite() does not support unicode, we have to use
+    //   the only available API, `WriteConsoleW()`.
+    // * The output needs to be converted from UTF-8 to UTF-16.
+    // * WriteConsole can't write buffers greater than approximately
+    //   8k code points, so we make multiple WriteConsoleW calls if necessary.
+    static const unsigned int UNICODE_REPLACEMENT_CHARACTER = 0xfffd;
 
-  // does not have associated standard handles,
-  // or has not redirected to a associated standard handles
-  if (std_handle == nullptr || std_handle == INVALID_HANDLE_VALUE) {
+    char* src = *str;
+    size_t src_len = str.length();
+
+    WCHAR dst[8192];
+    size_t dst_len = 0;
+
+    unsigned int codepoint;
+    unsigned int utf8_bytes_left = 0;
+
+    for (size_t src_pos = 0; src_pos < src_len; src_pos++) {
+      auto src_byte = static_cast<unsigned int>(src[src_pos]);
+      // Decode UTF8. This decoder is not entirely standards compliant as it
+      // accepts non-shortest-form encodings, but that's harmless in this case.
+      if (utf8_bytes_left == 0) {
+        // Expect an UTF-8 start byte.
+        DWORD first_zero_bit;
+        if (!_BitScanReverse(&first_zero_bit, ~src_byte)) {
+          first_zero_bit = static_cast<DWORD>(-1);
+        }
+        if (first_zero_bit == 7) {
+          // ASCII: pass through.
+          codepoint = src_byte;
+        } else if (first_zero_bit >= 3 && first_zero_bit <= 5) {
+          // Start of multi-byte sequence. */
+          codepoint = (0xff >> (8 - first_zero_bit)) & src_byte;
+          utf8_bytes_left = 6 - first_zero_bit;
+        } else {
+          // Either an invalid start byte, or a continuation byte while we were
+          // expecting a start byte.
+          codepoint = UNICODE_REPLACEMENT_CHARACTER;
+        }
+      } else if ((src_byte & 0xc0) == 0x80) {
+        /* Valid continuation of utf-8 multibyte sequence */
+        codepoint <<= 6;
+        codepoint |= src_byte & 0x3f;
+        utf8_bytes_left--;
+      } else {
+        // Start byte where continuation byte was expected.
+        // Emit the unicode replacement character first.
+        codepoint = UNICODE_REPLACEMENT_CHARACTER;
+        utf8_bytes_left = 0;
+        // Ensure the start byte is processed again during a later round.
+        src_pos--;
+      }
+      // If we haven't found a complete code point yet, parse more bytes first.
+      if (utf8_bytes_left != 0) {
+        continue;
+      }
+    }
+
     return;
   }
 
-  DWORD mode;
-  // `WriteConsole` only works with console screen, not files nor pipes.
-  // if the handle is redirected to a file, use `WriteFile`
-  if (!GetConsoleMode(std_handle, &mode)) {
-    WriteFile(std_handle, buf, len, nullptr, nullptr);
-    free(buf);
-  } else {
-    const int n = MultiByteToWideChar(CP_UTF8, 0, buf, -1, nullptr, 0);
-    free(buf);
-    CHECK_GT(n, 0);
-    wchar_t* wbuf = (wchar_t*)malloc(n * sizeof(wchar_t));
-    MultiByteToWideChar(CP_UTF8, 0, buf, -1, wbuf, n);
-    WriteConsoleW(std_handle, wbuf, n - 1, nullptr, nullptr);
-    free(wbuf);
-  }
-#else
-  FILE* file = is_err ? stderr : stdout;
+#endif
+
   fwrite(*str, sizeof(**str), str.length(), file);
   if (prints_newline) {
     fprintf(file, "\n");
   }
   fflush(file);
-#endif
-}
+}  // namespace deno
 
 void ErrorToJSON(const v8::FunctionCallbackInfo<v8::Value>& args) {
   CHECK_EQ(args.Length(), 1);
