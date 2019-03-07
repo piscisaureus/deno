@@ -25,7 +25,7 @@ interface Libdeno {
 
   print(x: string, isErr?: boolean): void;
 
-  shared: ArrayBuffer;
+  shared: SharedArrayBuffer;
 
   /** Evaluate provided code in the current context.
    * It differs from eval(...) in that it does not create a new context.
