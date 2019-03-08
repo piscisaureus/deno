@@ -443,10 +443,12 @@ impl Sender {
   }
 
   pub fn reset(&mut self) {
+    debug!("rs reset sender");
     self.window.reset();
   }
 
   pub fn compose(&mut self, byte_length: usize) -> Option<Send> {
+    debug!("rs send");
     Send::maybe_new(&mut self.window, byte_length)
   }
 
@@ -543,9 +545,11 @@ impl Receiver {
 
   pub fn reset(&mut self) {
     self.window.reset();
+    debug!("rs reset receiver");
   }
 
   pub fn receive(&mut self) -> Option<Receive> {
+    debug!("rs receive");
     Receive::maybe_new(&mut self.window)
   }
 

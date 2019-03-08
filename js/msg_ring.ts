@@ -78,6 +78,7 @@ export function init() {
 }
 
 export function reset() {
+  console.log("js reset");
   tx.reset();
   rx.reset();
 }
@@ -459,6 +460,7 @@ export class MsgRingSender extends MsgRingCommon {
       this.messageCounter++;
     }
     this.allocationByteLength = FrameAllocation.None;
+    console.log("js send");
   }
 
   send(data: ArrayBufferView): void {
@@ -535,6 +537,7 @@ export class MsgRingReceiver extends MsgRingCommon {
     }
     this.releaseFrame(this.windowByteLength);
     this.messageCounter++;
+    console.log("js receive");
   }
 
   receive<T extends MsgRingTypedArray>(
