@@ -268,7 +268,7 @@ impl Window {
       tail_position: 0,
       init_epoch: epoch,
     };
-    this.init();
+    this.reset();
     this
   }
 
@@ -318,10 +318,6 @@ impl Window {
     unsafe { self.buffer.slice_mut(byte_offset, byte_length) }
   }
 
-  fn init(&mut self) {
-    self.reset();
-  }
-
   fn reset(&mut self) {
     self.tail_position = 0;
     self.head_position = 0;
@@ -331,6 +327,7 @@ impl Window {
     let header_byte_offset = self.header_byte_offset(0);
     let header_ref: &mut i32 =
       unsafe { self.buffer.get_mut(header_byte_offset) };
+
     *header_ref = target;
     //let header_atomic: &mut Futex =
     //  unsafe { self.buffer.get_mut(header_byte_offset) };
@@ -592,6 +589,10 @@ impl<'msg> Receive<'msg> {
   }
 
   fn release(&mut self) {
+    if self.window.byte_length() == 0 {
+      // No message was available and maybe_new() returned None.
+      return;
+    }
     self
       .window
       .release_frame(self.window.byte_length(), FrameHeader::None);

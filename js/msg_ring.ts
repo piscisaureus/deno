@@ -1,4 +1,5 @@
 import { libdeno } from "./libdeno";
+
 // In the latest EcmaScript draft Atomics.wake has been renamed by
 // Atomics.notify. The former is now deprecated and triggers a deprecation
 // warning node.js. However TypeScript doesn't know about any of this.
@@ -74,6 +75,11 @@ export function init() {
     byteOffset: 0,
     ...commonConfig
   });
+}
+
+export function reset() {
+  tx.reset();
+  rx.reset();
 }
 
 // The WaitFn and NotifyFn functions have the same signatures as Atomics.wait
@@ -234,18 +240,31 @@ abstract class MsgRingCommon extends MsgRingDefaultConfig {
     this.i32 = new Int32Array(buffer);
     this.u32 = new Uint32Array(buffer);
 
+    this.initEpoch();
+    this.i32[this.getHeaderI32Offset(0)] = this.byteLength;
+  }
+
+  protected abstract initEpoch(): void;
+
+  reset() {
+    this.initEpoch();
+    this.windowHeadPosition = 0;
+    this.windowTailPosition = 0;
+    this.windowIsAtEndOfBuffer = false;
+
     // Initialize the frame structure inside the buffer.
     // We expect the buffer to be initialized with zeroes. If that's the
     // case, define a frame that spans the entire buffer and place it's header
     // at offset 0, so the receiver and sender don't get confused.
     // Since the other user (receiver/sender) may have gotten here first, only
     // do the initializtion if the first slot is still contains zero.
-    Atomics.compareExchange(
-      this.i32,
-      this.getHeaderI32Offset(0),
-      0,
-      this.byteLength
-    );
+    //Atomics.compareExchange(
+    //  this.i32,
+    //  this.getHeaderI32Offset(0),
+    //  0,
+    //  this.byteLength
+    //);
+    this.i32[this.getHeaderI32Offset(0)] = this.byteLength;
   }
 
   get counters(): MsgRingCounters {
@@ -402,11 +421,13 @@ abstract class MsgRingCommon extends MsgRingDefaultConfig {
 }
 
 export class MsgRingSender extends MsgRingCommon {
-  protected epoch: number = FrameHeader.EpochInitSender;
-
   // Number of bytes allocated by beginSend()/resizeSend(). It includes space
   // for the frame header and padding for alignment
   private allocationByteLength: number = FrameAllocation.None;
+
+  protected initEpoch() {
+    this.epoch = FrameHeader.EpochInitSender;
+  }
 
   // Note: byteLength will be rounded up to alignment.
   beginSend(messageByteLength: number): Slice {
@@ -484,14 +505,26 @@ export class MsgRingSender extends MsgRingCommon {
 }
 
 export class MsgRingReceiver extends MsgRingCommon {
-  protected epoch: number = FrameHeader.EpochInitReceiver;
+  protected initEpoch() {
+    this.epoch = FrameHeader.EpochInitReceiver;
+  }
 
-  beginReceive(): Slice {
+  beginReceive(): Slice | null {
     if (this.windowByteLength !== FrameAllocation.None) {
       throw new Error("Already receiving.");
     }
-    while (!(this.acquireFrame() & FrameHeader.HasMessageFlag)) {
+    let skipped = false;
+    for (;;) {
+      let header = this.acquireFrame(false);
+      if (header == FrameHeader.None) {
+        return null;
+      }
+      if (header & FrameHeader.HasMessageFlag) {
+        break;
+      }
       this.releaseFrame(this.windowByteLength);
+      this.assert(!skipped);
+      skipped = true;
     }
     return this.getMessageSlice(this.windowByteLength);
   }
@@ -504,9 +537,14 @@ export class MsgRingReceiver extends MsgRingCommon {
     this.messageCounter++;
   }
 
-  receive<T extends MsgRingTypedArray>(ctor: TypedArrayConstructor<T>): T {
+  receive<T extends MsgRingTypedArray>(
+    ctor: TypedArrayConstructor<T>
+  ): T | null {
     try {
       const messageSlice = this.beginReceive();
+      if (messageSlice === null) {
+        return null;
+      }
       // Create a view of the the requested type on the ring's backing buffer.
       // TODO: This is slow (>2x slowdown); find a more efficient solution.
       const view: T = new ctor(

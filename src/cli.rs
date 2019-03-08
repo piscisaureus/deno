@@ -110,7 +110,10 @@ impl Behavior<Buf> for Cli {
     control: Buf,
     zero_copy_buf: deno_buf,
   ) -> (bool, Box<CliOp>) {
-    ops::dispatch(self, control, zero_copy_buf)
+    let r = ops::dispatch(self, control, zero_copy_buf);
+    self.rx.reset();
+    self.tx.reset();
+    r
   }
 
   fn records_reset(&mut self) {

@@ -4,7 +4,7 @@ import * as flatbuffers from "./flatbuffers";
 import * as msg from "gen/msg_generated";
 import * as errors from "./errors";
 import * as util from "./util";
-import { tx } from "./msg_ring";
+import * as msgRing from "./msg_ring";
 
 let nextCmdId = 0;
 const promiseTable = new Map<number, util.Resolvable<msg.Base>>();
@@ -43,8 +43,7 @@ export function sendAsync(
   inner: flatbuffers.Offset,
   data?: ArrayBufferView
 ): Promise<msg.Base> {
-  const [cmdId, resBuf] = sendInternal(builder, innerType, inner, data, false);
-  util.assert(resBuf == null);
+  const cmdId = sendInternal(builder, innerType, inner, data, false);
   const promise = util.createResolvable<msg.Base>();
   promiseTable.set(cmdId, promise);
   return promise;
@@ -57,13 +56,14 @@ export function sendSync(
   inner: flatbuffers.Offset,
   data?: ArrayBufferView
 ): null | msg.Base {
-  const [cmdId, resBuf] = sendInternal(builder, innerType, inner, data, true);
+  const cmdId = sendInternal(builder, innerType, inner, data, true);
   util.assert(cmdId >= 0);
+  let resBuf: Uint8Array | null = msgRing.rx.receive(Uint8Array);
+  msgRing.reset();
   if (resBuf == null) {
     return null;
   } else {
-    const u8 = new Uint8Array(resBuf!);
-    const bb = new flatbuffers.ByteBuffer(u8);
+    const bb = new flatbuffers.ByteBuffer(resBuf);
     const baseRes = msg.Base.getRootAsBase(bb);
     errors.maybeThrowError(baseRes);
     return baseRes;
@@ -76,7 +76,7 @@ function sendInternal(
   inner: flatbuffers.Offset,
   data: undefined | ArrayBufferView,
   sync = true
-): [number, null | Uint8Array] {
+): number {
   const cmdId = nextCmdId++;
   msg.Base.startBase(builder);
   msg.Base.addInner(builder, inner);
@@ -86,11 +86,11 @@ function sendInternal(
   builder.finish(msg.Base.endBase(builder));
 
   const ui8 = builder.asUint8Array();
-  tx.send(ui8);
+  msgRing.tx.send(ui8);
 
   // Somehow put this in the shared buffer.
 
-  const res = libdeno.send(null, data);
+  libdeno.send(null, data);
   builder.inUse = false;
-  return [cmdId, res];
+  return cmdId;
 }
