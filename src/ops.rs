@@ -1622,7 +1622,9 @@ impl Future for GetMessageFuture {
     match self.state.worker_channels {
       None => panic!("expected worker_channels"),
       Some(ref wc) => {
+        println!("GetMessageFuture 1");
         let mut wc = wc.lock().unwrap();
+        println!("GetMessageFuture 2");
         wc.1.poll()
       }
     }

@@ -2,6 +2,7 @@
 use crate::cli::Buf;
 use crate::cli::Cli;
 use crate::cli::Isolate;
+use crate::flags::DenoFlags;
 use crate::isolate_init::IsolateInit;
 use crate::isolate_state::IsolateState;
 use crate::isolate_state::WorkerChannels;
@@ -9,7 +10,7 @@ use crate::js_errors::JSErrorColor;
 use crate::permissions::DenoPermissions;
 use crate::resources;
 use deno_core::JSError;
-use futures::lazy;
+use futures::future::lazy;
 use futures::sync::mpsc;
 use futures::sync::oneshot;
 use futures::Future;
@@ -25,7 +26,8 @@ pub struct Worker {
 impl Worker {
   pub fn new(
     init: IsolateInit,
-    parent_state: &IsolateState,
+    flags: DenoFlags,
+    argv: Vec<String>,
     permissions: DenoPermissions,
   ) -> (Self, WorkerChannels) {
     let (worker_in_tx, worker_in_rx) = mpsc::channel::<Buf>(1);
@@ -34,11 +36,8 @@ impl Worker {
     let internal_channels = (worker_out_tx, worker_in_rx);
     let external_channels = (worker_in_tx, worker_out_rx);
 
-    let state = Arc::new(IsolateState::new(
-      parent_state.flags.clone(),
-      parent_state.argv.clone(),
-      Some(internal_channels),
-    ));
+    let state =
+      Arc::new(IsolateState::new(flags, argv, Some(internal_channels)));
 
     let cli = Cli::new(init, state, permissions);
     let isolate = Isolate::new(cli);
@@ -73,28 +72,38 @@ pub fn spawn(
   // let (js_error_tx, js_error_rx) = oneshot::channel::<JSError>();
   let (p, c) = oneshot::channel::<resources::Resource>();
   let builder = thread::Builder::new().name("worker".to_string());
-  let (worker, external_channels) = Worker::new(init, state, permissions);
+
+  let flags = state.flags.clone();
+  let argv = state.argv.clone();
+
   let _tid = builder
     .spawn(move || {
-      let resource = resources::add_worker(external_channels);
-      let resource_ = resource.clone();
+      tokio::runtime::current_thread::run(lazy(move || {
+        let (worker, external_channels) =
+          Worker::new(init, flags, argv, permissions);
+        let resource = resources::add_worker(external_channels);
+        p.send(resource.clone()).unwrap();
 
-      let worker_future = lazy(move || {
-        p.send(resource_).unwrap();
+        worker
+          .execute("denoMain()")
+          .expect("worker denoMain failed");
+        worker
+          .execute("workerMain()")
+          .expect("worker workerMain failed");
+        worker.execute(&js_source).expect("worker js_source failed");
 
-        worker.execute("denoMain()")?;
-        worker.execute("workerMain()")?;
-        worker.execute(&js_source)?;
-        Ok(worker)
-      }).and_then(|_| Ok(()))
-      .or_else(|err| -> Result<(), ()> {
-        eprintln!("{}", JSErrorColor(&err).to_string());
-        std::process::exit(1)
-      });
+        worker.then(move |r| -> Result<(), ()> {
+          resource.close();
+          println!("workers.rs after resource close");
+          if let Err(err) = r {
+            eprintln!("{}", JSErrorColor(&err).to_string());
+            std::process::exit(1);
+          }
+          Ok(())
+        })
+      }));
 
-      tokio::spawn(worker_future);
-
-      resource.close();
+      println!("workers.rs after spawn");
     }).unwrap();
 
   c.wait().unwrap()

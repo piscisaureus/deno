@@ -15,15 +15,14 @@ export function setFireTimersCallback(fn: () => void) {
   fireTimers = fn;
 }
 
-export function handleAsyncMsgFromRust(ui8: Uint8Array) {
-  util.log("handleAsyncMsgFromRust");
-  util.assert(ui8 == null);
-
-  /*
-  // If a the buffer is empty, recv() on the native side timed out and we
-  // did not receive a message.
-  if (ui8 && ui8.length) {
-    const bb = new flatbuffers.ByteBuffer(ui8);
+export function handleAsyncMsgFromRust(_unused: Uint8Array) {
+  util.log("handleAsyncMsgFromRust start");
+  util.assert(_unused == null);
+  let i = 0;
+  let ui8: Uint8Array | null;
+  while ((ui8 = msgRing.rx.receive(Uint8Array)) !== null) {
+    util.log(`handleAsyncMsgFromRust ${i++}`);
+    const bb = new flatbuffers.ByteBuffer(ui8!);
     const base = msg.Base.getRootAsBase(bb);
     const cmdId = base.cmdId();
     const promise = promiseTable.get(cmdId);
@@ -37,7 +36,6 @@ export function handleAsyncMsgFromRust(ui8: Uint8Array) {
     }
   }
   // Fire timers that have become runnable.
-  */
   fireTimers();
 }
 

@@ -8,7 +8,6 @@ use crate::resources;
 use crate::resources::Resource;
 use crate::resources::ResourceId;
 use crate::workers;
-
 use futures::Future;
 use serde_json;
 use std::str;
@@ -94,7 +93,9 @@ pub fn compile_sync(
   send_future.wait().unwrap();
 
   let recv_future = resources::worker_recv_message(compiler.rid);
-  let res_msg = recv_future.wait().unwrap().unwrap();
+  let result = recv_future.wait().unwrap();
+  assert!(result.is_some());
+  let res_msg = result.unwrap();
 
   let res_json = std::str::from_utf8(&res_msg).unwrap();
   match serde_json::from_str::<serde_json::Value>(res_json) {

@@ -6,6 +6,7 @@ import { libdeno } from "./libdeno";
 import { TextDecoder } from "./text_encoding";
 import { assert } from "./util";
 import * as util from "./util";
+import * as msgRing from "./msg_ring";
 
 /** The current process id of the runtime. */
 export let pid: number;
@@ -164,8 +165,6 @@ function sendStart(): msg.StartRes {
   assert(baseRes!.inner(startResMsg) != null);
   return startResMsg;
 }
-
-import * as msgRing from "./msg_ring";
 
 // This function bootstraps an environment within Deno, it is shared both by
 // the runtime and the compiler environments.
