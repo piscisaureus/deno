@@ -16,6 +16,10 @@ export function setFireTimersCallback(fn: () => void) {
 }
 
 export function handleAsyncMsgFromRust(ui8: Uint8Array) {
+  util.log("handleAsyncMsgFromRust");
+  util.assert(ui8 == null);
+
+  /*
   // If a the buffer is empty, recv() on the native side timed out and we
   // did not receive a message.
   if (ui8 && ui8.length) {
@@ -33,6 +37,7 @@ export function handleAsyncMsgFromRust(ui8: Uint8Array) {
     }
   }
   // Fire timers that have become runnable.
+  */
   fireTimers();
 }
 

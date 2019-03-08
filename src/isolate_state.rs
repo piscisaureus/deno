@@ -13,6 +13,7 @@ use crate::flags;
 use crate::modules::Modules;
 use crate::msg;
 use deno_core::deno_mod;
+use deno_core::JSError;
 use futures::sync::mpsc as async_mpsc;
 use std;
 use std::env;
@@ -109,8 +110,10 @@ impl IsolateState {
   ) -> Result<(), RustOrJsError> {
     // basically iterate over the imports, start loading them.
 
-    let referrer_name =
-      { self.modules.lock().unwrap().get_name(id).unwrap().clone() };
+    let referrer_name = {
+      let g = self.modules.lock().unwrap();
+      g.get_name(id).unwrap().clone()
+    };
 
     for specifier in isolate.mod_get_imports(id) {
       let (name, _local_filename) = self
@@ -126,8 +129,12 @@ impl IsolateState {
           &specifier,
           &referrer_name,
         )?;
-        let child_id =
-          isolate.mod_new(false, &out.module_name.clone(), &out.js_source())?;
+        let child_id = self.mod_new_and_regsiter(
+          isolate,
+          false,
+          &out.module_name.clone(),
+          &out.js_source(),
+        )?;
 
         self.mod_load_deps(isolate, child_id)?;
       }
@@ -149,9 +156,13 @@ impl IsolateState {
       .fetch_module_meta_data_and_maybe_compile(url, ".")
       .map_err(RustOrJsError::from)?;
 
-    let id = isolate
-      .mod_new(true, &out.module_name.clone(), &out.js_source())
-      .map_err(RustOrJsError::from)?;
+    let id = self
+      .mod_new_and_regsiter(
+        isolate,
+        true,
+        &out.module_name.clone(),
+        &out.js_source(),
+      ).map_err(RustOrJsError::from)?;
 
     self.mod_load_deps(isolate, id)?;
 
@@ -160,6 +171,19 @@ impl IsolateState {
       isolate.mod_evaluate(id).map_err(RustOrJsError::from)?;
     }
     Ok(())
+  }
+
+  /// Wraps Isolate::mod_new but registers with modules.
+  fn mod_new_and_regsiter(
+    &self,
+    isolate: &Isolate,
+    main: bool,
+    name: &str,
+    source: &str,
+  ) -> Result<deno_mod, JSError> {
+    let id = isolate.mod_new(main, name, source)?;
+    self.modules.lock().unwrap().register(id, &name);
+    Ok(id)
   }
 
   #[cfg(test)]
