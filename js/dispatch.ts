@@ -47,6 +47,7 @@ export function sendAsync(
   data?: ArrayBufferView
 ): Promise<msg.Base> {
   const cmdId = sendInternal(builder, innerType, inner, data, false);
+  msgRing.reset();
   const promise = util.createResolvable<msg.Base>();
   promiseTable.set(cmdId, promise);
   return promise;

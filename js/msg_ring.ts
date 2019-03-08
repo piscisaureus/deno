@@ -543,23 +543,20 @@ export class MsgRingReceiver extends MsgRingCommon {
   receive<T extends MsgRingTypedArray>(
     ctor: TypedArrayConstructor<T>
   ): T | null {
-    try {
-      const messageSlice = this.beginReceive();
-      if (messageSlice === null) {
-        return null;
-      }
-      // Create a view of the the requested type on the ring's backing buffer.
-      // TODO: This is slow (>2x slowdown); find a more efficient solution.
-      const view: T = new ctor(
-        this.buffer,
-        messageSlice.byteOffset,
-        messageSlice.byteLength / ctor.BYTES_PER_ELEMENT
-      );
-      // Copy the view, implicitly creating a new allocation backing buffer.
-      return new ctor(view);
-    } finally {
-      // TODO: rewind on failure?
-      this.endReceive();
+    const messageSlice = this.beginReceive();
+    if (messageSlice === null) {
+      return null;
     }
+    // Create a view of the the requested type on the ring's backing buffer.
+    // TODO: This is slow (>2x slowdown); find a more efficient solution.
+    const view: T = new ctor(
+      this.buffer,
+      messageSlice.byteOffset,
+      messageSlice.byteLength / ctor.BYTES_PER_ELEMENT
+    );
+    // Copy the view, implicitly creating a new allocation backing buffer.
+    const copy = new ctor(view);
+    this.endReceive();
+    return copy;
   }
 }
