@@ -268,8 +268,6 @@ struct Window {
   pub epoch: i32,
   pub tail_position: usize,
   pub head_position: usize,
-
-  init_epoch: i32,
 }
 
 impl Window {
@@ -283,9 +281,8 @@ impl Window {
       epoch,
       head_position: 0,
       tail_position: 0,
-      init_epoch: epoch,
     };
-    this.reset();
+    this.init();
     this
   }
 
@@ -335,11 +332,7 @@ impl Window {
     unsafe { self.buffer.slice_mut(byte_offset, byte_length) }
   }
 
-  fn reset(&mut self) {
-    self.tail_position = 0;
-    self.head_position = 0;
-    self.epoch = self.init_epoch;
-
+  fn init(&mut self) {
     let target = self.buffer.byte_length() as i32;
     let header_byte_offset = self.header_byte_offset(0);
     let header_ref: &mut i32 =
@@ -459,13 +452,7 @@ impl Sender {
     }
   }
 
-  pub fn reset(&mut self) {
-    debug!("rs reset sender");
-    //self.window.reset();
-  }
-
   pub fn compose(&mut self, byte_length: usize) -> Option<Send> {
-    debug!("rs send");
     Send::maybe_new(&mut self.window, byte_length)
   }
 
@@ -560,13 +547,7 @@ impl Receiver {
     }
   }
 
-  pub fn reset(&mut self) {
-    //self.window.reset();
-    debug!("rs reset receiver");
-  }
-
   pub fn receive(&mut self) -> Option<Receive> {
-    debug!("rs receive");
     Receive::maybe_new(&mut self.window)
   }
 

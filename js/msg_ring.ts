@@ -78,12 +78,6 @@ export function init() {
   });
 }
 
-export function reset() {
-  //console.log("js reset" + new Error().stack);
-  //tx.reset();
-  //rx.reset();
-}
-
 // The WaitFn and NotifyFn functions have the same signatures as Atomics.wait
 // and Atomics.notify, with the exception that Atomics.notify returns the number
 // of threads woken, whereas NotifyFn doesn't return anything at all.
@@ -242,31 +236,18 @@ abstract class MsgRingCommon extends MsgRingDefaultConfig {
     this.i32 = new Int32Array(buffer);
     this.u32 = new Uint32Array(buffer);
 
-    this.initEpoch();
-    this.i32[this.getHeaderI32Offset(0)] = this.byteLength;
-  }
-
-  protected abstract initEpoch(): void;
-
-  reset() {
-    this.initEpoch();
-    this.windowHeadPosition = 0;
-    this.windowTailPosition = 0;
-    this.windowIsAtEndOfBuffer = false;
-
     // Initialize the frame structure inside the buffer.
     // We expect the buffer to be initialized with zeroes. If that's the
     // case, define a frame that spans the entire buffer and place it's header
     // at offset 0, so the receiver and sender don't get confused.
     // Since the other user (receiver/sender) may have gotten here first, only
     // do the initializtion if the first slot is still contains zero.
-    //Atomics.compareExchange(
-    //  this.i32,
-    //  this.getHeaderI32Offset(0),
-    //  0,
-    //  this.byteLength
-    //);
-    this.i32[this.getHeaderI32Offset(0)] = this.byteLength;
+    Atomics.compareExchange(
+      this.i32,
+      this.getHeaderI32Offset(0),
+      0,
+      this.byteLength
+    );
   }
 
   get counters(): MsgRingCounters {
@@ -423,13 +404,11 @@ abstract class MsgRingCommon extends MsgRingDefaultConfig {
 }
 
 export class MsgRingSender extends MsgRingCommon {
+  protected epoch: number = FrameHeader.EpochInitSender;
+
   // Number of bytes allocated by beginSend()/resizeSend(). It includes space
   // for the frame header and padding for alignment
   private allocationByteLength: number = FrameAllocation.None;
-
-  protected initEpoch() {
-    this.epoch = FrameHeader.EpochInitSender;
-  }
 
   // Note: byteLength will be rounded up to alignment.
   beginSend(messageByteLength: number): Slice {
@@ -461,7 +440,6 @@ export class MsgRingSender extends MsgRingCommon {
       this.messageCounter++;
     }
     this.allocationByteLength = FrameAllocation.None;
-    console.log("js send");
   }
 
   send(data: ArrayBufferView): void {
@@ -508,9 +486,7 @@ export class MsgRingSender extends MsgRingCommon {
 }
 
 export class MsgRingReceiver extends MsgRingCommon {
-  protected initEpoch() {
-    this.epoch = FrameHeader.EpochInitReceiver;
-  }
+  protected epoch: number = FrameHeader.EpochInitReceiver;
 
   beginReceive(): Slice | null {
     if (this.windowByteLength !== FrameAllocation.None) {
@@ -538,7 +514,6 @@ export class MsgRingReceiver extends MsgRingCommon {
     }
     this.releaseFrame(this.windowByteLength);
     this.messageCounter++;
-    console.log("js receive");
   }
 
   receive<T extends MsgRingTypedArray>(

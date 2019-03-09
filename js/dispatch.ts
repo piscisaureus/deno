@@ -47,7 +47,6 @@ export function sendAsync(
   data?: ArrayBufferView
 ): Promise<msg.Base> {
   const cmdId = sendInternal(builder, innerType, inner, data, false);
-  msgRing.reset();
   const promise = util.createResolvable<msg.Base>();
   promiseTable.set(cmdId, promise);
   return promise;
@@ -63,7 +62,6 @@ export function sendSync(
   const cmdId = sendInternal(builder, innerType, inner, data, true);
   util.assert(cmdId >= 0);
   let resBuf: Uint8Array | null = msgRing.rx.receive(Uint8Array);
-  msgRing.reset();
   if (resBuf == null) {
     return null;
   } else {

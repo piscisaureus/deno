@@ -116,8 +116,7 @@ impl Behavior<Buf> for Cli {
   }
 
   fn records_reset(&mut self) {
-    self.tx.reset();
-    self.rx.reset();
+    // No-op.
   }
 
   fn records_push(&mut self, record: Buf) -> bool {
