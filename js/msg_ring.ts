@@ -64,23 +64,24 @@ export function init() {
 
   // The SharedArrayBuffer in split half. First half is for the sender, second
   // half is for the receiver.
+  const half = libdeno.shared.byteLength / 2;
   const commonConfig = {
-    byteLength: libdeno.shared.byteLength
+    byteLength: half
   };
   rx = new MsgRingReceiver(libdeno.shared, {
     byteOffset: 0,
     ...commonConfig
   });
   tx = new MsgRingSender(libdeno.shared, {
-    byteOffset: 0,
+    byteOffset: half,
     ...commonConfig
   });
 }
 
 export function reset() {
-  console.log("js reset");
-  tx.reset();
-  rx.reset();
+  //console.log("js reset" + new Error().stack);
+  //tx.reset();
+  //rx.reset();
 }
 
 // The WaitFn and NotifyFn functions have the same signatures as Atomics.wait

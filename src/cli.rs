@@ -44,7 +44,9 @@ impl Cli {
   ) -> Self {
     let buffer = msg_ring::Buffer::new(1024 * 1024);
     let shared = buffer.into_deno_buf();
-    let (tx, rx) = msg_ring::MsgRing::new(buffer).split();
+    let (tx_buffer, rx_buffer) = buffer.split();
+    let (tx, _) = msg_ring::MsgRing::new(tx_buffer).split();
+    let (_, rx) = msg_ring::MsgRing::new(rx_buffer).split();
     Self {
       init,
       shared: Some(shared),

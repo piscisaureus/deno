@@ -148,6 +148,23 @@ impl Buffer {
     }
   }
 
+  pub fn split(self) -> (Self, Self) {
+    let half = self.byte_length() / 2;
+    assert!(half.is_aligned(FrameAllocation::Alignment));
+    (
+      Self {
+        ptr: self.ptr,
+        byte_length: half,
+        dealloc: self.dealloc.clone(),
+      },
+      Self {
+        ptr: unsafe { self.ptr.add(half) },
+        byte_length: half,
+        dealloc: self.dealloc.clone(),
+      },
+    )
+  }
+
   unsafe fn dup(&self) -> Self {
     Self {
       ptr: self.ptr,
@@ -444,7 +461,7 @@ impl Sender {
 
   pub fn reset(&mut self) {
     debug!("rs reset sender");
-    self.window.reset();
+    //self.window.reset();
   }
 
   pub fn compose(&mut self, byte_length: usize) -> Option<Send> {
@@ -544,7 +561,7 @@ impl Receiver {
   }
 
   pub fn reset(&mut self) {
-    self.window.reset();
+    //self.window.reset();
     debug!("rs reset receiver");
   }
 
