@@ -1,0 +1,9 @@
+[package]
+name = "v8gen"
+version = "0.1.0"
+authors = ["Bert Belder <bertbelder@gmail.com>"]
+edition = "2018"
+
+[dependencies.clang]
+version = "0.21.0"
+features = ["clang_6_0"]
