@@ -1,15 +1,1632 @@
-   ClassTemplate Local<T>
-   ClassTemplate MaybeLocal<T>
-   ClassTemplate Eternal<T>
-   ClassTemplate WeakCallbackInfo<T>
-   ClassTemplate PersistentBase<T>
-   ClassTemplate NonCopyablePersistentTraits<T>
-   ClassTemplate CopyablePersistentTraits<T>
-   ClassTemplate Persistent<T, M>
-   ClassTemplate Global<T>
-   ClassTemplate TracedGlobal<T>
-   ClassTemplate ReturnValue<T>
-   ClassTemplate FunctionCallbackInfo<T>
-   ClassTemplate PropertyCallbackInfo<T>
-   ClassTemplate MemorySpan<T>
-   ClassTemplate Maybe<T>
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .S.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .Local.  13-18  FunctionTemplate
+TOK .(.  18-19  FunctionTemplate
+TOK .Local.  19-24  TemplateRef
+TOK .<.  24-25  ParmDecl
+TOK .S.  25-26  TypeRef
+TOK .>.  26-27  ParmDecl
+TOK .that.  28-32  ParmDecl
+TOK .).  32-33  FunctionTemplate
+     FunctionTemplate "v8::Local" Local<T>(Local<S>)   template <class S> V8_INLINE Local(Local<S> that)
+r=       Type { kind: Void, display_name: "void" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .S.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .bool.  13-17  FunctionTemplate
+TOK .operator.  18-26  FunctionTemplate
+TOK .==.  26-28  FunctionTemplate
+TOK .(.  28-29  FunctionTemplate
+TOK .const.  29-34  ParmDecl
+TOK .Local.  35-40  TemplateRef
+TOK .<.  40-41  ParmDecl
+TOK .S.  41-42  TypeRef
+TOK .>.  42-43  ParmDecl
+TOK .&.  43-44  ParmDecl
+TOK .that.  45-49  ParmDecl
+TOK .).  49-50  FunctionTemplate
+TOK .const.  51-56  FunctionTemplate
+     FunctionTemplate "v8::Local" operator==(const Local<S> &)   template <class S> V8_INLINE bool operator==(const Local<S>& that) const
+r=       Type { kind: Bool, display_name: "bool" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .S.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_INLINE.  22-31  FunctionTemplate
+TOK .bool.  32-36  FunctionTemplate
+TOK .operator.  37-45  FunctionTemplate
+TOK .==.  45-47  FunctionTemplate
+TOK .(.  47-48  FunctionTemplate
+TOK .const.  7-12  ParmDecl
+TOK .PersistentBase.  13-27  TemplateRef
+TOK .<.  27-28  ParmDecl
+TOK .S.  28-29  TypeRef
+TOK .>.  29-30  ParmDecl
+TOK .&.  30-31  ParmDecl
+TOK .that.  32-36  ParmDecl
+TOK .).  36-37  FunctionTemplate
+TOK .const.  38-43  FunctionTemplate
+     FunctionTemplate "v8::Local" operator==(const PersistentBase<S> &)   template <class S> V8_INLINE bool operator==( const PersistentBase<S>& that) const
+r=       Type { kind: Bool, display_name: "bool" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .S.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .bool.  13-17  FunctionTemplate
+TOK .operator.  18-26  FunctionTemplate
+TOK .!=.  26-28  FunctionTemplate
+TOK .(.  28-29  FunctionTemplate
+TOK .const.  29-34  ParmDecl
+TOK .Local.  35-40  TemplateRef
+TOK .<.  40-41  ParmDecl
+TOK .S.  41-42  TypeRef
+TOK .>.  42-43  ParmDecl
+TOK .&.  43-44  ParmDecl
+TOK .that.  45-49  ParmDecl
+TOK .).  49-50  FunctionTemplate
+TOK .const.  51-56  FunctionTemplate
+     FunctionTemplate "v8::Local" operator!=(const Local<S> &)   template <class S> V8_INLINE bool operator!=(const Local<S>& that) const
+r=       Type { kind: Bool, display_name: "bool" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .S.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_INLINE.  22-31  FunctionTemplate
+TOK .bool.  32-36  FunctionTemplate
+TOK .operator.  37-45  FunctionTemplate
+TOK .!=.  45-47  FunctionTemplate
+TOK .(.  47-48  FunctionTemplate
+TOK .const.  7-12  ParmDecl
+TOK .Persistent.  13-23  TemplateRef
+TOK .<.  23-24  ParmDecl
+TOK .S.  24-25  TypeRef
+TOK .>.  25-26  ParmDecl
+TOK .&.  26-27  ParmDecl
+TOK .that.  28-32  ParmDecl
+TOK .).  32-33  FunctionTemplate
+TOK .const.  34-39  FunctionTemplate
+     FunctionTemplate "v8::Local" operator!=(const Persistent<S> &)   template <class S> V8_INLINE bool operator!=( const Persistent<S>& that) const
+r=       Type { kind: Bool, display_name: "bool" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .S.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_INLINE.  22-31  FunctionTemplate
+TOK .static.  32-38  FunctionTemplate
+TOK .Local.  39-44  TemplateRef
+TOK .<.  44-45  FunctionTemplate
+TOK .T.  45-46  TypeRef
+TOK .>.  46-47  FunctionTemplate
+TOK .Cast.  48-52  FunctionTemplate
+TOK .(.  52-53  FunctionTemplate
+TOK .Local.  53-58  TemplateRef
+TOK .<.  58-59  ParmDecl
+TOK .S.  59-60  TypeRef
+TOK .>.  60-61  ParmDecl
+TOK .that.  62-66  ParmDecl
+TOK .).  66-67  FunctionTemplate
+     FunctionTemplate static "v8::Local" Cast(Local<S>)   template <class S> V8_INLINE static Local<T> Cast(Local<S> that)
+r=       Type { kind: Unexposed, display_name: "Local<T>" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .S.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .Local.  13-18  TemplateRef
+TOK .<.  18-19  FunctionTemplate
+TOK .S.  19-20  TypeRef
+TOK .>.  20-21  FunctionTemplate
+TOK .As.  22-24  FunctionTemplate
+TOK .(.  24-25  FunctionTemplate
+TOK .).  25-26  FunctionTemplate
+TOK .const.  27-32  FunctionTemplate
+     FunctionTemplate "v8::Local" As()   template <class S> V8_INLINE Local<S> As() const
+r=       Type { kind: Unexposed, display_name: "Local<S>" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .S.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .MaybeLocal.  13-23  FunctionTemplate
+TOK .(.  23-24  FunctionTemplate
+TOK .Local.  24-29  TemplateRef
+TOK .<.  29-30  ParmDecl
+TOK .S.  30-31  TypeRef
+TOK .>.  31-32  ParmDecl
+TOK .that.  33-37  ParmDecl
+TOK .).  37-38  FunctionTemplate
+     FunctionTemplate "v8::MaybeLocal" MaybeLocal<T>(Local<S>)   template <class S> V8_INLINE MaybeLocal(Local<S> that)
+r=       Type { kind: Void, display_name: "void" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .S.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_WARN_UNUSED_RESULT.  3-24  FunctionTemplate
+TOK .V8_INLINE.  25-34  FunctionTemplate
+TOK .bool.  35-39  FunctionTemplate
+TOK .ToLocal.  40-47  FunctionTemplate
+TOK .(.  47-48  FunctionTemplate
+TOK .Local.  48-53  TemplateRef
+TOK .<.  53-54  ParmDecl
+TOK .S.  54-55  TypeRef
+TOK .>.  55-56  ParmDecl
+TOK .*.  56-57  ParmDecl
+TOK .out.  58-61  ParmDecl
+TOK .).  61-62  FunctionTemplate
+TOK .const.  63-68  FunctionTemplate
+     FunctionTemplate "v8::MaybeLocal" ToLocal(Local<S> *)   template <class S> V8_WARN_UNUSED_RESULT V8_INLINE bool ToLocal(Local<S>* out) const
+r=       Type { kind: Bool, display_name: "bool" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .S.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .Local.  13-18  TemplateRef
+TOK .<.  18-19  FunctionTemplate
+TOK .S.  19-20  TypeRef
+TOK .>.  20-21  FunctionTemplate
+TOK .FromMaybe.  22-31  FunctionTemplate
+TOK .(.  31-32  FunctionTemplate
+TOK .Local.  32-37  TemplateRef
+TOK .<.  37-38  ParmDecl
+TOK .S.  38-39  TypeRef
+TOK .>.  39-40  ParmDecl
+TOK .default_value.  41-54  ParmDecl
+TOK .).  54-55  FunctionTemplate
+TOK .const.  56-61  FunctionTemplate
+     FunctionTemplate "v8::MaybeLocal" FromMaybe(Local<S>)   template <class S> V8_INLINE Local<S> FromMaybe(Local<S> default_value) const
+r=       Type { kind: Unexposed, display_name: "Local<S>" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .S.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .Eternal.  13-20  FunctionTemplate
+TOK .(.  20-21  FunctionTemplate
+TOK .Isolate.  21-28  TypeRef
+TOK .*.  28-29  ParmDecl
+TOK .isolate.  30-37  ParmDecl
+TOK .,.  37-38  FunctionTemplate
+TOK .Local.  39-44  TemplateRef
+TOK .<.  44-45  ParmDecl
+TOK .S.  45-46  TypeRef
+TOK .>.  46-47  ParmDecl
+TOK .handle.  48-54  ParmDecl
+TOK .).  54-55  FunctionTemplate
+     FunctionTemplate "v8::Eternal" Eternal<T>(v8::Isolate *, Local<S>)   template <class S> V8_INLINE Eternal(Isolate* isolate, Local<S> handle)
+r=       Type { kind: Void, display_name: "void" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  11-12  FunctionTemplate
+TOK .class.  12-17  TemplateTypeParameter
+TOK .S.  18-19  TemplateTypeParameter
+TOK .>.  19-20  FunctionTemplate
+TOK .V8_INLINE.  21-30  FunctionTemplate
+TOK .void.  31-35  FunctionTemplate
+TOK .Set.  36-39  FunctionTemplate
+TOK .(.  39-40  FunctionTemplate
+TOK .Isolate.  40-47  TypeRef
+TOK .*.  47-48  ParmDecl
+TOK .isolate.  49-56  ParmDecl
+TOK .,.  56-57  FunctionTemplate
+TOK .Local.  58-63  TemplateRef
+TOK .<.  63-64  ParmDecl
+TOK .S.  64-65  TypeRef
+TOK .>.  65-66  ParmDecl
+TOK .handle.  67-73  ParmDecl
+TOK .).  73-74  FunctionTemplate
+     FunctionTemplate "v8::Eternal" Set(v8::Isolate *, Local<S>)   template<class S> V8_INLINE void Set(Isolate* isolate, Local<S> handle)
+r=       Type { kind: Void, display_name: "void" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .S.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .void.  13-17  FunctionTemplate
+TOK .Reset.  18-23  FunctionTemplate
+TOK .(.  23-24  FunctionTemplate
+TOK .Isolate.  24-31  TypeRef
+TOK .*.  31-32  ParmDecl
+TOK .isolate.  33-40  ParmDecl
+TOK .,.  40-41  FunctionTemplate
+TOK .const.  42-47  ParmDecl
+TOK .Local.  48-53  TemplateRef
+TOK .<.  53-54  ParmDecl
+TOK .S.  54-55  TypeRef
+TOK .>.  55-56  ParmDecl
+TOK .&.  56-57  ParmDecl
+TOK .other.  58-63  ParmDecl
+TOK .).  63-64  FunctionTemplate
+     FunctionTemplate "v8::PersistentBase" Reset(v8::Isolate *, const Local<S> &)   template <class S> V8_INLINE void Reset(Isolate* isolate, const Local<S>& other)
+r=       Type { kind: Void, display_name: "void" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .S.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .void.  13-17  FunctionTemplate
+TOK .Reset.  18-23  FunctionTemplate
+TOK .(.  23-24  FunctionTemplate
+TOK .Isolate.  24-31  TypeRef
+TOK .*.  31-32  ParmDecl
+TOK .isolate.  33-40  ParmDecl
+TOK .,.  40-41  FunctionTemplate
+TOK .const.  42-47  ParmDecl
+TOK .PersistentBase.  48-62  TemplateRef
+TOK .<.  62-63  ParmDecl
+TOK .S.  63-64  TypeRef
+TOK .>.  64-65  ParmDecl
+TOK .&.  65-66  ParmDecl
+TOK .other.  67-72  ParmDecl
+TOK .).  72-73  FunctionTemplate
+     FunctionTemplate "v8::PersistentBase" Reset(v8::Isolate *, const PersistentBase<S> &)   template <class S> V8_INLINE void Reset(Isolate* isolate, const PersistentBase<S>& other)
+r=       Type { kind: Void, display_name: "void" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .S.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .bool.  13-17  FunctionTemplate
+TOK .operator.  18-26  FunctionTemplate
+TOK .==.  26-28  FunctionTemplate
+TOK .(.  28-29  FunctionTemplate
+TOK .const.  29-34  ParmDecl
+TOK .PersistentBase.  35-49  TemplateRef
+TOK .<.  49-50  ParmDecl
+TOK .S.  50-51  TypeRef
+TOK .>.  51-52  ParmDecl
+TOK .&.  52-53  ParmDecl
+TOK .that.  54-58  ParmDecl
+TOK .).  58-59  FunctionTemplate
+TOK .const.  60-65  FunctionTemplate
+     FunctionTemplate "v8::PersistentBase" operator==(const PersistentBase<S> &)   template <class S> V8_INLINE bool operator==(const PersistentBase<S>& that) const
+r=       Type { kind: Bool, display_name: "bool" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .S.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .bool.  13-17  FunctionTemplate
+TOK .operator.  18-26  FunctionTemplate
+TOK .==.  26-28  FunctionTemplate
+TOK .(.  28-29  FunctionTemplate
+TOK .const.  29-34  ParmDecl
+TOK .Local.  35-40  TemplateRef
+TOK .<.  40-41  ParmDecl
+TOK .S.  41-42  TypeRef
+TOK .>.  42-43  ParmDecl
+TOK .&.  43-44  ParmDecl
+TOK .that.  45-49  ParmDecl
+TOK .).  49-50  FunctionTemplate
+TOK .const.  51-56  FunctionTemplate
+     FunctionTemplate "v8::PersistentBase" operator==(const Local<S> &)   template <class S> V8_INLINE bool operator==(const Local<S>& that) const
+r=       Type { kind: Bool, display_name: "bool" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .S.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .bool.  13-17  FunctionTemplate
+TOK .operator.  18-26  FunctionTemplate
+TOK .!=.  26-28  FunctionTemplate
+TOK .(.  28-29  FunctionTemplate
+TOK .const.  29-34  ParmDecl
+TOK .PersistentBase.  35-49  TemplateRef
+TOK .<.  49-50  ParmDecl
+TOK .S.  50-51  TypeRef
+TOK .>.  51-52  ParmDecl
+TOK .&.  52-53  ParmDecl
+TOK .that.  54-58  ParmDecl
+TOK .).  58-59  FunctionTemplate
+TOK .const.  60-65  FunctionTemplate
+     FunctionTemplate "v8::PersistentBase" operator!=(const PersistentBase<S> &)   template <class S> V8_INLINE bool operator!=(const PersistentBase<S>& that) const
+r=       Type { kind: Bool, display_name: "bool" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .S.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .bool.  13-17  FunctionTemplate
+TOK .operator.  18-26  FunctionTemplate
+TOK .!=.  26-28  FunctionTemplate
+TOK .(.  28-29  FunctionTemplate
+TOK .const.  29-34  ParmDecl
+TOK .Local.  35-40  TemplateRef
+TOK .<.  40-41  ParmDecl
+TOK .S.  41-42  TypeRef
+TOK .>.  42-43  ParmDecl
+TOK .&.  43-44  ParmDecl
+TOK .that.  45-49  ParmDecl
+TOK .).  49-50  FunctionTemplate
+TOK .const.  51-56  FunctionTemplate
+     FunctionTemplate "v8::PersistentBase" operator!=(const Local<S> &)   template <class S> V8_INLINE bool operator!=(const Local<S>& that) const
+r=       Type { kind: Bool, display_name: "bool" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .typename.  13-21  TemplateTypeParameter
+TOK .P.  22-23  TemplateTypeParameter
+TOK .>.  23-24  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .void.  13-17  FunctionTemplate
+TOK .SetWeak.  18-25  FunctionTemplate
+TOK .(.  25-26  FunctionTemplate
+TOK .P.  26-27  TypeRef
+TOK .*.  27-28  ParmDecl
+TOK .parameter.  29-38  ParmDecl
+TOK .,.  38-39  FunctionTemplate
+TOK .typename.  26-34  ParmDecl
+TOK .WeakCallbackInfo.  35-51  TemplateRef
+TOK .<.  51-52  ParmDecl
+TOK .P.  52-53  TypeRef
+TOK .>.  53-54  ParmDecl
+TOK .::.  54-56  ParmDecl
+TOK .Callback.  56-64  ParmDecl
+TOK .callback.  65-73  ParmDecl
+TOK .,.  73-74  FunctionTemplate
+TOK .WeakCallbackType.  26-42  TypeRef
+TOK .type.  43-47  ParmDecl
+TOK .).  47-48  FunctionTemplate
+     FunctionTemplate "v8::PersistentBase" SetWeak(P *, typename WeakCallbackInfo<P>::Callback, v8::WeakCallbackType)   template <typename P> V8_INLINE void SetWeak(P* parameter, typename WeakCallbackInfo<P>::Callback callback, WeakCallbackType type)
+r=       Type { kind: Void, display_name: "void" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  11-12  FunctionTemplate
+TOK .typename.  12-20  TemplateTypeParameter
+TOK .P.  21-22  TemplateTypeParameter
+TOK .>.  22-23  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .P.  13-14  TypeRef
+TOK .*.  14-15  FunctionTemplate
+TOK .ClearWeak.  16-25  FunctionTemplate
+TOK .(.  25-26  FunctionTemplate
+TOK .).  26-27  FunctionTemplate
+     FunctionTemplate "v8::PersistentBase" ClearWeak()   template<typename P> V8_INLINE P* ClearWeak()
+r=       Type { kind: Pointer, display_name: "P *" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  11-12  FunctionTemplate
+TOK .class.  12-17  TemplateTypeParameter
+TOK .S.  18-19  TemplateTypeParameter
+TOK .,.  19-20  FunctionTemplate
+TOK .class.  21-26  TemplateTypeParameter
+TOK .M.  27-28  TemplateTypeParameter
+TOK .>.  28-29  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .static.  13-19  FunctionTemplate
+TOK .void.  20-24  FunctionTemplate
+TOK .Copy.  25-29  FunctionTemplate
+TOK .(.  29-30  FunctionTemplate
+TOK .const.  30-35  ParmDecl
+TOK .Persistent.  36-46  TemplateRef
+TOK .<.  46-47  ParmDecl
+TOK .S.  47-48  TypeRef
+TOK .,.  48-49  ParmDecl
+TOK .M.  50-51  TypeRef
+TOK .>.  51-52  ParmDecl
+TOK .&.  52-53  ParmDecl
+TOK .source.  54-60  ParmDecl
+TOK .,.  60-61  FunctionTemplate
+TOK .NonCopyablePersistent.  30-51  TypeRef
+TOK .*.  51-52  ParmDecl
+TOK .dest.  53-57  ParmDecl
+TOK .).  57-58  FunctionTemplate
+     FunctionTemplate static "v8::NonCopyablePersistentTraits" Copy(const Persistent<S, M> &, v8::NonCopyablePersistentTraits::NonCopyablePersistent *)   template<class S, class M> V8_INLINE static void Copy(const Persistent<S, M>& source, NonCopyablePersistent* dest)
+r=       Type { kind: Void, display_name: "void" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  11-12  FunctionTemplate
+TOK .class.  12-17  TemplateTypeParameter
+TOK .O.  18-19  TemplateTypeParameter
+TOK .>.  19-20  FunctionTemplate
+TOK .V8_INLINE.  21-30  FunctionTemplate
+TOK .static.  31-37  FunctionTemplate
+TOK .void.  38-42  FunctionTemplate
+TOK .Uncompilable.  43-55  FunctionTemplate
+TOK .(.  55-56  FunctionTemplate
+TOK .).  56-57  FunctionTemplate
+     FunctionTemplate static "v8::NonCopyablePersistentTraits" Uncompilable()   template<class O> V8_INLINE static void Uncompilable()
+r=       Type { kind: Void, display_name: "void" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  11-12  FunctionTemplate
+TOK .class.  12-17  TemplateTypeParameter
+TOK .S.  18-19  TemplateTypeParameter
+TOK .,.  19-20  FunctionTemplate
+TOK .class.  21-26  TemplateTypeParameter
+TOK .M.  27-28  TemplateTypeParameter
+TOK .>.  28-29  FunctionTemplate
+TOK .static.  3-9  FunctionTemplate
+TOK .V8_INLINE.  10-19  FunctionTemplate
+TOK .void.  20-24  FunctionTemplate
+TOK .Copy.  25-29  FunctionTemplate
+TOK .(.  29-30  FunctionTemplate
+TOK .const.  30-35  ParmDecl
+TOK .Persistent.  36-46  TemplateRef
+TOK .<.  46-47  ParmDecl
+TOK .S.  47-48  TypeRef
+TOK .,.  48-49  ParmDecl
+TOK .M.  50-51  TypeRef
+TOK .>.  51-52  ParmDecl
+TOK .&.  52-53  ParmDecl
+TOK .source.  54-60  ParmDecl
+TOK .,.  60-61  FunctionTemplate
+TOK .CopyablePersistent.  30-48  TypeRef
+TOK .*.  48-49  ParmDecl
+TOK .dest.  50-54  ParmDecl
+TOK .).  54-55  FunctionTemplate
+     FunctionTemplate static "v8::CopyablePersistentTraits" Copy(const Persistent<S, M> &, v8::CopyablePersistentTraits::CopyablePersistent *)   template<class S, class M> static V8_INLINE void Copy(const Persistent<S, M>& source, CopyablePersistent* dest)
+r=       Type { kind: Void, display_name: "void" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .S.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .Persistent.  13-23  FunctionTemplate
+TOK .(.  23-24  FunctionTemplate
+TOK .Isolate.  24-31  TypeRef
+TOK .*.  31-32  ParmDecl
+TOK .isolate.  33-40  ParmDecl
+TOK .,.  40-41  FunctionTemplate
+TOK .Local.  42-47  TemplateRef
+TOK .<.  47-48  ParmDecl
+TOK .S.  48-49  TypeRef
+TOK .>.  49-50  ParmDecl
+TOK .that.  51-55  ParmDecl
+TOK .).  55-56  FunctionTemplate
+     FunctionTemplate "v8::Persistent" Persistent<T, M>(v8::Isolate *, Local<S>)   template <class S> V8_INLINE Persistent(Isolate* isolate, Local<S> that)
+r=       Type { kind: Void, display_name: "void" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .S.  19-20  TemplateTypeParameter
+TOK .,.  20-21  FunctionTemplate
+TOK .class.  22-27  TemplateTypeParameter
+TOK .M2.  28-30  TemplateTypeParameter
+TOK .>.  30-31  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .Persistent.  13-23  FunctionTemplate
+TOK .(.  23-24  FunctionTemplate
+TOK .Isolate.  24-31  TypeRef
+TOK .*.  31-32  ParmDecl
+TOK .isolate.  33-40  ParmDecl
+TOK .,.  40-41  FunctionTemplate
+TOK .const.  42-47  ParmDecl
+TOK .Persistent.  48-58  TemplateRef
+TOK .<.  58-59  ParmDecl
+TOK .S.  59-60  TypeRef
+TOK .,.  60-61  ParmDecl
+TOK .M2.  62-64  TypeRef
+TOK .>.  64-65  ParmDecl
+TOK .&.  65-66  ParmDecl
+TOK .that.  67-71  ParmDecl
+TOK .).  71-72  FunctionTemplate
+     FunctionTemplate "v8::Persistent" Persistent<T, M>(v8::Isolate *, const Persistent<S, M2> &)   template <class S, class M2> V8_INLINE Persistent(Isolate* isolate, const Persistent<S, M2>& that)
+r=       Type { kind: Void, display_name: "void" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .S.  19-20  TemplateTypeParameter
+TOK .,.  20-21  FunctionTemplate
+TOK .class.  22-27  TemplateTypeParameter
+TOK .M2.  28-30  TemplateTypeParameter
+TOK .>.  30-31  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .Persistent.  13-23  FunctionTemplate
+TOK .(.  23-24  FunctionTemplate
+TOK .const.  24-29  ParmDecl
+TOK .Persistent.  30-40  TemplateRef
+TOK .<.  40-41  ParmDecl
+TOK .S.  41-42  TypeRef
+TOK .,.  42-43  ParmDecl
+TOK .M2.  44-46  TypeRef
+TOK .>.  46-47  ParmDecl
+TOK .&.  47-48  ParmDecl
+TOK .that.  49-53  ParmDecl
+TOK .).  53-54  FunctionTemplate
+     FunctionTemplate "v8::Persistent" Persistent<T, M>(const Persistent<S, M2> &)   template <class S, class M2> V8_INLINE Persistent(const Persistent<S, M2>& that)
+r=       Type { kind: Void, display_name: "void" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .S.  19-20  TemplateTypeParameter
+TOK .,.  20-21  FunctionTemplate
+TOK .class.  22-27  TemplateTypeParameter
+TOK .M2.  28-30  TemplateTypeParameter
+TOK .>.  30-31  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .Persistent.  13-23  TypeRef
+TOK .&.  23-24  FunctionTemplate
+TOK .operator.  25-33  FunctionTemplate
+TOK .=.  33-34  FunctionTemplate
+TOK .(.  34-35  FunctionTemplate
+TOK .const.  35-40  ParmDecl
+TOK .Persistent.  41-51  TemplateRef
+TOK .<.  51-52  ParmDecl
+TOK .S.  52-53  TypeRef
+TOK .,.  53-54  ParmDecl
+TOK .M2.  55-57  TypeRef
+TOK .>.  57-58  ParmDecl
+TOK .&.  58-59  ParmDecl
+TOK .that.  60-64  ParmDecl
+TOK .).  64-65  FunctionTemplate
+     FunctionTemplate "v8::Persistent" operator=(const Persistent<S, M2> &)   template <class S, class M2> V8_INLINE Persistent& operator=(const Persistent<S, M2>& that)
+r=       Type { kind: LValueReference, display_name: "Persistent<T, M> &" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .S.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .static.  13-19  FunctionTemplate
+TOK .Persistent.  20-30  TemplateRef
+TOK .<.  30-31  FunctionTemplate
+TOK .T.  31-32  TypeRef
+TOK .>.  32-33  FunctionTemplate
+TOK .&.  33-34  FunctionTemplate
+TOK .Cast.  35-39  FunctionTemplate
+TOK .(.  39-40  FunctionTemplate
+TOK .const.  40-45  ParmDecl
+TOK .Persistent.  46-56  TemplateRef
+TOK .<.  56-57  ParmDecl
+TOK .S.  57-58  TypeRef
+TOK .>.  58-59  ParmDecl
+TOK .&.  59-60  ParmDecl
+TOK .that.  61-65  ParmDecl
+TOK .).  65-66  FunctionTemplate
+     FunctionTemplate static "v8::Persistent" Cast(const Persistent<S> &)   template <class S> V8_INLINE static Persistent<T>& Cast(const Persistent<S>& that)
+r=       Type { kind: LValueReference, display_name: "Persistent<T> &" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .S.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .Persistent.  13-23  TemplateRef
+TOK .<.  23-24  FunctionTemplate
+TOK .S.  24-25  TypeRef
+TOK .>.  25-26  FunctionTemplate
+TOK .&.  26-27  FunctionTemplate
+TOK .As.  28-30  FunctionTemplate
+TOK .(.  30-31  FunctionTemplate
+TOK .).  31-32  FunctionTemplate
+TOK .const.  33-38  FunctionTemplate
+     FunctionTemplate "v8::Persistent" As()   template <class S> V8_INLINE Persistent<S>& As() const
+r=       Type { kind: LValueReference, display_name: "Persistent<S> &" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  11-12  FunctionTemplate
+TOK .class.  12-17  TemplateTypeParameter
+TOK .S.  18-19  TemplateTypeParameter
+TOK .,.  19-20  FunctionTemplate
+TOK .class.  21-26  TemplateTypeParameter
+TOK .M2.  27-29  TemplateTypeParameter
+TOK .>.  29-30  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .void.  13-17  FunctionTemplate
+TOK .Copy.  18-22  FunctionTemplate
+TOK .(.  22-23  FunctionTemplate
+TOK .const.  23-28  ParmDecl
+TOK .Persistent.  29-39  TemplateRef
+TOK .<.  39-40  ParmDecl
+TOK .S.  40-41  TypeRef
+TOK .,.  41-42  ParmDecl
+TOK .M2.  43-45  TypeRef
+TOK .>.  45-46  ParmDecl
+TOK .&.  46-47  ParmDecl
+TOK .that.  48-52  ParmDecl
+TOK .).  52-53  FunctionTemplate
+     FunctionTemplate "v8::Persistent" Copy(const Persistent<S, M2> &)   template<class S, class M2> V8_INLINE void Copy(const Persistent<S, M2>& that)
+r=       Type { kind: Void, display_name: "void" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .S.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .Global.  13-19  FunctionTemplate
+TOK .(.  19-20  FunctionTemplate
+TOK .Isolate.  20-27  TypeRef
+TOK .*.  27-28  ParmDecl
+TOK .isolate.  29-36  ParmDecl
+TOK .,.  36-37  FunctionTemplate
+TOK .Local.  38-43  TemplateRef
+TOK .<.  43-44  ParmDecl
+TOK .S.  44-45  TypeRef
+TOK .>.  45-46  ParmDecl
+TOK .that.  47-51  ParmDecl
+TOK .).  51-52  FunctionTemplate
+     FunctionTemplate "v8::Global" Global<T>(v8::Isolate *, Local<S>)   template <class S> V8_INLINE Global(Isolate* isolate, Local<S> that)
+r=       Type { kind: Void, display_name: "void" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .S.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .Global.  13-19  FunctionTemplate
+TOK .(.  19-20  FunctionTemplate
+TOK .Isolate.  20-27  TypeRef
+TOK .*.  27-28  ParmDecl
+TOK .isolate.  29-36  ParmDecl
+TOK .,.  36-37  FunctionTemplate
+TOK .const.  38-43  ParmDecl
+TOK .PersistentBase.  44-58  TemplateRef
+TOK .<.  58-59  ParmDecl
+TOK .S.  59-60  TypeRef
+TOK .>.  60-61  ParmDecl
+TOK .&.  61-62  ParmDecl
+TOK .that.  63-67  ParmDecl
+TOK .).  67-68  FunctionTemplate
+     FunctionTemplate "v8::Global" Global<T>(v8::Isolate *, const PersistentBase<S> &)   template <class S> V8_INLINE Global(Isolate* isolate, const PersistentBase<S>& that)
+r=       Type { kind: Void, display_name: "void" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .S.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .Global.  13-19  TypeRef
+TOK .&.  19-20  FunctionTemplate
+TOK .operator.  21-29  FunctionTemplate
+TOK .=.  29-30  FunctionTemplate
+TOK .(.  30-31  FunctionTemplate
+TOK .Global.  31-37  TemplateRef
+TOK .<.  37-38  ParmDecl
+TOK .S.  38-39  TypeRef
+TOK .>.  39-40  ParmDecl
+TOK .&&.  40-42  ParmDecl
+TOK .rhs.  43-46  ParmDecl
+TOK .).  46-47  FunctionTemplate
+     FunctionTemplate "v8::Global" operator=(Global<S> &&)   template <class S> V8_INLINE Global& operator=(Global<S>&& rhs)
+r=       Type { kind: LValueReference, display_name: "Global<T> &" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .S.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .TracedGlobal.  3-15  FunctionTemplate
+TOK .(.  15-16  FunctionTemplate
+TOK .Isolate.  16-23  TypeRef
+TOK .*.  23-24  ParmDecl
+TOK .isolate.  25-32  ParmDecl
+TOK .,.  32-33  FunctionTemplate
+TOK .Local.  34-39  TemplateRef
+TOK .<.  39-40  ParmDecl
+TOK .S.  40-41  TypeRef
+TOK .>.  41-42  ParmDecl
+TOK .that.  43-47  ParmDecl
+TOK .).  47-48  FunctionTemplate
+     FunctionTemplate "v8::TracedGlobal" TracedGlobal<T>(v8::Isolate *, Local<S>)   template <class S> TracedGlobal(Isolate* isolate, Local<S> that)
+r=       Type { kind: Void, display_name: "void" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .S.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .TracedGlobal.  13-25  TypeRef
+TOK .&.  25-26  FunctionTemplate
+TOK .operator.  27-35  FunctionTemplate
+TOK .=.  35-36  FunctionTemplate
+TOK .(.  36-37  FunctionTemplate
+TOK .TracedGlobal.  37-49  TemplateRef
+TOK .<.  49-50  ParmDecl
+TOK .S.  50-51  TypeRef
+TOK .>.  51-52  ParmDecl
+TOK .&&.  52-54  ParmDecl
+TOK .rhs.  55-58  ParmDecl
+TOK .).  58-59  FunctionTemplate
+     FunctionTemplate "v8::TracedGlobal" operator=(TracedGlobal<S> &&)   template <class S> V8_INLINE TracedGlobal& operator=(TracedGlobal<S>&& rhs)
+r=       Type { kind: LValueReference, display_name: "TracedGlobal<T> &" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .S.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .void.  13-17  FunctionTemplate
+TOK .Reset.  18-23  FunctionTemplate
+TOK .(.  23-24  FunctionTemplate
+TOK .Isolate.  24-31  TypeRef
+TOK .*.  31-32  ParmDecl
+TOK .isolate.  33-40  ParmDecl
+TOK .,.  40-41  FunctionTemplate
+TOK .const.  42-47  ParmDecl
+TOK .Local.  48-53  TemplateRef
+TOK .<.  53-54  ParmDecl
+TOK .S.  54-55  TypeRef
+TOK .>.  55-56  ParmDecl
+TOK .&.  56-57  ParmDecl
+TOK .other.  58-63  ParmDecl
+TOK .).  63-64  FunctionTemplate
+     FunctionTemplate "v8::TracedGlobal" Reset(v8::Isolate *, const Local<S> &)   template <class S> V8_INLINE void Reset(Isolate* isolate, const Local<S>& other)
+r=       Type { kind: Void, display_name: "void" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .S.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .TracedGlobal.  13-25  TemplateRef
+TOK .<.  25-26  FunctionTemplate
+TOK .S.  26-27  TypeRef
+TOK .>.  27-28  FunctionTemplate
+TOK .&.  28-29  FunctionTemplate
+TOK .As.  30-32  FunctionTemplate
+TOK .(.  32-33  FunctionTemplate
+TOK .).  33-34  FunctionTemplate
+TOK .const.  35-40  FunctionTemplate
+     FunctionTemplate "v8::TracedGlobal" As()   template <class S> V8_INLINE TracedGlobal<S>& As() const
+r=       Type { kind: LValueReference, display_name: "TracedGlobal<S> &" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .S.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .bool.  13-17  FunctionTemplate
+TOK .operator.  18-26  FunctionTemplate
+TOK .==.  26-28  FunctionTemplate
+TOK .(.  28-29  FunctionTemplate
+TOK .const.  29-34  ParmDecl
+TOK .TracedGlobal.  35-47  TemplateRef
+TOK .<.  47-48  ParmDecl
+TOK .S.  48-49  TypeRef
+TOK .>.  49-50  ParmDecl
+TOK .&.  50-51  ParmDecl
+TOK .that.  52-56  ParmDecl
+TOK .).  56-57  FunctionTemplate
+TOK .const.  58-63  FunctionTemplate
+     FunctionTemplate "v8::TracedGlobal" operator==(const TracedGlobal<S> &)   template <class S> V8_INLINE bool operator==(const TracedGlobal<S>& that) const
+r=       Type { kind: Bool, display_name: "bool" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .S.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .bool.  13-17  FunctionTemplate
+TOK .operator.  18-26  FunctionTemplate
+TOK .==.  26-28  FunctionTemplate
+TOK .(.  28-29  FunctionTemplate
+TOK .const.  29-34  ParmDecl
+TOK .Local.  35-40  TemplateRef
+TOK .<.  40-41  ParmDecl
+TOK .S.  41-42  TypeRef
+TOK .>.  42-43  ParmDecl
+TOK .&.  43-44  ParmDecl
+TOK .that.  45-49  ParmDecl
+TOK .).  49-50  FunctionTemplate
+TOK .const.  51-56  FunctionTemplate
+     FunctionTemplate "v8::TracedGlobal" operator==(const Local<S> &)   template <class S> V8_INLINE bool operator==(const Local<S>& that) const
+r=       Type { kind: Bool, display_name: "bool" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .S.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .bool.  13-17  FunctionTemplate
+TOK .operator.  18-26  FunctionTemplate
+TOK .!=.  26-28  FunctionTemplate
+TOK .(.  28-29  FunctionTemplate
+TOK .const.  29-34  ParmDecl
+TOK .TracedGlobal.  35-47  TemplateRef
+TOK .<.  47-48  ParmDecl
+TOK .S.  48-49  TypeRef
+TOK .>.  49-50  ParmDecl
+TOK .&.  50-51  ParmDecl
+TOK .that.  52-56  ParmDecl
+TOK .).  56-57  FunctionTemplate
+TOK .const.  58-63  FunctionTemplate
+     FunctionTemplate "v8::TracedGlobal" operator!=(const TracedGlobal<S> &)   template <class S> V8_INLINE bool operator!=(const TracedGlobal<S>& that) const
+r=       Type { kind: Bool, display_name: "bool" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .S.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .bool.  13-17  FunctionTemplate
+TOK .operator.  18-26  FunctionTemplate
+TOK .!=.  26-28  FunctionTemplate
+TOK .(.  28-29  FunctionTemplate
+TOK .const.  29-34  ParmDecl
+TOK .Local.  35-40  TemplateRef
+TOK .<.  40-41  ParmDecl
+TOK .S.  41-42  TypeRef
+TOK .>.  42-43  ParmDecl
+TOK .&.  43-44  ParmDecl
+TOK .that.  45-49  ParmDecl
+TOK .).  49-50  FunctionTemplate
+TOK .const.  51-56  FunctionTemplate
+     FunctionTemplate "v8::TracedGlobal" operator!=(const Local<S> &)   template <class S> V8_INLINE bool operator!=(const Local<S>& that) const
+r=       Type { kind: Bool, display_name: "bool" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .T.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .Local.  13-18  TemplateRef
+TOK .<.  18-19  FunctionTemplate
+TOK .T.  19-20  TypeRef
+TOK .>.  20-21  FunctionTemplate
+TOK .Escape.  22-28  FunctionTemplate
+TOK .(.  28-29  FunctionTemplate
+TOK .Local.  29-34  TemplateRef
+TOK .<.  34-35  ParmDecl
+TOK .T.  35-36  TypeRef
+TOK .>.  36-37  ParmDecl
+TOK .value.  38-43  ParmDecl
+TOK .).  43-44  FunctionTemplate
+     FunctionTemplate "v8::EscapableHandleScope" Escape(Local<T>)   template <class T> V8_INLINE Local<T> Escape(Local<T> value)
+r=       Type { kind: Unexposed, display_name: "Local<T>" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .T.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .MaybeLocal.  13-23  TemplateRef
+TOK .<.  23-24  FunctionTemplate
+TOK .T.  24-25  TypeRef
+TOK .>.  25-26  FunctionTemplate
+TOK .EscapeMaybe.  27-38  FunctionTemplate
+TOK .(.  38-39  FunctionTemplate
+TOK .MaybeLocal.  39-49  TemplateRef
+TOK .<.  49-50  ParmDecl
+TOK .T.  50-51  TypeRef
+TOK .>.  51-52  ParmDecl
+TOK .value.  53-58  ParmDecl
+TOK .).  58-59  FunctionTemplate
+     FunctionTemplate "v8::EscapableHandleScope" EscapeMaybe(MaybeLocal<T>)   template <class T> V8_INLINE MaybeLocal<T> EscapeMaybe(MaybeLocal<T> value)
+r=       Type { kind: Unexposed, display_name: "MaybeLocal<T>" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .T.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_INLINE.  22-31  FunctionTemplate
+TOK .static.  32-38  FunctionTemplate
+TOK .Value.  39-44  TypeRef
+TOK .*.  44-45  FunctionTemplate
+TOK .Cast.  46-50  FunctionTemplate
+TOK .(.  50-51  FunctionTemplate
+TOK .T.  51-52  TypeRef
+TOK .*.  52-53  ParmDecl
+TOK .value.  54-59  ParmDecl
+TOK .).  59-60  FunctionTemplate
+     FunctionTemplate static "v8::Value" Cast(T *)   template <class T> V8_INLINE static Value* Cast(T* value)
+r=       Type { kind: Pointer, display_name: "v8::Value *" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .S.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_INLINE.  22-31  FunctionTemplate
+TOK .ReturnValue.  32-43  FunctionTemplate
+TOK .(.  43-44  FunctionTemplate
+TOK .const.  44-49  ParmDecl
+TOK .ReturnValue.  50-61  TemplateRef
+TOK .<.  61-62  ParmDecl
+TOK .S.  62-63  TypeRef
+TOK .>.  63-64  ParmDecl
+TOK .&.  64-65  ParmDecl
+TOK .that.  66-70  ParmDecl
+TOK .).  70-71  FunctionTemplate
+     FunctionTemplate "v8::ReturnValue" ReturnValue<T>(const ReturnValue<S> &)   template <class S> V8_INLINE ReturnValue(const ReturnValue<S>& that)
+r=       Type { kind: Void, display_name: "void" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .typename.  13-21  TemplateTypeParameter
+TOK .S.  22-23  TemplateTypeParameter
+TOK .>.  23-24  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .V8_DEPRECATED.  13-26  FunctionTemplate
+TOK .(.  26-27  ClassTemplate
+TOK ."Use Global<> instead".  27-49  ClassTemplate
+TOK .,.  49-50  ClassTemplate
+TOK .void.  27-31  ClassTemplate
+TOK .Set.  32-35  ClassTemplate
+TOK .(.  35-36  ClassTemplate
+TOK .const.  36-41  ClassTemplate
+TOK .Persistent.  42-52  ClassTemplate
+TOK .<.  52-53  ClassTemplate
+TOK .S.  53-54  ClassTemplate
+TOK .>.  54-55  ClassTemplate
+TOK .&.  55-56  ClassTemplate
+TOK .handle.  57-63  ClassTemplate
+TOK .).  63-64  ClassTemplate
+     FunctionTemplate "v8::ReturnValue" Set(const Persistent<S> &)   template <typename S> V8_INLINE V8_DEPRECATED("Use Global<> instead", void Set(const Persistent<S>& handle)
+r=       Type { kind: Void, display_name: "void" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .typename.  13-21  TemplateTypeParameter
+TOK .S.  22-23  TemplateTypeParameter
+TOK .>.  23-24  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .void.  13-17  FunctionTemplate
+TOK .Set.  18-21  FunctionTemplate
+TOK .(.  21-22  FunctionTemplate
+TOK .const.  22-27  ParmDecl
+TOK .Global.  28-34  TemplateRef
+TOK .<.  34-35  ParmDecl
+TOK .S.  35-36  TypeRef
+TOK .>.  36-37  ParmDecl
+TOK .&.  37-38  ParmDecl
+TOK .handle.  39-45  ParmDecl
+TOK .).  45-46  FunctionTemplate
+     FunctionTemplate "v8::ReturnValue" Set(const Global<S> &)   template <typename S> V8_INLINE void Set(const Global<S>& handle)
+r=       Type { kind: Void, display_name: "void" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .typename.  13-21  TemplateTypeParameter
+TOK .S.  22-23  TemplateTypeParameter
+TOK .>.  23-24  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .void.  13-17  FunctionTemplate
+TOK .Set.  18-21  FunctionTemplate
+TOK .(.  21-22  FunctionTemplate
+TOK .const.  22-27  ParmDecl
+TOK .TracedGlobal.  28-40  TemplateRef
+TOK .<.  40-41  ParmDecl
+TOK .S.  41-42  TypeRef
+TOK .>.  42-43  ParmDecl
+TOK .&.  43-44  ParmDecl
+TOK .handle.  45-51  ParmDecl
+TOK .).  51-52  FunctionTemplate
+     FunctionTemplate "v8::ReturnValue" Set(const TracedGlobal<S> &)   template <typename S> V8_INLINE void Set(const TracedGlobal<S>& handle)
+r=       Type { kind: Void, display_name: "void" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .typename.  13-21  TemplateTypeParameter
+TOK .S.  22-23  TemplateTypeParameter
+TOK .>.  23-24  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .void.  13-17  FunctionTemplate
+TOK .Set.  18-21  FunctionTemplate
+TOK .(.  21-22  FunctionTemplate
+TOK .const.  22-27  ParmDecl
+TOK .Local.  28-33  TemplateRef
+TOK .<.  33-34  ParmDecl
+TOK .S.  34-35  TypeRef
+TOK .>.  35-36  ParmDecl
+TOK .handle.  37-43  ParmDecl
+TOK .).  43-44  FunctionTemplate
+     FunctionTemplate "v8::ReturnValue" Set(const Local<S>)   template <typename S> V8_INLINE void Set(const Local<S> handle)
+r=       Type { kind: Void, display_name: "void" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .typename.  13-21  TemplateTypeParameter
+TOK .S.  22-23  TemplateTypeParameter
+TOK .>.  23-24  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .void.  13-17  FunctionTemplate
+TOK .Set.  18-21  FunctionTemplate
+TOK .(.  21-22  FunctionTemplate
+TOK .S.  22-23  TypeRef
+TOK .*.  23-24  ParmDecl
+TOK .whatever.  25-33  ParmDecl
+TOK .).  33-34  FunctionTemplate
+     FunctionTemplate "v8::ReturnValue" Set(S *)   template <typename S> V8_INLINE void Set(S* whatever)
+r=       Type { kind: Void, display_name: "void" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .T.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .MaybeLocal.  13-23  TemplateRef
+TOK .<.  23-24  FunctionTemplate
+TOK .T.  24-25  TypeRef
+TOK .>.  25-26  FunctionTemplate
+TOK .GetDataFromSnapshotOnce.  27-50  FunctionTemplate
+TOK .(.  50-51  FunctionTemplate
+TOK .size_t.  51-57  TypeRef
+TOK .index.  58-63  ParmDecl
+TOK .).  63-64  FunctionTemplate
+     FunctionTemplate "v8::Isolate" GetDataFromSnapshotOnce(size_t)   template <class T> V8_INLINE MaybeLocal<T> GetDataFromSnapshotOnce(size_t index)
+r=       Type { kind: Unexposed, display_name: "MaybeLocal<T>" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .T.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .size_t.  13-19  TypeRef
+TOK .AddData.  20-27  FunctionTemplate
+TOK .(.  27-28  FunctionTemplate
+TOK .Local.  28-33  TemplateRef
+TOK .<.  33-34  ParmDecl
+TOK .Context.  34-41  TypeRef
+TOK .>.  41-42  ParmDecl
+TOK .context.  43-50  ParmDecl
+TOK .,.  50-51  FunctionTemplate
+TOK .Local.  52-57  TemplateRef
+TOK .<.  57-58  ParmDecl
+TOK .T.  58-59  TypeRef
+TOK .>.  59-60  ParmDecl
+TOK .object.  61-67  ParmDecl
+TOK .).  67-68  FunctionTemplate
+     FunctionTemplate "v8::SnapshotCreator" AddData(Local<v8::Context>, Local<T>)   template <class T> V8_INLINE size_t AddData(Local<Context> context, Local<T> object)
+r=       Type { kind: Typedef, display_name: "size_t" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .T.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .size_t.  13-19  TypeRef
+TOK .AddData.  20-27  FunctionTemplate
+TOK .(.  27-28  FunctionTemplate
+TOK .Local.  28-33  TemplateRef
+TOK .<.  33-34  ParmDecl
+TOK .T.  34-35  TypeRef
+TOK .>.  35-36  ParmDecl
+TOK .object.  37-43  ParmDecl
+TOK .).  43-44  FunctionTemplate
+     FunctionTemplate "v8::SnapshotCreator" AddData(Local<T>)   template <class T> V8_INLINE size_t AddData(Local<T> object)
+r=       Type { kind: Typedef, display_name: "size_t" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .U.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .friend.  3-9  FunctionTemplate
+TOK .Maybe.  10-15  TemplateRef
+TOK .<.  15-16  FunctionTemplate
+TOK .U.  16-17  TypeRef
+TOK .>.  17-18  FunctionTemplate
+TOK .Nothing.  19-26  FunctionTemplate
+TOK .(.  26-27  FunctionTemplate
+TOK .).  27-28  FunctionTemplate
+       FunctionTemplate "v8::Maybe" Nothing()   template <class U> friend Maybe<U> Nothing()
+r=         Type { kind: Unexposed, display_name: "Maybe<U>" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .U.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .friend.  3-9  FunctionTemplate
+TOK .Maybe.  10-15  TemplateRef
+TOK .<.  15-16  FunctionTemplate
+TOK .U.  16-17  TypeRef
+TOK .>.  17-18  FunctionTemplate
+TOK .Just.  19-23  FunctionTemplate
+TOK .(.  23-24  FunctionTemplate
+TOK .const.  24-29  ParmDecl
+TOK .U.  30-31  TypeRef
+TOK .&.  31-32  ParmDecl
+TOK .u.  33-34  ParmDecl
+TOK .).  34-35  FunctionTemplate
+       FunctionTemplate "v8::Maybe" Just(const U &)   template <class U> friend Maybe<U> Just(const U& u)
+r=         Type { kind: Unexposed, display_name: "Maybe<U>" } ""
+TOK .template.  1-9  FunctionTemplate
+TOK .<.  10-11  FunctionTemplate
+TOK .class.  11-16  TemplateTypeParameter
+TOK .T.  17-18  TemplateTypeParameter
+TOK .>.  18-19  FunctionTemplate
+TOK .inline.  1-7  FunctionTemplate
+TOK .Maybe.  8-13  TemplateRef
+TOK .<.  13-14  FunctionTemplate
+TOK .T.  14-15  TypeRef
+TOK .>.  15-16  FunctionTemplate
+TOK .Nothing.  17-24  FunctionTemplate
+TOK .(.  24-25  FunctionTemplate
+TOK .).  25-26  FunctionTemplate
+   FunctionTemplate "v8" Nothing()   template <class T> inline Maybe<T> Nothing()
+r=     Type { kind: Unexposed, display_name: "Maybe<T>" } ""
+TOK .template.  1-9  FunctionTemplate
+TOK .<.  10-11  FunctionTemplate
+TOK .class.  11-16  TemplateTypeParameter
+TOK .T.  17-18  TemplateTypeParameter
+TOK .>.  18-19  FunctionTemplate
+TOK .inline.  1-7  FunctionTemplate
+TOK .Maybe.  8-13  TemplateRef
+TOK .<.  13-14  FunctionTemplate
+TOK .T.  14-15  TypeRef
+TOK .>.  15-16  FunctionTemplate
+TOK .Just.  17-21  FunctionTemplate
+TOK .(.  21-22  FunctionTemplate
+TOK .const.  22-27  ParmDecl
+TOK .T.  28-29  TypeRef
+TOK .&.  29-30  ParmDecl
+TOK .t.  31-32  ParmDecl
+TOK .).  32-33  FunctionTemplate
+   FunctionTemplate "v8" Just(const T &)   template <class T> inline Maybe<T> Just(const T& t)
+r=     Type { kind: Unexposed, display_name: "Maybe<T>" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .U.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .friend.  3-9  FunctionTemplate
+TOK .Maybe.  10-15  TemplateRef
+TOK .<.  15-16  FunctionTemplate
+TOK .U.  16-17  TypeRef
+TOK .>.  17-18  FunctionTemplate
+TOK .Nothing.  19-26  FunctionTemplate
+TOK .(.  26-27  FunctionTemplate
+TOK .).  27-28  FunctionTemplate
+       FunctionTemplate "v8::Maybe" Nothing()   template <class U> friend Maybe<U> Nothing()
+r=         Type { kind: Unexposed, display_name: "Maybe<U>" } ""
+TOK .template.  3-11  FunctionTemplate
+TOK .<.  12-13  FunctionTemplate
+TOK .class.  13-18  TemplateTypeParameter
+TOK .T.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .V8_INLINE.  3-12  FunctionTemplate
+TOK .MaybeLocal.  13-23  TemplateRef
+TOK .<.  23-24  FunctionTemplate
+TOK .T.  24-25  TypeRef
+TOK .>.  25-26  FunctionTemplate
+TOK .GetDataFromSnapshotOnce.  27-50  FunctionTemplate
+TOK .(.  50-51  FunctionTemplate
+TOK .size_t.  51-57  TypeRef
+TOK .index.  58-63  ParmDecl
+TOK .).  63-64  FunctionTemplate
+     FunctionTemplate "v8::Context" GetDataFromSnapshotOnce(size_t)   template <class T> V8_INLINE MaybeLocal<T> GetDataFromSnapshotOnce(size_t index)
+r=       Type { kind: Unexposed, display_name: "MaybeLocal<T>" } ""
+TOK .template.  1-9  FunctionTemplate
+TOK .<.  9-10  FunctionTemplate
+TOK .class.  10-15  TemplateTypeParameter
+TOK .S.  16-17  TemplateTypeParameter
+TOK .>.  17-18  FunctionTemplate
+TOK .void.  1-5  FunctionTemplate
+TOK .Eternal.  6-13  TemplateRef
+TOK .<.  13-14  FunctionTemplate
+TOK .T.  14-15  TypeRef
+TOK .>.  15-16  FunctionTemplate
+TOK .::.  16-18  FunctionTemplate
+TOK .Set.  18-21  FunctionTemplate
+TOK .(.  21-22  FunctionTemplate
+TOK .Isolate.  22-29  TypeRef
+TOK .*.  29-30  ParmDecl
+TOK .isolate.  31-38  ParmDecl
+TOK .,.  38-39  FunctionTemplate
+TOK .Local.  40-45  TemplateRef
+TOK .<.  45-46  ParmDecl
+TOK .S.  46-47  TypeRef
+TOK .>.  47-48  ParmDecl
+TOK .handle.  49-55  ParmDecl
+TOK .).  55-56  FunctionTemplate
+   FunctionTemplate "v8" Set(v8::Isolate *, Local<S>)   template<class S> void Eternal<T>::Set(Isolate* isolate, Local<S> handle)
+r=     Type { kind: Void, display_name: "void" } ""
+TOK .template.  1-9  FunctionTemplate
+TOK .<.  10-11  FunctionTemplate
+TOK .class.  11-16  TemplateTypeParameter
+TOK .S.  17-18  TemplateTypeParameter
+TOK .,.  18-19  FunctionTemplate
+TOK .class.  20-25  TemplateTypeParameter
+TOK .M2.  26-28  TemplateTypeParameter
+TOK .>.  28-29  FunctionTemplate
+TOK .void.  1-5  FunctionTemplate
+TOK .Persistent.  6-16  TemplateRef
+TOK .<.  16-17  FunctionTemplate
+TOK .T.  17-18  TypeRef
+TOK .,.  18-19  FunctionTemplate
+TOK .M.  20-21  TypeRef
+TOK .>.  21-22  FunctionTemplate
+TOK .::.  22-24  FunctionTemplate
+TOK .Copy.  24-28  FunctionTemplate
+TOK .(.  28-29  FunctionTemplate
+TOK .const.  29-34  ParmDecl
+TOK .Persistent.  35-45  TemplateRef
+TOK .<.  45-46  ParmDecl
+TOK .S.  46-47  TypeRef
+TOK .,.  47-48  ParmDecl
+TOK .M2.  49-51  TypeRef
+TOK .>.  51-52  ParmDecl
+TOK .&.  52-53  ParmDecl
+TOK .that.  54-58  ParmDecl
+TOK .).  58-59  FunctionTemplate
+   FunctionTemplate "v8" Copy(const Persistent<S, M2> &)   template <class S, class M2> void Persistent<T, M>::Copy(const Persistent<S, M2>& that)
+r=     Type { kind: Void, display_name: "void" } ""
+TOK .template.  1-9  FunctionTemplate
+TOK .<.  10-11  FunctionTemplate
+TOK .class.  11-16  TemplateTypeParameter
+TOK .S.  17-18  TemplateTypeParameter
+TOK .>.  18-19  FunctionTemplate
+TOK .void.  1-5  FunctionTemplate
+TOK .PersistentBase.  6-20  TemplateRef
+TOK .<.  20-21  FunctionTemplate
+TOK .T.  21-22  TypeRef
+TOK .>.  22-23  FunctionTemplate
+TOK .::.  23-25  FunctionTemplate
+TOK .Reset.  25-30  FunctionTemplate
+TOK .(.  30-31  FunctionTemplate
+TOK .Isolate.  31-38  TypeRef
+TOK .*.  38-39  ParmDecl
+TOK .isolate.  40-47  ParmDecl
+TOK .,.  47-48  FunctionTemplate
+TOK .const.  49-54  ParmDecl
+TOK .Local.  55-60  TemplateRef
+TOK .<.  60-61  ParmDecl
+TOK .S.  61-62  TypeRef
+TOK .>.  62-63  ParmDecl
+TOK .&.  63-64  ParmDecl
+TOK .other.  65-70  ParmDecl
+TOK .).  70-71  FunctionTemplate
+   FunctionTemplate "v8" Reset(v8::Isolate *, const Local<S> &)   template <class S> void PersistentBase<T>::Reset(Isolate* isolate, const Local<S>& other)
+r=     Type { kind: Void, display_name: "void" } ""
+TOK .template.  1-9  FunctionTemplate
+TOK .<.  10-11  FunctionTemplate
+TOK .class.  11-16  TemplateTypeParameter
+TOK .S.  17-18  TemplateTypeParameter
+TOK .>.  18-19  FunctionTemplate
+TOK .void.  1-5  FunctionTemplate
+TOK .PersistentBase.  6-20  TemplateRef
+TOK .<.  20-21  FunctionTemplate
+TOK .T.  21-22  TypeRef
+TOK .>.  22-23  FunctionTemplate
+TOK .::.  23-25  FunctionTemplate
+TOK .Reset.  25-30  FunctionTemplate
+TOK .(.  30-31  FunctionTemplate
+TOK .Isolate.  31-38  TypeRef
+TOK .*.  38-39  ParmDecl
+TOK .isolate.  40-47  ParmDecl
+TOK .,.  47-48  FunctionTemplate
+TOK .const.  31-36  ParmDecl
+TOK .PersistentBase.  37-51  TemplateRef
+TOK .<.  51-52  ParmDecl
+TOK .S.  52-53  TypeRef
+TOK .>.  53-54  ParmDecl
+TOK .&.  54-55  ParmDecl
+TOK .other.  56-61  ParmDecl
+TOK .).  61-62  FunctionTemplate
+   FunctionTemplate "v8" Reset(v8::Isolate *, const PersistentBase<S> &)   template <class S> void PersistentBase<T>::Reset(Isolate* isolate, const PersistentBase<S>& other)
+r=     Type { kind: Void, display_name: "void" } ""
+TOK .template.  1-9  FunctionTemplate
+TOK .<.  10-11  FunctionTemplate
+TOK .typename.  11-19  TemplateTypeParameter
+TOK .P.  20-21  TemplateTypeParameter
+TOK .>.  21-22  FunctionTemplate
+TOK .V8_INLINE.  1-10  FunctionTemplate
+TOK .void.  11-15  FunctionTemplate
+TOK .PersistentBase.  16-30  TemplateRef
+TOK .<.  30-31  FunctionTemplate
+TOK .T.  31-32  TypeRef
+TOK .>.  32-33  FunctionTemplate
+TOK .::.  33-35  FunctionTemplate
+TOK .SetWeak.  35-42  FunctionTemplate
+TOK .(.  42-43  FunctionTemplate
+TOK .P.  5-6  TypeRef
+TOK .*.  6-7  ParmDecl
+TOK .parameter.  8-17  ParmDecl
+TOK .,.  17-18  FunctionTemplate
+TOK .typename.  19-27  ParmDecl
+TOK .WeakCallbackInfo.  28-44  TemplateRef
+TOK .<.  44-45  ParmDecl
+TOK .P.  45-46  TypeRef
+TOK .>.  46-47  ParmDecl
+TOK .::.  47-49  ParmDecl
+TOK .Callback.  49-57  ParmDecl
+TOK .callback.  58-66  ParmDecl
+TOK .,.  66-67  FunctionTemplate
+TOK .WeakCallbackType.  5-21  TypeRef
+TOK .type.  22-26  ParmDecl
+TOK .).  26-27  FunctionTemplate
+   FunctionTemplate "v8" SetWeak(P *, typename WeakCallbackInfo<P>::Callback, v8::WeakCallbackType)   template <typename P> V8_INLINE void PersistentBase<T>::SetWeak( P* parameter, typename WeakCallbackInfo<P>::Callback callback, WeakCallbackType type)
+r=     Type { kind: Void, display_name: "void" } ""
+TOK .template.  1-9  FunctionTemplate
+TOK .<.  10-11  FunctionTemplate
+TOK .typename.  11-19  TemplateTypeParameter
+TOK .P.  20-21  TemplateTypeParameter
+TOK .>.  21-22  FunctionTemplate
+TOK .P.  1-2  TypeRef
+TOK .*.  2-3  FunctionTemplate
+TOK .PersistentBase.  4-18  TemplateRef
+TOK .<.  18-19  FunctionTemplate
+TOK .T.  19-20  TypeRef
+TOK .>.  20-21  FunctionTemplate
+TOK .::.  21-23  FunctionTemplate
+TOK .ClearWeak.  23-32  FunctionTemplate
+TOK .(.  32-33  FunctionTemplate
+TOK .).  33-34  FunctionTemplate
+   FunctionTemplate "v8" ClearWeak()   template <typename P> P* PersistentBase<T>::ClearWeak()
+r=     Type { kind: Pointer, display_name: "P *" } ""
+TOK .template.  1-9  FunctionTemplate
+TOK .<.  10-11  FunctionTemplate
+TOK .class.  11-16  TemplateTypeParameter
+TOK .S.  17-18  TemplateTypeParameter
+TOK .>.  18-19  FunctionTemplate
+TOK .Global.  1-7  TemplateRef
+TOK .<.  7-8  FunctionTemplate
+TOK .T.  8-9  TypeRef
+TOK .>.  9-10  FunctionTemplate
+TOK .&.  10-11  FunctionTemplate
+TOK .Global.  12-18  TemplateRef
+TOK .<.  18-19  FunctionTemplate
+TOK .T.  19-20  TypeRef
+TOK .>.  20-21  FunctionTemplate
+TOK .::.  21-23  FunctionTemplate
+TOK .operator.  23-31  FunctionTemplate
+TOK .=.  31-32  FunctionTemplate
+TOK .(.  32-33  FunctionTemplate
+TOK .Global.  33-39  TemplateRef
+TOK .<.  39-40  ParmDecl
+TOK .S.  40-41  TypeRef
+TOK .>.  41-42  ParmDecl
+TOK .&&.  42-44  ParmDecl
+TOK .rhs.  45-48  ParmDecl
+TOK .).  48-49  FunctionTemplate
+   FunctionTemplate "v8" operator=(Global<S> &&)   template <class S> Global<T>& Global<T>::operator=(Global<S>&& rhs)
+r=     Type { kind: LValueReference, display_name: "Global<T> &" } ""
+TOK .template.  1-9  FunctionTemplate
+TOK .<.  10-11  FunctionTemplate
+TOK .class.  11-16  TemplateTypeParameter
+TOK .S.  17-18  TemplateTypeParameter
+TOK .>.  18-19  FunctionTemplate
+TOK .void.  1-5  FunctionTemplate
+TOK .TracedGlobal.  6-18  TemplateRef
+TOK .<.  18-19  FunctionTemplate
+TOK .T.  19-20  TypeRef
+TOK .>.  20-21  FunctionTemplate
+TOK .::.  21-23  FunctionTemplate
+TOK .Reset.  23-28  FunctionTemplate
+TOK .(.  28-29  FunctionTemplate
+TOK .Isolate.  29-36  TypeRef
+TOK .*.  36-37  ParmDecl
+TOK .isolate.  38-45  ParmDecl
+TOK .,.  45-46  FunctionTemplate
+TOK .const.  47-52  ParmDecl
+TOK .Local.  53-58  TemplateRef
+TOK .<.  58-59  ParmDecl
+TOK .S.  59-60  TypeRef
+TOK .>.  60-61  ParmDecl
+TOK .&.  61-62  ParmDecl
+TOK .other.  63-68  ParmDecl
+TOK .).  68-69  FunctionTemplate
+   FunctionTemplate "v8" Reset(v8::Isolate *, const Local<S> &)   template <class S> void TracedGlobal<T>::Reset(Isolate* isolate, const Local<S>& other)
+r=     Type { kind: Void, display_name: "void" } ""
+TOK .template.  1-9  FunctionTemplate
+TOK .<.  10-11  FunctionTemplate
+TOK .class.  11-16  TemplateTypeParameter
+TOK .S.  17-18  TemplateTypeParameter
+TOK .>.  18-19  FunctionTemplate
+TOK .TracedGlobal.  1-13  TemplateRef
+TOK .<.  13-14  FunctionTemplate
+TOK .T.  14-15  TypeRef
+TOK .>.  15-16  FunctionTemplate
+TOK .&.  16-17  FunctionTemplate
+TOK .TracedGlobal.  18-30  TemplateRef
+TOK .<.  30-31  FunctionTemplate
+TOK .T.  31-32  TypeRef
+TOK .>.  32-33  FunctionTemplate
+TOK .::.  33-35  FunctionTemplate
+TOK .operator.  35-43  FunctionTemplate
+TOK .=.  43-44  FunctionTemplate
+TOK .(.  44-45  FunctionTemplate
+TOK .TracedGlobal.  45-57  TemplateRef
+TOK .<.  57-58  ParmDecl
+TOK .S.  58-59  TypeRef
+TOK .>.  59-60  ParmDecl
+TOK .&&.  60-62  ParmDecl
+TOK .rhs.  63-66  ParmDecl
+TOK .).  66-67  FunctionTemplate
+   FunctionTemplate "v8" operator=(TracedGlobal<S> &&)   template <class S> TracedGlobal<T>& TracedGlobal<T>::operator=(TracedGlobal<S>&& rhs)
+r=     Type { kind: LValueReference, display_name: "TracedGlobal<T> &" } ""
+TOK .template.  1-9  FunctionTemplate
+TOK .<.  9-10  FunctionTemplate
+TOK .typename.  10-18  TemplateTypeParameter
+TOK .S.  19-20  TemplateTypeParameter
+TOK .>.  20-21  FunctionTemplate
+TOK .void.  1-5  FunctionTemplate
+TOK .ReturnValue.  6-17  TemplateRef
+TOK .<.  17-18  FunctionTemplate
+TOK .T.  18-19  TypeRef
+TOK .>.  19-20  FunctionTemplate
+TOK .::.  20-22  FunctionTemplate
+TOK .Set.  22-25  FunctionTemplate
+TOK .(.  25-26  FunctionTemplate
+TOK .const.  26-31  ParmDecl
+TOK .Persistent.  32-42  TemplateRef
+TOK .<.  42-43  ParmDecl
+TOK .S.  43-44  TypeRef
+TOK .>.  44-45  ParmDecl
+TOK .&.  45-46  ParmDecl
+TOK .handle.  47-53  ParmDecl
+TOK .).  53-54  FunctionTemplate
+   FunctionTemplate "v8" Set(const Persistent<S> &)   template<typename S> void ReturnValue<T>::Set(const Persistent<S>& handle)
+r=     Type { kind: Void, display_name: "void" } ""
+TOK .template.  1-9  FunctionTemplate
+TOK .<.  10-11  FunctionTemplate
+TOK .typename.  11-19  TemplateTypeParameter
+TOK .S.  20-21  TemplateTypeParameter
+TOK .>.  21-22  FunctionTemplate
+TOK .void.  1-5  FunctionTemplate
+TOK .ReturnValue.  6-17  TemplateRef
+TOK .<.  17-18  FunctionTemplate
+TOK .T.  18-19  TypeRef
+TOK .>.  19-20  FunctionTemplate
+TOK .::.  20-22  FunctionTemplate
+TOK .Set.  22-25  FunctionTemplate
+TOK .(.  25-26  FunctionTemplate
+TOK .const.  26-31  ParmDecl
+TOK .Global.  32-38  TemplateRef
+TOK .<.  38-39  ParmDecl
+TOK .S.  39-40  TypeRef
+TOK .>.  40-41  ParmDecl
+TOK .&.  41-42  ParmDecl
+TOK .handle.  43-49  ParmDecl
+TOK .).  49-50  FunctionTemplate
+   FunctionTemplate "v8" Set(const Global<S> &)   template <typename S> void ReturnValue<T>::Set(const Global<S>& handle)
+r=     Type { kind: Void, display_name: "void" } ""
+TOK .template.  1-9  FunctionTemplate
+TOK .<.  10-11  FunctionTemplate
+TOK .typename.  11-19  TemplateTypeParameter
+TOK .S.  20-21  TemplateTypeParameter
+TOK .>.  21-22  FunctionTemplate
+TOK .void.  1-5  FunctionTemplate
+TOK .ReturnValue.  6-17  TemplateRef
+TOK .<.  17-18  FunctionTemplate
+TOK .T.  18-19  TypeRef
+TOK .>.  19-20  FunctionTemplate
+TOK .::.  20-22  FunctionTemplate
+TOK .Set.  22-25  FunctionTemplate
+TOK .(.  25-26  FunctionTemplate
+TOK .const.  26-31  ParmDecl
+TOK .TracedGlobal.  32-44  TemplateRef
+TOK .<.  44-45  ParmDecl
+TOK .S.  45-46  TypeRef
+TOK .>.  46-47  ParmDecl
+TOK .&.  47-48  ParmDecl
+TOK .handle.  49-55  ParmDecl
+TOK .).  55-56  FunctionTemplate
+   FunctionTemplate "v8" Set(const TracedGlobal<S> &)   template <typename S> void ReturnValue<T>::Set(const TracedGlobal<S>& handle)
+r=     Type { kind: Void, display_name: "void" } ""
+TOK .template.  1-9  FunctionTemplate
+TOK .<.  10-11  FunctionTemplate
+TOK .typename.  11-19  TemplateTypeParameter
+TOK .S.  20-21  TemplateTypeParameter
+TOK .>.  21-22  FunctionTemplate
+TOK .void.  1-5  FunctionTemplate
+TOK .ReturnValue.  6-17  TemplateRef
+TOK .<.  17-18  FunctionTemplate
+TOK .T.  18-19  TypeRef
+TOK .>.  19-20  FunctionTemplate
+TOK .::.  20-22  FunctionTemplate
+TOK .Set.  22-25  FunctionTemplate
+TOK .(.  25-26  FunctionTemplate
+TOK .const.  26-31  ParmDecl
+TOK .Local.  32-37  TemplateRef
+TOK .<.  37-38  ParmDecl
+TOK .S.  38-39  TypeRef
+TOK .>.  39-40  ParmDecl
+TOK .handle.  41-47  ParmDecl
+TOK .).  47-48  FunctionTemplate
+   FunctionTemplate "v8" Set(const Local<S>)   template <typename S> void ReturnValue<T>::Set(const Local<S> handle)
+r=     Type { kind: Void, display_name: "void" } ""
+TOK .template.  1-9  FunctionTemplate
+TOK .<.  10-11  FunctionTemplate
+TOK .typename.  11-19  TemplateTypeParameter
+TOK .S.  20-21  TemplateTypeParameter
+TOK .>.  21-22  FunctionTemplate
+TOK .void.  1-5  FunctionTemplate
+TOK .ReturnValue.  6-17  TemplateRef
+TOK .<.  17-18  FunctionTemplate
+TOK .T.  18-19  TypeRef
+TOK .>.  19-20  FunctionTemplate
+TOK .::.  20-22  FunctionTemplate
+TOK .Set.  22-25  FunctionTemplate
+TOK .(.  25-26  FunctionTemplate
+TOK .S.  26-27  TypeRef
+TOK .*.  27-28  ParmDecl
+TOK .whatever.  29-37  ParmDecl
+TOK .).  37-38  FunctionTemplate
+   FunctionTemplate "v8" Set(S *)   template <typename S> void ReturnValue<T>::Set(S* whatever)
+r=     Type { kind: Void, display_name: "void" } ""
+TOK .template.  1-9  FunctionTemplate
+TOK .<.  10-11  FunctionTemplate
+TOK .class.  11-16  TemplateTypeParameter
+TOK .T.  17-18  TemplateTypeParameter
+TOK .>.  18-19  FunctionTemplate
+TOK .Value.  20-25  TypeRef
+TOK .*.  25-26  FunctionTemplate
+TOK .Value.  27-32  TypeRef
+TOK .::.  32-34  FunctionTemplate
+TOK .Cast.  34-38  FunctionTemplate
+TOK .(.  38-39  FunctionTemplate
+TOK .T.  39-40  TypeRef
+TOK .*.  40-41  ParmDecl
+TOK .value.  42-47  ParmDecl
+TOK .).  47-48  FunctionTemplate
+   FunctionTemplate static "v8" Cast(T *)   template <class T> Value* Value::Cast(T* value)
+r=     Type { kind: Pointer, display_name: "v8::Value *" } ""
+TOK .template.  1-9  FunctionTemplate
+TOK .<.  10-11  FunctionTemplate
+TOK .class.  11-16  TemplateTypeParameter
+TOK .T.  17-18  TemplateTypeParameter
+TOK .>.  18-19  FunctionTemplate
+TOK .MaybeLocal.  1-11  TemplateRef
+TOK .<.  11-12  FunctionTemplate
+TOK .T.  12-13  TypeRef
+TOK .>.  13-14  FunctionTemplate
+TOK .Isolate.  15-22  TypeRef
+TOK .::.  22-24  FunctionTemplate
+TOK .GetDataFromSnapshotOnce.  24-47  Method
+TOK .(.  47-48  Method
+TOK .size_t.  48-54  TypeRef
+TOK .index.  55-60  ParmDecl
+TOK .).  60-61  Method
+   FunctionTemplate "v8" GetDataFromSnapshotOnce(size_t)   template <class T> MaybeLocal<T> Isolate::GetDataFromSnapshotOnce(size_t index)
+r=     Type { kind: Unexposed, display_name: "MaybeLocal<T>" } ""
+TOK .template.  1-9  FunctionTemplate
+TOK .<.  10-11  FunctionTemplate
+TOK .class.  11-16  TemplateTypeParameter
+TOK .T.  17-18  TemplateTypeParameter
+TOK .>.  18-19  FunctionTemplate
+TOK .MaybeLocal.  1-11  TemplateRef
+TOK .<.  11-12  FunctionTemplate
+TOK .T.  12-13  TypeRef
+TOK .>.  13-14  FunctionTemplate
+TOK .Context.  15-22  TypeRef
+TOK .::.  22-24  FunctionTemplate
+TOK .GetDataFromSnapshotOnce.  24-47  FunctionTemplate
+TOK .(.  47-48  FunctionTemplate
+TOK .size_t.  48-54  TypeRef
+TOK .index.  55-60  ParmDecl
+TOK .).  60-61  FunctionTemplate
+   FunctionTemplate "v8" GetDataFromSnapshotOnce(size_t)   template <class T> MaybeLocal<T> Context::GetDataFromSnapshotOnce(size_t index)
+r=     Type { kind: Unexposed, display_name: "MaybeLocal<T>" } ""
+TOK .template.  1-9  FunctionTemplate
+TOK .<.  10-11  FunctionTemplate
+TOK .class.  11-16  TemplateTypeParameter
+TOK .T.  17-18  TemplateTypeParameter
+TOK .>.  18-19  FunctionTemplate
+TOK .size_t.  1-7  TypeRef
+TOK .SnapshotCreator.  8-23  TypeRef
+TOK .::.  23-25  FunctionTemplate
+TOK .AddData.  25-32  FunctionTemplate
+TOK .(.  32-33  FunctionTemplate
+TOK .Local.  33-38  TemplateRef
+TOK .<.  38-39  ParmDecl
+TOK .Context.  39-46  TypeRef
+TOK .>.  46-47  ParmDecl
+TOK .context.  48-55  ParmDecl
+TOK .,.  55-56  FunctionTemplate
+TOK .Local.  57-62  TemplateRef
+TOK .<.  62-63  ParmDecl
+TOK .T.  63-64  TypeRef
+TOK .>.  64-65  ParmDecl
+TOK .object.  66-72  ParmDecl
+TOK .).  72-73  FunctionTemplate
+   FunctionTemplate "v8" AddData(Local<v8::Context>, Local<T>)   template <class T> size_t SnapshotCreator::AddData(Local<Context> context, Local<T> object)
+r=     Type { kind: Typedef, display_name: "size_t" } ""
+TOK .template.  1-9  FunctionTemplate
+TOK .<.  10-11  FunctionTemplate
+TOK .class.  11-16  TemplateTypeParameter
+TOK .T.  17-18  TemplateTypeParameter
+TOK .>.  18-19  FunctionTemplate
+TOK .size_t.  1-7  TypeRef
+TOK .SnapshotCreator.  8-23  TypeRef
+TOK .::.  23-25  FunctionTemplate
+TOK .AddData.  25-32  FunctionTemplate
+TOK .(.  32-33  FunctionTemplate
+TOK .Local.  33-38  TemplateRef
+TOK .<.  38-39  ParmDecl
+TOK .T.  39-40  TypeRef
+TOK .>.  40-41  ParmDecl
+TOK .object.  42-48  ParmDecl
+TOK .).  48-49  FunctionTemplate
+   FunctionTemplate "v8" AddData(Local<T>)   template <class T> size_t SnapshotCreator::AddData(Local<T> object)
+r=     Type { kind: Typedef, display_name: "size_t" } ""

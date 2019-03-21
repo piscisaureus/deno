@@ -52,5 +52,6 @@ struct Nada4: public Nada3 { char d; };
 template class v8::Local<v8::Number>;
 template class v8::Local<v8::String>;
 template v8::Local<v8::Number>::Local(v8::Local<v8::Integer>);
-template v8::Local<v8::Number>::Local(v8::Global<v8::Integer>);
+//template v8::Isolate::template < class T > V8_INLINE MaybeLocal < T > GetDataFromSnapshotOnce ( size_t index )
+template MaybeLocal < v8::Integer > v8::Isolate::GetDataFromSnapshotOnce ( size_t index );
 }

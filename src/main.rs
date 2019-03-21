@@ -3,6 +3,8 @@
 
 extern crate clang;
 
+use clang::source::Location;
+use clang::token::*;
 use clang::*;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -12,25 +14,77 @@ use std::vec::Vec;
 
 fn dump(e: &Entity, indent: usize, sel: &HashSet<Entity>) {
     if (sel.contains(&e)) {
+        let mut path: Vec<Entity> = Vec::new();
+        let mut e2 = *e;
+        while let Some(p) = e2.get_lexical_parent() {
+            if (p.get_kind() == EntityKind::TranslationUnit) {
+                break;
+            }
+            path.push(p);
+            e2 = p;
+        }
+        path.reverse();
+        let path = path
+            .into_iter()
+            .filter_map(|e| e.get_name())
+            .collect::<Vec<_>>();
+        let path = path.join("::");
+        let text = e
+            .get_range()
+            .map(|r| r.tokenize())
+            .into_iter()
+            .flatten()
+            .filter(|t| t.get_kind() != TokenKind::Comment)
+            .inspect(|t| {
+                let start = t.get_range().get_start().get_file_location().column;
+                let end = t.get_range().get_end().get_file_location().column;
+                println!(
+                    "TOK .{}.  {}-{}  {:?}",
+                    t.get_spelling(),
+                    start,
+                    end,
+                    t.get_range()
+                        .get_start()
+                        .get_entity()
+                        .map(|e| e.get_kind())
+                        .unwrap()
+                );
+            })
+            .scan(None, |prev, t| {
+                let start = t.get_range().get_start().get_file_location();
+                let end = t.get_range().get_end().get_file_location();
+                let space = prev.filter(|&p| p != start).map(|_| " ").unwrap_or("");
+                *prev = Some(end);
+                Some(format!("{}{}", space, t.get_spelling()))
+            })
+            .collect::<Vec<_>>()
+            .join("");
         println!(
-            "{} {:?} {}",
+            "{} {:?} {}{:?} {}   {}",
             " ".repeat(indent * 2),
             e.get_kind(),
+            if e.is_static_method() { "static " } else { "" },
+            path,
             e.get_display_name()
-                .unwrap_or_else(|| e.get_name().unwrap_or_else(|| String::from("??")))
+                .unwrap_or_else(|| e.get_name().unwrap_or_else(|| String::from("??"))),
+            text
         );
-        for t in e.get_type().into_iter() {
-            println!("{} {:?} {:?}", " ".repeat((indent + 1) * 2), t, "");
-            for f in t.get_fields().into_iter().flatten() {
-                println!("{} {:?} {:?}", " ".repeat((indent + 2) * 2), f, "");
-            }
-        }
+
+        //for t in e.get_type().into_iter() {
+        //    println!("{} {:?} {:?}", " ".repeat((indent + 1) * 2), t, "");
+        //    for f in t.get_fields().into_iter().flatten() {
+        //        println!("{} {:?} {:?}", " ".repeat((indent + 2) * 2), f, "");
+        //    }
+        //}
         for t in e.get_template().into_iter() {
             println!("t={} {:?} {:?}", " ".repeat((indent + 1) * 2), t, "");
         }
         for t in e.get_result_type().into_iter() {
             println!("r={} {:?} {:?}", " ".repeat((indent + 1) * 2), t, "");
         }
+        //for t in e.get_children().into_iter() {
+        //    println!("c={} {:?} {:?}", " ".repeat((indent + 1) * 2), t, "");
+        //}
         for t in e.get_storage_class().into_iter() {
             println!("s={} {:?} {:?}", " ".repeat((indent + 1) * 2), t, "");
         }
@@ -167,7 +221,7 @@ trait ClassX<'a> {
 
     fn get_all_base_specifiers(&self) -> Vec<(Entity<'a>, Entity<'a>)>;
 
-    fn get_all_templates(&self, kind: EntityKind) -> Vec<Entity<'a>>;
+    fn get_all_templates(&self) -> Vec<Entity<'a>>;
 
     fn get_all_public(&self, kind: Option<EntityKind>) -> Vec<Entity<'a>>;
 
@@ -210,41 +264,28 @@ impl<'a> ClassX<'a> for Entity<'a> {
         result
     }
 
-    fn get_all_templates(&self, kind_filter: EntityKind) -> Vec<Entity<'a>> {
+    fn get_all_templates(&self) -> Vec<Entity<'a>> {
         let mut result = Vec::new();
-        self.visit_children(|mut e, p| {
-            if e.get_definition().is_none() {
-                return EntityVisitResult::Continue;
-            }
-            //if ee
-            //    .get_location()
-            //    .and_then(|l| l.get_file_location().file)
-            //    .and_then(|f| f.get_path().file_stem().map(|s| s.to_os_string()))
-            //    .and_then(|s| s.to_str().map(|s| s == "v8-util"))
-            //    .unwrap_or(false)
-            //{
-            //    return EntityVisitResult::Continue;
-            //}
+        self.visit_children(|e, p| {
             let kind = e.get_kind();
             if kind == EntityKind::Namespace && e.get_name().unwrap() == "internal" {
                 return EntityVisitResult::Continue;
-            }
-            if kind == EntityKind::FriendDecl || kind == EntityKind::AccessSpecifier {
-                return EntityVisitResult::Continue;
-            }
-            if kind == kind_filter {
-                if let Some(def) = e.get_definition() {
-                    e = def;
+            } else if kind == EntityKind::AccessSpecifier || kind == EntityKind::FriendDecl {
+                // Ignore templated friend declarations, e.g.
+                // template <class U> friend Maybe<U> Nothing();
+            } else if kind == EntityKind::ClassTemplate {
+                // Ignore declared-but-not-defined templates.
+                if let Some(defn) = e.get_definition() {
+                    result.push(defn);
                 }
+            } else if kind == EntityKind::FunctionTemplate
+                || kind == EntityKind::TemplateTemplateParameter
+            {
                 result.push(e);
-                /*e.visit_children(|e, p| {
-                    if kind == EntityKind::FriendDecl || kind == EntityKind::AccessSpecifier {
-                        return EntityVisitResult::Continue;
-                    }
-                    result.push(e);
-                    EntityVisitResult::Recurse
-                });
-                return EntityVisitResult::Continue;*/
+            } else if kind == EntityKind::ClassTemplatePartialSpecialization
+                || kind == EntityKind::TypeAliasTemplateDecl
+            {
+                // Not sure if we'll have to do anything with these.
             }
             EntityVisitResult::Recurse
         });
@@ -342,10 +383,16 @@ fn main() {
         })
         .collect::<Vec<_>>();
 
-    let public = ents_v8
+    let mut public = ents_v8
         .iter()
-        .flat_map(|e| ClassX::get_all_templates(e, EntityKind::ClassTemplate))
+        //.flat_map(|e| ClassX::get_all_public(e, Some(EntityKind::TemplateTypeParameter)))
+        .flat_map(|e| ClassX::get_all_public(e, Some(EntityKind::TemplateRef)))
+        //.flat_map(|e| ClassX::get_all_public(e, None))
+        //.map(|e| e.get_canonical_entity())
+        .chain(ents_v8.iter().flat_map(|e| ClassX::get_all_templates(e)))
+        .filter(|e| e.get_kind() == EntityKind::FunctionTemplate)
         .collect::<Vec<_>>();
+    dedup_vec(&mut public);
 
     let sel = HashSet::from_iter(public.iter().cloned());
     for e in ents_v8.iter() {
