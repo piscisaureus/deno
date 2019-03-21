@@ -6,26 +6,41 @@ extern crate clang;
 use clang::*;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::hash::Hash;
+use std::iter::FromIterator;
 use std::vec::Vec;
 
-fn dump(e: &Entity, indent: usize) {
-    if e.get_kind() == EntityKind::Namespace && e.get_name().unwrap() == "internal" {
-        return;
-    }
-    println!(
-        "{} {:?} {}",
-        " ".repeat(indent * 2),
-        e.get_kind(),
-        e.get_display_name().unwrap_or_else(|| String::from("??"))
-    );
-    if e.get_kind() == EntityKind::Namespace {
-        dbg!(e);
+fn dump(e: &Entity, indent: usize, sel: &HashSet<Entity>) {
+    if (sel.contains(&e)) {
+        println!(
+            "{} {:?} {}",
+            " ".repeat(indent * 2),
+            e.get_kind(),
+            e.get_display_name()
+                .unwrap_or_else(|| e.get_name().unwrap_or_else(|| String::from("??")))
+        );
+        for t in e.get_type().into_iter() {
+            println!("{} {:?} {:?}", " ".repeat((indent + 1) * 2), t, "");
+            for f in t.get_fields().into_iter().flatten() {
+                println!("{} {:?} {:?}", " ".repeat((indent + 2) * 2), f, "");
+            }
+        }
+        for t in e.get_template().into_iter() {
+            println!("t={} {:?} {:?}", " ".repeat((indent + 1) * 2), t, "");
+        }
+        for t in e.get_result_type().into_iter() {
+            println!("r={} {:?} {:?}", " ".repeat((indent + 1) * 2), t, "");
+        }
+        for t in e.get_storage_class().into_iter() {
+            println!("s={} {:?} {:?}", " ".repeat((indent + 1) * 2), t, "");
+        }
     }
     for child in e.get_children().into_iter() {
-        dump(&child, indent + 1)
+        dump(&child, indent + 1, sel)
     }
 }
 
+/*
 #[derive(Debug)]
 struct ClassInfo<'tu> {
     pub decl: Entity<'tu>,
@@ -133,6 +148,140 @@ fn add_class<'tu>(e: Entity<'tu>, class_index: &mut ClassIndex<'tu>) {
     if maybe_base.is_some() {
         info.base = maybe_base;
     }
+}*/
+
+fn dedup_vec<T: Eq + Hash + Copy>(vec: &mut Vec<T>) {
+    let mut set: HashSet<T> = HashSet::new();
+    let old = vec.drain(0..).collect::<Vec<_>>();
+    for i in old.into_iter() {
+        if set.insert(i) {
+            vec.push(i);
+        }
+    }
+}
+
+trait ClassX<'a> {
+    fn get_base_specifiers(&self) -> Option<Vec<Entity<'a>>>;
+
+    //fn get_references(&self) -> Option<Vec<Entity<'a>>>;
+
+    fn get_all_base_specifiers(&self) -> Vec<(Entity<'a>, Entity<'a>)>;
+
+    fn get_all_templates(&self, kind: EntityKind) -> Vec<Entity<'a>>;
+
+    fn get_all_public(&self, kind: Option<EntityKind>) -> Vec<Entity<'a>>;
+
+    fn get_ancestors(&self) -> Option<Vec<Entity<'a>>> {
+        self.get_base_specifiers().and_then(|bases| {
+            let mut vec: Vec<Entity<'a>> = Vec::new();
+            for base in bases {
+                if let Some(anc) = base.get_ancestors() {
+                    vec.extend(anc);
+                    vec.push(base);
+                } else {
+                    return None;
+                }
+            }
+            Some(vec)
+        })
+    }
+}
+
+impl<'a> ClassX<'a> for Entity<'a> {
+    fn get_base_specifiers(&self) -> Option<Vec<Entity<'a>>> {
+        self.get_definition().map(|def| {
+            def.get_children()
+                .into_iter()
+                .filter(|c| c.get_kind() == EntityKind::BaseSpecifier)
+                .collect::<Vec<_>>()
+        })
+    }
+
+    fn get_all_base_specifiers(&self) -> Vec<(Entity<'a>, Entity<'a>)> {
+        let mut result = Vec::new();
+        self.visit_children(|bspec, decl| {
+            if bspec.get_kind() == EntityKind::BaseSpecifier {
+                result.push((bspec, decl));
+                EntityVisitResult::Continue
+            } else {
+                EntityVisitResult::Recurse
+            }
+        });
+        result
+    }
+
+    fn get_all_templates(&self, kind_filter: EntityKind) -> Vec<Entity<'a>> {
+        let mut result = Vec::new();
+        self.visit_children(|mut e, p| {
+            if e.get_definition().is_none() {
+                return EntityVisitResult::Continue;
+            }
+            //if ee
+            //    .get_location()
+            //    .and_then(|l| l.get_file_location().file)
+            //    .and_then(|f| f.get_path().file_stem().map(|s| s.to_os_string()))
+            //    .and_then(|s| s.to_str().map(|s| s == "v8-util"))
+            //    .unwrap_or(false)
+            //{
+            //    return EntityVisitResult::Continue;
+            //}
+            let kind = e.get_kind();
+            if kind == EntityKind::Namespace && e.get_name().unwrap() == "internal" {
+                return EntityVisitResult::Continue;
+            }
+            if kind == EntityKind::FriendDecl || kind == EntityKind::AccessSpecifier {
+                return EntityVisitResult::Continue;
+            }
+            if kind == kind_filter {
+                if let Some(def) = e.get_definition() {
+                    e = def;
+                }
+                result.push(e);
+                /*e.visit_children(|e, p| {
+                    if kind == EntityKind::FriendDecl || kind == EntityKind::AccessSpecifier {
+                        return EntityVisitResult::Continue;
+                    }
+                    result.push(e);
+                    EntityVisitResult::Recurse
+                });
+                return EntityVisitResult::Continue;*/
+            }
+            EntityVisitResult::Recurse
+        });
+        dedup_vec(&mut result);
+        result
+    }
+
+    fn get_all_public(&self, kind_filter: Option<EntityKind>) -> Vec<Entity<'a>> {
+        let mut result = Vec::new();
+        self.visit_children(|e, p| {
+            let kind = e.get_kind();
+
+            if kind == EntityKind::Namespace && e.get_name().unwrap() == "internal" {
+                return EntityVisitResult::Continue;
+            }
+
+            if kind == EntityKind::FriendDecl || kind == EntityKind::AccessSpecifier {
+                return EntityVisitResult::Continue;
+            }
+
+            if let Some(access) = e.get_accessibility() {
+                if access != Accessibility::Public {
+                    return EntityVisitResult::Continue;
+                }
+            }
+
+            if kind_filter.is_none() || kind_filter == Some(kind) {
+                //if let Some(def) = e.get_definition() {
+                //    e = def;
+                //}
+                result.push(e);
+            }
+            EntityVisitResult::Recurse
+        });
+        dedup_vec(&mut result);
+        result
+    }
 }
 
 fn main() {
@@ -158,10 +307,54 @@ fn main() {
         .filter(|e| e.get_name().unwrap() == "v8")
         .collect::<Vec<_>>();
 
-    for e in &ents_v8 {
-        dump(&e, 0);
+    let v8_value = ents_v8
+        .clone()
+        .into_iter()
+        .flat_map(|e| e.get_children().into_iter())
+        .filter(|e| e.get_name().is_some())
+        .filter(|e| e.get_name().unwrap() == "Value")
+        .filter_map(|e| e.get_definition())
+        .next()
+        .unwrap();
+
+    let v8_heap_root_class = ClassX::get_ancestors(&v8_value)
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap()
+        .get_definition()
+        .unwrap();
+
+    let v8_heap_classes = ents_v8
+        .iter()
+        .flat_map(|e| {
+            ClassX::get_all_base_specifiers(e)
+                .into_iter()
+                .filter(|(_, decl)| {
+                    ClassX::get_ancestors(decl)
+                        .map(|vec| *vec.first().unwrap())
+                        .map(|root_bspec| {
+                            root_bspec.get_definition().unwrap() == v8_heap_root_class
+                        })
+                        .unwrap_or(false)
+                })
+                .map(|(_, decl)| decl.get_definition().unwrap())
+        })
+        .collect::<Vec<_>>();
+
+    let public = ents_v8
+        .iter()
+        .flat_map(|e| ClassX::get_all_templates(e, EntityKind::ClassTemplate))
+        .collect::<Vec<_>>();
+
+    let sel = HashSet::from_iter(public.iter().cloned());
+    for e in ents_v8.iter() {
+        dump(e, 0, &sel);
     }
 
+    panic!("stop");
+
+    /*
     // Get the structs in this translation unit
     let classes = ents_v8
         .into_iter()
@@ -212,5 +405,5 @@ fn main() {
                 .map(|e| e.get_name().unwrap())
                 .collect::<Vec<_>>()
         );
-    }
+    }*/
 }
