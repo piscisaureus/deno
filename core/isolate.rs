@@ -56,15 +56,15 @@ pub enum StartupData {
   Snapshot(deno_buf),
 }
 
+/// Called during mod_instantiate() to resolve imports.
+trait ResolveFn: FnMut(&str, deno_mod) -> deno_mod {}
+
 /// Defines the behavior of an Isolate.
 pub trait Behavior {
   /// Allow for a behavior to define the snapshot or script used at
   /// startup to initalize the isolate. Called exactly once when an
   /// Isolate is created.
   fn startup_data(&mut self) -> Option<StartupData>;
-
-  /// Called during mod_instantiate() to resolve imports.
-  fn resolve(&mut self, specifier: &str, referrer: deno_mod) -> deno_mod;
 
   /// Called whenever libdeno.send() is called in JavaScript. zero_copy_buf
   /// corresponds to the second argument of libdeno.send().
@@ -91,6 +91,7 @@ pub struct Isolate<B: Behavior> {
   shared: SharedQueue,
   pending_ops: Vec<PendingOp>,
   polled_recently: bool,
+  resolve_fn: Option<ResolveFn>,
 }
 
 unsafe impl<B: Behavior> Send for Isolate<B> {}
@@ -140,6 +141,7 @@ impl<B: Behavior> Isolate<B> {
       needs_init,
       pending_ops: Vec::new(),
       polled_recently: false,
+      resolve_fn: None,
     };
 
     // If we want to use execute this has to happen here sadly.
@@ -330,7 +332,16 @@ impl<B: Behavior> Isolate<B> {
     out
   }
 
-  pub fn mod_instantiate(&self, id: deno_mod) -> Result<(), JSError> {
+  pub fn mod_instantiate<F>(
+    &mut self,
+    id: deno_mod,
+    resolve_fn: F,
+  ) -> Result<(), JSError>
+  where
+    F: ResolveFn,
+  {
+    assert!(self.resolve_fn.is_none());
+    self.resolve_fn = Some(resolve_fn);
     unsafe {
       libdeno::deno_mod_instantiate(
         self.libdeno_isolate,
@@ -339,17 +350,8 @@ impl<B: Behavior> Isolate<B> {
         Self::resolve_cb,
       )
     };
-    if let Some(js_error) = self.last_exception() {
-      return Err(js_error);
-    }
-    Ok(())
-  }
+    self.resolve_fn = None;
 
-  pub fn mod_evaluate(&mut self, id: deno_mod) -> Result<(), JSError> {
-    self.shared_init();
-    unsafe {
-      libdeno::deno_mod_evaluate(self.libdeno_isolate, self.as_raw_ptr(), id)
-    };
     if let Some(js_error) = self.last_exception() {
       return Err(js_error);
     }
@@ -365,7 +367,22 @@ impl<B: Behavior> Isolate<B> {
     let isolate = unsafe { Isolate::<B>::from_raw_ptr(user_data) };
     let specifier_c: &CStr = unsafe { CStr::from_ptr(specifier_ptr) };
     let specifier: &str = specifier_c.to_str().unwrap();
-    isolate.behavior.resolve(specifier, referrer)
+
+    match isolate.resolve_fn {
+      None => panic!("..."),
+      Some(resolve_fn) => resolve_fn(specifier, referrer),
+    }
+  }
+
+  pub fn mod_evaluate(&mut self, id: deno_mod) -> Result<(), JSError> {
+    self.shared_init();
+    unsafe {
+      libdeno::deno_mod_evaluate(self.libdeno_isolate, self.as_raw_ptr(), id)
+    };
+    if let Some(js_error) = self.last_exception() {
+      return Err(js_error);
+    }
+    Ok(())
   }
 }
 
@@ -544,14 +561,6 @@ mod tests {
       None
     }
 
-    fn resolve(&mut self, specifier: &str, _referrer: deno_mod) -> deno_mod {
-      self.resolve_count += 1;
-      match self.mod_map.get(specifier) {
-        Some(id) => *id,
-        None => 0,
-      }
-    }
-
     fn dispatch(
       &mut self,
       control: &[u8],
@@ -640,12 +649,24 @@ mod tests {
     let imports = isolate.mod_get_imports(mod_b);
     assert_eq!(imports.len(), 0);
 
-    js_check(isolate.mod_instantiate(mod_b));
+    let mut resolve = |specifier: &str, _referrer: deno_mod| -> deno_mod {
+      println!("resolve callback called");
+      /*
+      self.resolve_count += 1;
+      match self.mod_map.get(specifier) {
+        Some(id) => *id,
+        None => 0,
+      }
+      */
+      0
+    };
+
+    js_check(isolate.mod_instantiate(mod_b, resolve));
     assert_eq!(isolate.behavior.dispatch_count, 0);
     assert_eq!(isolate.behavior.resolve_count, 0);
 
     isolate.behavior.register("b.js", mod_b);
-    js_check(isolate.mod_instantiate(mod_a));
+    js_check(isolate.mod_instantiate(mod_a, resolve));
     assert_eq!(isolate.behavior.dispatch_count, 0);
     assert_eq!(isolate.behavior.resolve_count, 1);
 
