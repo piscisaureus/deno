@@ -340,14 +340,15 @@ impl<B: Behavior> Isolate<B> {
   ) -> Result<(), JSError> {
     assert!(self.resolve_fn.is_none());
 
-    // Help Bert: This callback is only used during deno_mod_instantiate.  But
-    // in order to get a reference to it in "resolve_cb", a member is set inside
-    // the Isolate struct. Is this the correct way to do do this?
+    // Note the resolve_fn callback is only used during deno_mod_instantiate.
+    // But in order to get a reference to it in the extern C "resolve_cb" below,
+    // a member is set inside the Isolate struct.
+    // TODO(ry) Is there a safer way to do this without transmute?
 
     let resolve_fn_ptr = unsafe {
       std::mem::transmute::<&ResolveFn, *const ResolveFn>(resolve_fn)
     };
-    self.resolve_fn = Some(resolve_fn_ptr); // Bert: member set here.
+    self.resolve_fn = Some(resolve_fn_ptr);
 
     unsafe {
       libdeno::deno_mod_instantiate(
@@ -358,7 +359,7 @@ impl<B: Behavior> Isolate<B> {
       )
     };
 
-    self.resolve_fn = None; // Bert: member discarded here.
+    self.resolve_fn = None;
 
     if let Some(js_error) = self.last_exception() {
       return Err(js_error);
@@ -540,7 +541,6 @@ mod tests {
   pub struct TestBehavior {
     pub dispatch_count: usize,
     pub resolve_count: usize,
-    pub mod_map: HashMap<String, deno_mod>,
     mode: TestBehaviorMode,
   }
 
@@ -550,7 +550,6 @@ mod tests {
         dispatch_count: 0,
         resolve_count: 0,
         mode,
-        mod_map: HashMap::new(),
       });
       js_check(isolate.execute(
         "setup.js",
@@ -564,10 +563,6 @@ mod tests {
       ));
       assert_eq!(isolate.behavior.dispatch_count, 0);
       isolate
-    }
-
-    pub fn register(&mut self, name: &str, id: deno_mod) {
-      self.mod_map.insert(name.to_string(), id);
     }
   }
 
@@ -664,30 +659,33 @@ mod tests {
     let imports = isolate.mod_get_imports(mod_b);
     assert_eq!(imports.len(), 0);
 
-    let resolve = |specifier: &str, _referrer: deno_mod| -> deno_mod {
-      println!("resolve callback called");
-      /*
-      self.resolve_count += 1;
-      match self.mod_map.get(specifier) {
+    let mut mod_map: HashMap<String, deno_mod> = HashMap::new();
+    mod_map.insert("b.js".to_string(), mod_b);
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let resolve_count = Arc::new(AtomicUsize::new(0));
+    let resolve_count_ = resolve_count.clone();
+
+    let resolve = move |specifier: &str, _referrer: deno_mod| -> deno_mod {
+      resolve_count_.fetch_add(1, Ordering::SeqCst);
+      match mod_map.get(specifier) {
         Some(id) => *id,
         None => 0,
       }
-      */
-      0
     };
 
     js_check(isolate.mod_instantiate(mod_b, &resolve));
     assert_eq!(isolate.behavior.dispatch_count, 0);
-    assert_eq!(isolate.behavior.resolve_count, 0);
+    assert_eq!(resolve_count.load(Ordering::SeqCst), 0);
 
-    isolate.behavior.register("b.js", mod_b);
     js_check(isolate.mod_instantiate(mod_a, &resolve));
     assert_eq!(isolate.behavior.dispatch_count, 0);
-    assert_eq!(isolate.behavior.resolve_count, 1);
+    assert_eq!(resolve_count.load(Ordering::SeqCst), 1);
 
     js_check(isolate.mod_evaluate(mod_a));
     assert_eq!(isolate.behavior.dispatch_count, 1);
-    assert_eq!(isolate.behavior.resolve_count, 1);
+    assert_eq!(resolve_count.load(Ordering::SeqCst), 1);
   }
 
   #[test]
