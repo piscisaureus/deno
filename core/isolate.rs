@@ -1,4 +1,5 @@
 // Copyright 2018 the Deno authors. All rights reserved. MIT license.
+#![allow(unused_variables)]
 use crate::js_errors::JSError;
 use crate::libdeno;
 use crate::libdeno::deno_buf;
@@ -57,7 +58,7 @@ pub enum StartupData {
 }
 
 /// Called during mod_instantiate() to resolve imports.
-trait ResolveFn: FnMut(&str, deno_mod) -> deno_mod {}
+type ResolveFn = dyn FnMut(&str, deno_mod) -> deno_mod;
 
 /// Defines the behavior of an Isolate.
 pub trait Behavior {
@@ -91,7 +92,7 @@ pub struct Isolate<B: Behavior> {
   shared: SharedQueue,
   pending_ops: Vec<PendingOp>,
   polled_recently: bool,
-  resolve_fn: Option<ResolveFn>,
+  resolve_fn: Option<*const ResolveFn>,
 }
 
 unsafe impl<B: Behavior> Send for Isolate<B> {}
@@ -332,16 +333,22 @@ impl<B: Behavior> Isolate<B> {
     out
   }
 
-  pub fn mod_instantiate<F>(
+  pub fn mod_instantiate(
     &mut self,
     id: deno_mod,
-    resolve_fn: F,
-  ) -> Result<(), JSError>
-  where
-    F: ResolveFn,
-  {
+    resolve_fn: &ResolveFn,
+  ) -> Result<(), JSError> {
     assert!(self.resolve_fn.is_none());
-    self.resolve_fn = Some(resolve_fn);
+
+    // Help Bert: This callback is only used during deno_mod_instantiate.  But
+    // in order to get a reference to it in "resolve_cb", a member is set inside
+    // the Isolate struct. Is this the correct way to do do this?
+
+    let resolve_fn_ptr = unsafe {
+      std::mem::transmute::<&ResolveFn, *const ResolveFn>(resolve_fn)
+    };
+    self.resolve_fn = Some(resolve_fn_ptr); // Bert: member set here.
+
     unsafe {
       libdeno::deno_mod_instantiate(
         self.libdeno_isolate,
@@ -350,7 +357,8 @@ impl<B: Behavior> Isolate<B> {
         Self::resolve_cb,
       )
     };
-    self.resolve_fn = None;
+
+    self.resolve_fn = None; // Bert: member discarded here.
 
     if let Some(js_error) = self.last_exception() {
       return Err(js_error);
@@ -370,7 +378,14 @@ impl<B: Behavior> Isolate<B> {
 
     match isolate.resolve_fn {
       None => panic!("..."),
-      Some(resolve_fn) => resolve_fn(specifier, referrer),
+      Some(resolve_fn_ptr) => {
+        let resolve_fn = unsafe {
+          std::mem::transmute::<*const ResolveFn, &mut ResolveFn>(
+            resolve_fn_ptr,
+          )
+        };
+        resolve_fn(specifier, referrer)
+      }
     }
   }
 
@@ -649,7 +664,7 @@ mod tests {
     let imports = isolate.mod_get_imports(mod_b);
     assert_eq!(imports.len(), 0);
 
-    let mut resolve = |specifier: &str, _referrer: deno_mod| -> deno_mod {
+    let resolve = |specifier: &str, _referrer: deno_mod| -> deno_mod {
       println!("resolve callback called");
       /*
       self.resolve_count += 1;
@@ -661,12 +676,12 @@ mod tests {
       0
     };
 
-    js_check(isolate.mod_instantiate(mod_b, resolve));
+    js_check(isolate.mod_instantiate(mod_b, &resolve));
     assert_eq!(isolate.behavior.dispatch_count, 0);
     assert_eq!(isolate.behavior.resolve_count, 0);
 
     isolate.behavior.register("b.js", mod_b);
-    js_check(isolate.mod_instantiate(mod_a, resolve));
+    js_check(isolate.mod_instantiate(mod_a, &resolve));
     assert_eq!(isolate.behavior.dispatch_count, 0);
     assert_eq!(isolate.behavior.resolve_count, 1);
 
