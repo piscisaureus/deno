@@ -92,7 +92,6 @@ pub struct Isolate<B: Behavior> {
   shared: SharedQueue,
   pending_ops: Vec<PendingOp>,
   polled_recently: bool,
-  resolve_fn: Option<*const ResolveFn>,
 }
 
 unsafe impl<B: Behavior> Send for Isolate<B> {}
@@ -142,7 +141,6 @@ impl<B: Behavior> Isolate<B> {
       needs_init,
       pending_ops: Vec::new(),
       polled_recently: false,
-      resolve_fn: None,
     };
 
     // If we want to use execute this has to happen here sadly.
@@ -332,34 +330,44 @@ impl<B: Behavior> Isolate<B> {
     }
     out
   }
+}
 
+struct ResolveContext<'a, B: Behavior> {
+  isolate: &'a mut Isolate<B>,
+  resolve_fn: &'a mut ResolveFn,
+}
+
+impl<'a, B: Behavior> ResolveContext<'a, B> {
+  #[inline]
+  fn as_raw_ptr(&mut self) -> *mut c_void {
+    self as *mut _ as *mut c_void
+  }
+
+  #[inline]
+  unsafe fn from_raw_ptr(ptr: *mut c_void) -> &'a mut Self {
+    &mut *(ptr as *mut _)
+  }
+}
+
+impl<B: Behavior> Isolate<B> {
   pub fn mod_instantiate(
     &mut self,
     id: deno_mod,
-    resolve_fn: &ResolveFn,
+    resolve_fn: &mut ResolveFn,
   ) -> Result<(), JSError> {
-    assert!(self.resolve_fn.is_none());
-
-    // Note the resolve_fn callback is only used during deno_mod_instantiate.
-    // But in order to get a reference to it in the extern C "resolve_cb" below,
-    // a member is set inside the Isolate struct.
-    // TODO(ry) Is there a safer way to do this without transmute?
-
-    let resolve_fn_ptr = unsafe {
-      std::mem::transmute::<&ResolveFn, *const ResolveFn>(resolve_fn)
+    let libdeno_isolate = self.libdeno_isolate;
+    let mut ctx = ResolveContext {
+      isolate: self,
+      resolve_fn,
     };
-    self.resolve_fn = Some(resolve_fn_ptr);
-
     unsafe {
       libdeno::deno_mod_instantiate(
-        self.libdeno_isolate,
-        self.as_raw_ptr(),
+        libdeno_isolate,
+        ctx.as_raw_ptr(),
         id,
         Self::resolve_cb,
       )
     };
-
-    self.resolve_fn = None;
 
     if let Some(js_error) = self.last_exception() {
       return Err(js_error);
@@ -373,21 +381,14 @@ impl<B: Behavior> Isolate<B> {
     specifier_ptr: *const libc::c_char,
     referrer: deno_mod,
   ) -> deno_mod {
-    let isolate = unsafe { Isolate::<B>::from_raw_ptr(user_data) };
+    let ResolveContext {
+      isolate,
+      resolve_fn,
+    } = unsafe { ResolveContext::<B>::from_raw_ptr(user_data) };
     let specifier_c: &CStr = unsafe { CStr::from_ptr(specifier_ptr) };
     let specifier: &str = specifier_c.to_str().unwrap();
 
-    match isolate.resolve_fn {
-      None => panic!("..."),
-      Some(resolve_fn_ptr) => {
-        let resolve_fn = unsafe {
-          std::mem::transmute::<*const ResolveFn, &mut ResolveFn>(
-            resolve_fn_ptr,
-          )
-        };
-        resolve_fn(specifier, referrer)
-      }
-    }
+    resolve_fn(specifier, referrer)
   }
 
   pub fn mod_evaluate(&mut self, id: deno_mod) -> Result<(), JSError> {
@@ -667,7 +668,7 @@ mod tests {
     let resolve_count = Arc::new(AtomicUsize::new(0));
     let resolve_count_ = resolve_count.clone();
 
-    let resolve = move |specifier: &str, _referrer: deno_mod| -> deno_mod {
+    let mut resolve = move |specifier: &str, _referrer: deno_mod| -> deno_mod {
       resolve_count_.fetch_add(1, Ordering::SeqCst);
       match mod_map.get(specifier) {
         Some(id) => *id,
@@ -675,11 +676,11 @@ mod tests {
       }
     };
 
-    js_check(isolate.mod_instantiate(mod_b, &resolve));
+    js_check(isolate.mod_instantiate(mod_b, &mut resolve));
     assert_eq!(isolate.behavior.dispatch_count, 0);
     assert_eq!(resolve_count.load(Ordering::SeqCst), 0);
 
-    js_check(isolate.mod_instantiate(mod_a, &resolve));
+    js_check(isolate.mod_instantiate(mod_a, &mut resolve));
     assert_eq!(isolate.behavior.dispatch_count, 0);
     assert_eq!(resolve_count.load(Ordering::SeqCst), 1);
 
