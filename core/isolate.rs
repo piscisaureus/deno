@@ -70,7 +70,6 @@ where
 #[derive(Debug)]
 struct PendingOp {
   op: Box<Op>,
-  polled_recently: bool,
   zero_copy_id: usize, // non-zero if associated zero-copy buffer.
 }
 
@@ -79,18 +78,16 @@ impl Future for PendingOp {
   type Error = ();
 
   fn poll(&mut self) -> Poll<Buf, ()> {
-    // Do not call poll on ops we've already polled this turn.
-    if self.polled_recently {
-      Ok(Async::NotReady)
-    } else {
-      self.polled_recently = true;
-      let op = &mut self.op;
-      op.poll().map_err(|()| {
+    let op = &mut self.op;
+    op.poll()
+      .map_err(|_| {
         // Ops should not error. If an op experiences an error it needs to
-        // encode that error into a buf, so it can be returned to JS.
+        // encode that error into a buflet , so it can be returned to JS.
         panic!("ops should not error")
+      }).map(|r| {
+        debug!("Poll {:?} -> {:?}", &self, &r);
+        r
       })
-    }
   }
 }
 
@@ -135,7 +132,7 @@ pub struct Isolate<B: Dispatch> {
   needs_init: bool,
   shared: SharedQueue,
   pending_ops: VecDeque<PendingOp>,
-  polled_recently: bool,
+  polled_ops: VecDeque<PendingOp>,
 }
 
 unsafe impl<B: Dispatch> Send for Isolate<B> {}
@@ -186,7 +183,7 @@ impl<B: Dispatch> Isolate<B> {
       shared,
       needs_init,
       pending_ops: VecDeque::new(),
-      polled_recently: false,
+      polled_ops: VecDeque::new(),
     };
 
     // If we want to use execute this has to happen here sadly.
@@ -252,12 +249,9 @@ impl<B: Dispatch> Isolate<B> {
       // picked up.
       let _ = isolate.respond(Some(&res_record));
     } else {
-      isolate.pending_ops.push_back(PendingOp {
-        op,
-        polled_recently: false,
-        zero_copy_id,
-      });
-      isolate.polled_recently = false;
+      isolate
+        .pending_ops
+        .push_back(PendingOp { op, zero_copy_id });
     }
   }
 
@@ -478,73 +472,83 @@ impl<B: Dispatch> Future for Isolate<B> {
   type Error = JSError;
 
   fn poll(&mut self) -> Poll<(), JSError> {
+    // flush() calls into javascript in order to drain the shared queue, and
+    // optionally sends an overflow response using the legacy respond() method.
+    let flush = |isolate: &mut Isolate<B>,
+                 overflow_response: Option<Buf>|
+     -> Result<(), JSError> {
+      if isolate.shared.size() > 0 {
+        isolate.respond(None)?;
+        // The other side should have shifted off all the messages.
+        assert_eq!(isolate.shared.size(), 0);
+      }
+
+      if let Some(buf) = overflow_response {
+        isolate.respond(Some(&buf))?;
+      }
+
+      Ok(())
+    };
+    assert_eq!(self.shared.size(), 0);
+
     // Lock the current thread for V8.
     let _locker = LockerScope::new(self.libdeno_isolate);
 
-    // Clear poll_recently state both on the Isolate itself and
-    // on the pending ops.
-    self.polled_recently = false;
-    for pending in self.pending_ops.iter_mut() {
-      pending.polled_recently = false;
-    }
+    loop {
+      // Make all ops pending again.
+      self.pending_ops.append(&mut self.polled_ops);
 
-    while !self.polled_recently {
-      let mut completed_count = 0;
-      self.polled_recently = true;
-      assert_eq!(self.shared.size(), 0);
+      debug!("Poll outer loop. Ops pending: {}", self.pending_ops.len());
 
-      let mut overflow_response: Option<Buf> = None;
+      // In the inner loop, we'll poll only 'new' ops. If we've called poll()
+      // twice as many times (or more) as the number of pending ops when we
+      // started, we'll loop around and make all previously polled ops pending
+      // again.
+      let ops_polled_max = self.pending_ops.len() * 2;
+      let mut ops_polled = 0usize;
+      while !self.pending_ops.is_empty() && ops_polled < ops_polled_max {
+        debug!(
+          "Poll inner loop. Ops pending: {}, unready {}, poll calls: {}",
+          self.pending_ops.len(),
+          self.polled_ops.len(),
+          ops_polled
+        );
 
-      for _ in 0..self.pending_ops.len() {
-        assert!(overflow_response.is_none());
-        let mut op = self.pending_ops.pop_front().unwrap();
-        match op.poll() {
-          Err(()) => panic!("unexpected error"),
-          Ok(Async::NotReady) => self.pending_ops.push_back(op),
-          Ok(Async::Ready(buf)) => {
-            if op.zero_copy_id > 0 {
-              self.zero_copy_release(op.zero_copy_id);
+        for _ in 0..self.pending_ops.len() {
+          let mut op = self.pending_ops.pop_front().unwrap();
+          ops_polled += 1;
+          match op.poll() {
+            Err(()) => panic!("unexpected error"),
+            Ok(Async::NotReady) => self.polled_ops.push_back(op),
+            Ok(Async::Ready(buf)) => {
+              if op.zero_copy_id > 0 {
+                self.zero_copy_release(op.zero_copy_id);
+              }
+              if !self.shared.push(&buf) {
+                // If we couldn't push the response to the shared queue, because
+                // there wasn't enough size, we will return the buffer via the
+                // legacy route, using the argument of deno_respond.
+                flush(self, Some(buf))?;
+              }
             }
-
-            let successful_push = self.shared.push(&buf);
-            if !successful_push {
-              // If we couldn't push the response to the shared queue, because
-              // there wasn't enough size, we will return the buffer via the
-              // legacy route, using the argument of deno_respond.
-              overflow_response = Some(buf);
-              // reset `polled_recently` so pending ops can be
-              // done even if shared space overflows
-              self.polled_recently = false;
-              break;
-            }
-
-            completed_count += 1;
           }
         }
+        flush(self, None)?;
       }
 
-      if completed_count > 0 {
-        self.respond(None)?;
-        // The other side should have shifted off all the messages.
-        assert_eq!(self.shared.size(), 0);
+      self.check_promise_errors();
+      if let Some(err) = self.last_exception() {
+        return Err(err);
       }
 
-      if overflow_response.is_some() {
-        let buf = overflow_response.take().unwrap();
-        self.respond(Some(&buf))?;
+      // We're idle if polled_ops and pending_ops are both empty.
+      if self.pending_ops.is_empty() {
+        if self.polled_ops.is_empty() {
+          return Ok(futures::Async::Ready(()));
+        } else {
+          return Ok(futures::Async::NotReady);
+        }
       }
-    }
-
-    self.check_promise_errors();
-    if let Some(err) = self.last_exception() {
-      return Err(err);
-    }
-
-    // We're idle if pending_ops is empty.
-    if self.pending_ops.is_empty() {
-      Ok(futures::Async::Ready(()))
-    } else {
-      Ok(futures::Async::NotReady)
     }
   }
 }
