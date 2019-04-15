@@ -70,7 +70,6 @@ where
 #[derive(Debug)]
 struct PendingOp {
   op: Box<Op>,
-  polled_recently: bool,
   zero_copy_id: usize, // non-zero if associated zero-copy buffer.
 }
 
@@ -79,18 +78,11 @@ impl Future for PendingOp {
   type Error = ();
 
   fn poll(&mut self) -> Poll<Buf, ()> {
-    // Do not call poll on ops we've already polled this turn.
-    if self.polled_recently {
-      Ok(Async::NotReady)
-    } else {
-      self.polled_recently = true;
-      let op = &mut self.op;
-      op.poll().map_err(|()| {
-        // Ops should not error. If an op experiences an error it needs to
-        // encode that error into a buf, so it can be returned to JS.
-        panic!("ops should not error")
-      })
-    }
+    self.op.poll().map_err(|()| {
+      // Ops should not error. If an op experiences an error it needs to
+      // encode that error into a buf, so it can be returned to JS.
+      panic!("ops should not error")
+    })
   }
 }
 
@@ -135,7 +127,6 @@ pub struct Isolate<B: Dispatch> {
   needs_init: bool,
   shared: SharedQueue,
   pending_ops: VecDeque<PendingOp>,
-  polled_recently: bool,
 }
 
 unsafe impl<B: Dispatch> Send for Isolate<B> {}
@@ -186,7 +177,6 @@ impl<B: Dispatch> Isolate<B> {
       shared,
       needs_init,
       pending_ops: VecDeque::new(),
-      polled_recently: false,
     };
 
     // If we want to use execute this has to happen here sadly.
@@ -252,12 +242,9 @@ impl<B: Dispatch> Isolate<B> {
       // picked up.
       let _ = isolate.respond(Some(&res_record));
     } else {
-      isolate.pending_ops.push_back(PendingOp {
-        op,
-        polled_recently: false,
-        zero_copy_id,
-      });
-      isolate.polled_recently = false;
+      isolate
+        .pending_ops
+        .push_back(PendingOp { op, zero_copy_id });
     }
   }
 
@@ -481,16 +468,10 @@ impl<B: Dispatch> Future for Isolate<B> {
     // Lock the current thread for V8.
     let _locker = LockerScope::new(self.libdeno_isolate);
 
-    // Clear poll_recently state both on the Isolate itself and
-    // on the pending ops.
-    self.polled_recently = false;
-    for pending in self.pending_ops.iter_mut() {
-      pending.polled_recently = false;
-    }
-
-    while !self.polled_recently {
+    let mut poll_again = true;
+    while poll_again {
+      poll_again = false;
       let mut completed_count = 0;
-      self.polled_recently = true;
       assert_eq!(self.shared.size(), 0);
 
       let mut overflow_response: Option<Buf> = None;
@@ -512,9 +493,7 @@ impl<B: Dispatch> Future for Isolate<B> {
               // there wasn't enough size, we will return the buffer via the
               // legacy route, using the argument of deno_respond.
               overflow_response = Some(buf);
-              // reset `polled_recently` so pending ops can be
-              // done even if shared space overflows
-              self.polled_recently = false;
+              poll_again = true;
               break;
             }
 
