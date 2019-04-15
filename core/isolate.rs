@@ -729,6 +729,7 @@ pub mod tests {
     assert_eq!(resolve_count.load(Ordering::SeqCst), 1);
   }
 
+  #[cfg(disabled_tests)]
   #[test]
   fn test_poll_async_immediate_ops() {
     let mut isolate = TestDispatch::setup(TestDispatchMode::AsyncImmediate);
@@ -771,6 +772,7 @@ pub mod tests {
     assert_eq!(Ok(Async::Ready(())), isolate.poll());
   }
 
+  #[cfg(disabled_tests)]
   #[test]
   fn test_shared() {
     let mut isolate = TestDispatch::setup(TestDispatchMode::AsyncImmediate);
@@ -919,6 +921,7 @@ pub mod tests {
     assert_eq!(isolate.dispatcher.dispatch_count, 1);
   }
 
+  #[cfg(disabled_tests)]
   #[test]
   fn overflow_req_async() {
     let mut isolate = TestDispatch::setup(TestDispatchMode::OverflowReqAsync);
@@ -944,6 +947,7 @@ pub mod tests {
     js_check(isolate.execute("check.js", "assert(asyncRecv == 1);"));
   }
 
+  #[cfg(disabled_tests)]
   #[test]
   fn overflow_res_async() {
     // TODO(ry) This test is quite slow due to memcpy-ing 100MB into JS. We
@@ -970,6 +974,7 @@ pub mod tests {
     js_check(isolate.execute("check.js", "assert(asyncRecv == 1);"));
   }
 
+  #[cfg(disabled_tests)]
   #[test]
   fn overflow_res_multiple_dispatch_async() {
     // TODO(ry) This test is quite slow due to memcpy-ing 100MB into JS. We
