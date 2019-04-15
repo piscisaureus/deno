@@ -695,7 +695,8 @@ pub mod tests {
         let control = new Uint8Array([42]);
         Deno.core.send(control);
       "#,
-      ).unwrap();
+      )
+      .unwrap();
     assert_eq!(isolate.dispatcher.dispatch_count, 0);
 
     let imports = isolate.mod_get_imports(mod_a);
