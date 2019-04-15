@@ -112,6 +112,16 @@ pub type HttpBenchOp = dyn Future<Item = i32, Error = std::io::Error> + Send;
 
 struct HttpBench();
 
+use futures::future::{Either, FutureResult};
+use futures::Async::*;
+fn eager<T: Future>(mut f: T) -> Either<T, FutureResult<T::Item, T::Error>> {
+  match f.poll() {
+    Ok(NotReady) => Either::A(f),
+    Ok(Ready(v)) => Either::B(future::ok(v)),
+    Err(e) => Either::B(future::err(e)),
+  }
+}
+
 impl Dispatch for HttpBench {
   fn dispatch(
     &mut self,
@@ -150,7 +160,7 @@ impl Dispatch for HttpBench {
     let mut record_a = record.clone();
     let mut record_b = record.clone();
 
-    let op = http_bench_op
+    let op = eager(http_bench_op)
       .and_then(move |result| {
         record_a.result = result;
         Ok(record_a)
