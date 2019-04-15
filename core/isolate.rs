@@ -479,7 +479,7 @@ impl<B: Dispatch> Future for Isolate<B> {
     let mut poll_again = false;
     let mut overflow_response: Option<Buf> = None;
 
-    for _ in 0..3 {
+    for _ in 0..32 {
       poll_again = false;
 
       while !self.pending_ops.is_empty() {
