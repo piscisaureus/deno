@@ -23,10 +23,12 @@ where
 // https://github.com/tokio-rs/tokio/issues/495
 // https://github.com/tokio-rs/tokio/issues/209
 pub fn abort_on_panic() {
-  std::panic::set_hook(Box::new(|panic_info| {
-    eprintln!("{}", panic_info.to_string());
-    std::process::abort();
-  }));
+  if !cfg!(test) {
+    std::panic::set_hook(Box::new(|panic_info| {
+      eprintln!("{}", panic_info.to_string());
+      std::process::abort();
+    }));
+  }
 }
 
 pub fn block_on<F, R, E>(future: F) -> Result<R, E>
