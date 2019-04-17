@@ -1,3 +1,4 @@
+///#![allow(warnings)]
 // Copyright 2018-2019 the Deno authors. All rights reserved. MIT license.
 use atty;
 use crate::ansi;
@@ -29,7 +30,11 @@ use deno::JSError;
 use deno::Op;
 use flatbuffers::FlatBufferBuilder;
 use futures;
+use futures::future::Either;
+use futures::future::FutureResult;
 use futures::Async;
+use futures::Async::*;
+use futures::IntoFuture;
 use futures::Poll;
 use futures::Sink;
 use futures::Stream;
@@ -38,7 +43,9 @@ use hyper::rt::Future;
 use remove_dir_all::remove_dir_all;
 use std;
 use std::convert::From;
+use std::convert::Into;
 use std::fs;
+use std::marker::PhantomData;
 use std::net::Shutdown;
 use std::path::Path;
 use std::path::PathBuf;
@@ -58,6 +65,416 @@ use std::os::unix::process::ExitStatusExt;
 type OpResult = DenoResult<Buf>;
 
 pub type OpWithError = dyn Future<Item = Buf, Error = DenoError> + Send;
+
+pub type BoxOp = Box<dyn Future<Item = Buf, Error = ()> + Send>;
+
+pub trait Serialize {
+  fn serialize(self, cmd_id: u32, is_sync: bool) -> Buf;
+}
+
+impl Serialize for Buf {
+  fn serialize(self, _: u32, _: bool) -> Buf {
+    self
+  }
+}
+
+impl Serialize for () {
+  fn serialize(self, cmd_id: u32, is_sync: bool) -> Buf {
+    // Handle empty responses. For sync responses we just want
+    // to send null. For async we want to send a small message
+    // with the cmd_id.
+    if is_sync {
+      empty_buf()
+    } else {
+      serialize_response(
+        cmd_id,
+        &mut FlatBufferBuilder::new(),
+        msg::BaseArgs {
+          ..Default::default()
+        },
+      )
+    }
+  }
+}
+
+impl Serialize for DenoError {
+  fn serialize(self, cmd_id: u32, _: bool) -> Buf {
+    debug!("op err {}", self);
+    // No matter whether we got an Err or Ok, we want a serialized message to
+    // send back. So transform the DenoError into a deno_buf.
+    let builder = &mut FlatBufferBuilder::new();
+    let errmsg_offset = builder.create_string(&format!("{}", self));
+    serialize_response(
+      cmd_id,
+      builder,
+      msg::BaseArgs {
+        error: Some(errmsg_offset),
+        error_kind: self.kind(),
+        ..Default::default()
+      },
+    )
+  }
+}
+
+struct Response<'fbb, T, F>
+where
+  F: FnOnce(&mut flatbuffers::FlatBufferBuilder<'fbb>)
+    -> flatbuffers::WIPOffset<T>,
+{
+  inner_type: msg::Any,
+  inner_create: F,
+  phantom: PhantomData<&'fbb T>,
+}
+
+impl<'fbb, T, F> Response<'fbb, T, F>
+where
+  F: FnOnce(&mut flatbuffers::FlatBufferBuilder<'fbb>)
+    -> flatbuffers::WIPOffset<T>,
+{
+  fn new(inner_type: msg::Any, inner_create: F) -> Self {
+    Self {
+      inner_type,
+      inner_create,
+      phantom: PhantomData,
+    }
+  }
+}
+
+impl<'fbb, T, F> Serialize for Response<'fbb, T, F>
+where
+  F: FnOnce(&mut flatbuffers::FlatBufferBuilder<'fbb>)
+    -> flatbuffers::WIPOffset<T>,
+{
+  fn serialize(self, cmd_id: u32, _: bool) -> Buf {
+    let Self {
+      inner_type,
+      inner_create,
+      ..
+    } = self;
+    let mut builder: FlatBufferBuilder = FlatBufferBuilder::new();
+    let inner = inner_create(&mut builder);
+    let base_args = msg::BaseArgs {
+      cmd_id,
+      inner_type,
+      inner: Some(inner.as_union_value()),
+      ..Default::default()
+    };
+    let base = msg::Base::create(&mut builder, &base_args);
+    msg::finish_base_buffer(&mut builder, base);
+    builder.finished_data().into()
+  }
+}
+
+pub struct WrappedResult<I, E, C>(Result<(I, C), (E, C)>);
+
+impl<I, E, C> WrappedResult<I, E, C> {
+  pub fn then<F, RI, RE>(self, f: F) -> WrappedResult<RI, RE, C>
+  where
+    F: FnOnce(Result<I, E>, &mut C) -> Result<RI, RE>,
+  {
+    let (res, mut ctx) = match self.0 {
+      Ok((val, ctx)) => (Ok(val), ctx),
+      Err((err, ctx)) => (Err(err), ctx),
+    };
+    let res_ctx = match f(res, &mut ctx) {
+      Ok(val) => Ok((val, ctx)),
+      Err(err) => Err((err, ctx)),
+    };
+    Self(res_ctx)
+  }
+
+  pub fn map<F, R>(self, f: F) -> WrappedResult<R, E, C>
+  where
+    F: FnOnce(I, &mut C) -> R,
+  {
+    self.then(|res, ctx| match res {
+      Ok(val) => Ok(f(val, ctx)),
+      Err(err) => Err(err),
+    })
+  }
+
+  pub fn map_err<F, R>(self, f: F) -> WrappedResult<I, R, C>
+  where
+    F: FnOnce(E, &mut C) -> R,
+  {
+    self.then(|res, ctx| match res {
+      Ok(val) => Ok(val),
+      Err(err) => Err(f(err, ctx)),
+    })
+  }
+
+  pub fn and_then<F, R>(self, f: F) -> WrappedResult<R, E, C>
+  where
+    F: FnOnce(I, &mut C) -> Result<R, E>,
+  {
+    self.then(|res, ctx| match res {
+      Ok(val) => f(val, ctx),
+      Err(err) => Err(err),
+    })
+  }
+
+  pub fn or_else<F, R>(self, f: F) -> WrappedResult<I, R, C>
+  where
+    F: FnOnce(E, &mut C) -> Result<I, R>,
+  {
+    self.then(|res, ctx| match res {
+      Ok(val) => Ok(val),
+      Err(err) => f(err, ctx),
+    })
+  }
+}
+
+mod internal {
+  use futures::future::Future;
+
+  pub trait FutureWithContext
+  where
+    Self: Sized,
+    Self: ,
+  {
+    type Future: Future<
+        Item = (Self::Item, Self::Context),
+        Error = (Self::Error, Self::Context),
+      > + FutureWithContext;
+    type Item;
+    type Error;
+    type Context;
+
+    fn into_inner_future(self) -> Self::Future;
+    fn inner_future_mut(&mut self) -> &mut Self::Future;
+  }
+
+  impl<F, I, E, C> FutureWithContext for F
+  where
+    F: Future<Item = (I, C), Error = (E, C)>,
+  {
+    type Future = F;
+    type Item = I;
+    type Error = E;
+    type Context = C;
+
+    fn into_inner_future(self) -> F {
+      self
+    }
+    fn inner_future_mut(&mut self) -> &mut F {
+      self
+    }
+  }
+}
+
+pub struct WrappedFuture<FC>(FC);
+
+impl<I, E, C> WrappedFuture<FutureResult<(I, C), (E, C)>> {
+  pub fn result(res: Result<I, E>, ctx: C) -> Self {
+    Self(
+      match res {
+        Ok(val) => Ok((val, ctx)),
+        Err(err) => Err((err, ctx)),
+      }.into(),
+    )
+  }
+
+  pub fn ok(val: I, ctx: C) -> Self {
+    Self(Ok((val, ctx)).into())
+  }
+
+  pub fn err(err: E, ctx: C) -> Self {
+    Self(Err((err, ctx)).into())
+  }
+}
+
+use internal::FutureWithContext;
+impl<FC> Future for WrappedFuture<FC>
+where
+  FC: FutureWithContext,
+{
+  type Item = FC::Item;
+  type Error = FC::Error;
+
+  fn poll(&mut self) -> Poll<FC::Item, FC::Error> {
+    match self.0.inner_future_mut().poll() {
+      Ok(NotReady) => Ok(NotReady),
+      Ok(Ready((val, _))) => Ok(Ready(val)),
+      Err((err, _)) => Err(err),
+    }
+  }
+}
+
+impl<FC> WrappedFuture<FC>
+where
+  FC: FutureWithContext,
+{
+  pub fn then<F, R>(
+    self,
+    f: F,
+  ) -> WrappedFuture<
+    impl FutureWithContext<Item = R::Item, Error = R::Error, Context = FC::Context>,
+  >
+  where
+    R: IntoFuture,
+    F: FnOnce(Result<FC::Item, FC::Error>, &mut FC::Context) -> R,
+  {
+    let fut_ctx = self.0.into_inner_future().then(move |res_ctx| {
+      let (res, mut ctx) = match res_ctx {
+        Ok((val, ctx)) => (Ok(val), ctx),
+        Err((err, ctx)) => (Err(err), ctx),
+      };
+      f(res, &mut ctx).into_future().then(move |res| match res {
+        Ok(val) => Ok((val, ctx)),
+        Err(err) => Err((err, ctx)),
+      })
+    });
+    WrappedFuture(fut_ctx)
+  }
+
+  pub fn map<F, R>(
+    self,
+    f: F,
+  ) -> WrappedFuture<
+    impl FutureWithContext<Item = R, Error = FC::Error, Context = FC::Context>,
+  >
+  where
+    F: FnOnce(FC::Item, &mut FC::Context) -> R,
+  {
+    self.then(|res, ctx| match res {
+      Ok(val) => Ok(f(val, ctx)),
+      Err(err) => Err(err),
+    })
+  }
+
+  pub fn map_err<F, R>(
+    self,
+    f: F,
+  ) -> WrappedFuture<
+    impl FutureWithContext<Item = FC::Item, Error = R, Context = FC::Context>,
+  >
+  where
+    F: FnOnce(FC::Error, &mut FC::Context) -> R,
+  {
+    self.then(|res, ctx| match res {
+      Ok(val) => Ok(val),
+      Err(err) => Err(f(err, ctx)),
+    })
+  }
+
+  pub fn and_then<F, R>(
+    self,
+    f: F,
+  ) -> WrappedFuture<
+    impl FutureWithContext<Item = R::Item, Error = FC::Error, Context = FC::Context>,
+  >
+  where
+    R: IntoFuture<Error = FC::Error>,
+    F: FnOnce(FC::Item, &mut FC::Context) -> R,
+  {
+    self.then(|res, ctx| match res {
+      Ok(val) => Either::A(f(val, ctx).into_future()),
+      Err(err) => Either::B(Err(err).into_future()),
+    })
+  }
+
+  pub fn or_else<F, R>(
+    self,
+    f: F,
+  ) -> WrappedFuture<
+    impl FutureWithContext<Item = FC::Item, Error = R::Error, Context = FC::Context>,
+  >
+  where
+    F: FnOnce(FC::Error, &mut FC::Context) -> R,
+    R: IntoFuture<Item = FC::Item>,
+  {
+    self.then(|res, ctx| match res {
+      Ok(val) => Either::A(Ok(val).into_future()),
+      Err(err) => Either::B(f(err, ctx).into_future()),
+    })
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::msg::ErrorKind;
+
+  struct Request {
+    maybe_foo: Option<String>,
+    bar: u32,
+  }
+
+  #[test]
+  fn test() {
+    let req = Request {
+      maybe_foo: Some("oof".to_owned()),
+      bar: 42u32,
+    };
+
+    let mut wf = WrappedFuture::ok((), req)
+      .map(|_, _: &mut Request| "non_existing_file")
+      .map(|f, _| std::path::PathBuf::from(f))
+      .and_then(|f, _| std::fs::File::open(f))
+      .map_err(|e, _: &mut Request| DenoError::from(e))
+      .or_else(|e, Request { maybe_foo, .. }| {
+        assert!(maybe_foo.is_some());
+        assert_eq!(e.kind(), ErrorKind::NotFound);
+        std::fs::File::open("bar")
+      }).then(|r: Result<_, _>, ctx: &mut Request| {
+        println!("maybe_foo={:?}, bar={:?}", ctx.maybe_foo, ctx.bar);
+        r
+      });
+    let p = wf.poll().expect("poll error");
+    dbg!(p);
+  }
+}
+
+pub trait IntoOp {
+  type Item;
+  type Error;
+  fn wrap(self, state: &ThreadSafeState, base: &msg::Base<'_>) -> BoxOp;
+}
+
+impl<T> IntoOp for T
+where
+  T: IntoFuture + 'static,
+  T::Future: Send,
+  T::Item: Serialize,
+  T::Error: Serialize,
+{
+  type Item = T::Item;
+  type Error = T::Error;
+  fn wrap(self, state: &ThreadSafeState, base: &msg::Base<'_>) -> BoxOp {
+    let state = state.clone();
+    let cmd_id = base.cmd_id();
+    let is_sync = base.sync();
+
+    Box::new(
+      self
+        .into_future()
+        .map(move |result| result.serialize(cmd_id, is_sync))
+        .or_else(move |err| Ok(err.serialize(cmd_id, is_sync)))
+        .map(move |buf| {
+          state.metrics_op_completed(buf.len());
+          buf
+        }),
+    )
+  }
+}
+
+fn blocking2<F, I, E>(is_sync: bool, f: F) -> impl Future<Item = I, Error = E>
+where
+  F: 'static + Send + FnOnce() -> Result<I, E>,
+{
+  if is_sync {
+    Either::A(f().into_future())
+  } else {
+    Either::B(tokio_util::poll_fn(
+      move || match tokio_threadpool::blocking(f) {
+        Ok(Ready(Ok(v))) => Ok(Ready(v)),
+        Ok(Ready(Err(err))) => Err(err),
+        Ok(NotReady) => Ok(NotReady),
+        Err(err) => panic!("tokio_threadpool::blocking() failed {}", err),
+      },
+    ))
+  }
+}
 
 // TODO Ideally we wouldn't have to box the OpWithError being returned.
 // The box is just to make it easier to get a prototype refactor working.
@@ -212,6 +629,133 @@ pub fn op_selector_std(inner_type: msg::Any) -> Option<OpCreator> {
 
     _ => None,
   }
+}
+
+/// Standard ops set for most isolates
+pub fn op_creator_std<F, T>(
+  inner_type: msg::Any,
+  state: &ThreadSafeState,
+  base: &msg::Base<'_>,
+  data: deno_buf,
+) -> Option<Box<Future<Item = Buf, Error = ()> + Send>> {
+  Some(match inner_type {
+    msg::Any::Accept => op_accept_2(state, base, data).wrap(state, base),
+    msg::Any::Chdir => op_chdir_2(state, base, data).wrap(state, base),
+    _ => return None,
+  })
+}
+
+fn op_accept_2(
+  state: &ThreadSafeState,
+  base: &msg::Base<'_>,
+  data: deno_buf,
+) -> impl IntoOp {
+  assert_eq!(data.len(), 0);
+  let cmd_id = base.cmd_id();
+  let inner = base.inner_as_accept().unwrap();
+  let server_rid = inner.rid();
+
+  state
+    .check_net("accept")
+    .and_then(|_| {
+      resources::lookup(server_rid).ok_or_else(errors::bad_resource)
+    }).into_future()
+    .and_then(|server_resource| {
+      tokio_util::accept(server_resource).map_err(DenoError::from)
+    }).and_then(move |(tcp_stream, _)| new_conn(cmd_id, tcp_stream))
+}
+
+#[allow(dead_code)]
+fn op_chdir_2(
+  _state: &ThreadSafeState,
+  base: &msg::Base<'_>,
+  data: deno_buf,
+) -> impl IntoOp {
+  assert_eq!(data.len(), 0);
+  let inner = base.inner_as_chdir().unwrap();
+  let directory = inner.directory().unwrap();
+  std::env::set_current_dir(&directory)
+    .map_err(DenoError::from)
+    .into_future()
+    .map(|_| empty_buf())
+}
+
+#[allow(dead_code)]
+fn op_make_temp_dir_2(
+  state: &ThreadSafeState,
+  base: &msg::Base<'_>,
+  data: deno_buf,
+) -> impl IntoOp {
+  assert_eq!(data.len(), 0);
+  let inner = base.inner_as_make_temp_dir().unwrap();
+  let is_sync = base.sync();
+
+  let dir = inner.dir().map(PathBuf::from);
+  let prefix = inner.prefix().map(String::from);
+  let suffix = inner.suffix().map(String::from);
+
+  state
+    .check_write("make_temp")
+    .into_future()
+    .and_then(move |_| {
+      blocking2(is_sync, move || {
+        // TODO(piscisaureus): use byte vector for paths, not a string.
+        // See https://github.com/denoland/deno/issues/627.
+        // We can't assume that paths are always valid utf8 strings.
+        let path = deno_fs::make_temp_dir(
+          // Converting Option<String> to Option<&str>
+          dir.as_ref().map(|x| &**x),
+          prefix.as_ref().map(|x| &**x),
+          suffix.as_ref().map(|x| &**x),
+        )?;
+        Ok(Response::new(msg::Any::MakeTempDirRes, move |fbb| {
+          let args = msg::MakeTempDirResArgs {
+            path: Some(fbb.create_string(path.to_str().unwrap())),
+          };
+          msg::MakeTempDirRes::create(fbb, &args)
+        }))
+        /*let builder = &mut FlatBufferBuilder::new();
+        let path_off = builder.create_string(path.to_str().unwrap());
+        let inner = msg::MakeTempDirRes::create(
+          builder,
+          &msg::MakeTempDirResArgs {
+            path: Some(path_off),
+          },
+        );
+        Ok(serialize_response(
+          cmd_id,
+          builder,
+          msg::BaseArgs {
+            inner: Some(inner.as_union_value()),
+            inner_type: msg::Any::MakeTempDirRes,
+            ..Default::default()
+          },
+        ))*/
+      })
+    })
+}
+
+#[allow(dead_code)]
+fn op_permissions_2(
+  state: &ThreadSafeState,
+  _base: &msg::Base,
+  data: deno_buf,
+) -> impl IntoOp<Error = ()> {
+  assert_eq!(data.len(), 0);
+  let state = state.clone();
+  Ok(Response::new(msg::Any::PermissionsRes, move |fbb| {
+    msg::PermissionsRes::create(
+      fbb,
+      &msg::PermissionsResArgs {
+        run: state.permissions.allows_run(),
+        read: state.permissions.allows_read(),
+        write: state.permissions.allows_write(),
+        net: state.permissions.allows_net(),
+        env: state.permissions.allows_env(),
+        high_precision: state.permissions.allows_high_precision(),
+      },
+    )
+  }))
 }
 
 // Returns a milliseconds and nanoseconds subsec
