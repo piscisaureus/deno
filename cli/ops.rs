@@ -1,5 +1,4 @@
 // Copyright 2018-2019 the Deno authors. All rights reserved. MIT license.
-use atty;
 use crate::ansi;
 use crate::errors;
 use crate::errors::{DenoError, DenoResult, ErrorKind};
@@ -21,6 +20,7 @@ use crate::tokio_write;
 use crate::version;
 use crate::worker::root_specifier_to_url;
 use crate::worker::Worker;
+use atty;
 use deno::deno_buf;
 use deno::js_check;
 use deno::Buf;
@@ -28,7 +28,9 @@ use deno::JSError;
 use deno::Op;
 use flatbuffers::FlatBufferBuilder;
 use futures;
+use futures::future::Either;
 use futures::Async;
+use futures::IntoFuture;
 use futures::Poll;
 use futures::Sink;
 use futures::Stream;
@@ -58,11 +60,16 @@ type OpResult = DenoResult<Buf>;
 
 pub type OpWithError = dyn Future<Item = Buf, Error = DenoError> + Send;
 
+pub trait OpWithError2: Future<Item = Buf, Error = DenoError> + Send {}
+impl<T> OpWithError2 for T where T: Future<Item = Buf, Error = DenoError> + Send {}
+
 // TODO Ideally we wouldn't have to box the OpWithError being returned.
 // The box is just to make it easier to get a prototype refactor working.
-type OpCreator =
-  fn(state: &ThreadSafeState, base: &msg::Base<'_>, data: deno_buf)
-    -> Box<OpWithError>;
+type OpCreator = fn(
+  state: &ThreadSafeState,
+  base: &msg::Base<'_>,
+  data: deno_buf,
+) -> Box<OpWithError>;
 
 pub type OpSelector = fn(inner_type: msg::Any) -> Option<OpCreator>;
 
@@ -114,7 +121,8 @@ pub fn dispatch_all(
           ..Default::default()
         },
       ))
-    }).and_then(move |buf: Buf| -> Result<Buf, ()> {
+    })
+    .and_then(move |buf: Buf| -> Result<Buf, ()> {
       // Handle empty responses. For sync responses we just want
       // to send null. For async we want to send a small message
       // with the cmd_id.
@@ -132,7 +140,8 @@ pub fn dispatch_all(
       };
       state.metrics_op_completed(buf.len());
       Ok(buf)
-    }).map_err(|err| panic!("unexpected error {:?}", err)),
+    })
+    .map_err(|err| panic!("unexpected error {:?}", err)),
   );
 
   debug!(
@@ -210,6 +219,142 @@ pub fn op_selector_std(inner_type: msg::Any) -> Option<OpCreator> {
 
     _ => None,
   }
+}
+
+/// Standard ops set for most isolates
+pub fn op_creator_std(
+  inner_type: msg::Any,
+  state: &ThreadSafeState,
+  base: &msg::Base<'_>,
+  data: deno_buf,
+) -> Option<impl Future<Item = Buf, Error = DenoError> + Send> {
+  match inner_type {
+    msg::Any::Accept => Some(op_accept_2(state, base, data)),
+    //  msg::Any::Chdir => return Some(op_chdir_2(state,base, data)),
+    _ => None,
+  }
+}
+
+fn op_accept_2(
+  state: &ThreadSafeState,
+  base: &msg::Base<'_>,
+  data: deno_buf,
+) -> impl OpWithError2 {
+  assert_eq!(data.len(), 0);
+  let cmd_id = base.cmd_id();
+  let inner = base.inner_as_accept().unwrap();
+  let server_rid = inner.rid();
+
+  state
+    .check_net("accept")
+    .and_then(|_| {
+      resources::lookup(server_rid).ok_or_else(errors::bad_resource)
+    })
+    .into_future()
+    .and_then(|server_resource| {
+      tokio_util::accept(server_resource).map_err(DenoError::from)
+    })
+    .and_then(move |(tcp_stream, _)| new_conn(cmd_id, tcp_stream))
+}
+
+#[allow(dead_code)]
+fn op_chdir_2(
+  _state: &ThreadSafeState,
+  base: &msg::Base<'_>,
+  data: deno_buf,
+) -> impl OpWithError2 {
+  assert_eq!(data.len(), 0);
+  let inner = base.inner_as_chdir().unwrap();
+  let directory = inner.directory().unwrap();
+  std::env::set_current_dir(&directory)
+    .map_err(DenoError::from)
+    .into_future()
+    .map(|_| empty_buf())
+}
+
+fn blocking2<F>(is_sync: bool, f: F) -> impl OpWithError2
+where
+  F: 'static + Send + FnOnce() -> DenoResult<Buf>,
+{
+  if is_sync {
+    Either::A(futures::future::result(f()))
+  } else {
+    Either::B(tokio_util::poll_fn(move || convert_blocking(f)))
+  }
+}
+
+#[allow(dead_code)]
+fn op_make_temp_dir_2(
+  state: &ThreadSafeState,
+  base: &msg::Base<'_>,
+  data: deno_buf,
+) -> impl OpWithError2 {
+  assert_eq!(data.len(), 0);
+  let inner = base.inner_as_make_temp_dir().unwrap();
+  let cmd_id = base.cmd_id();
+  let is_sync = base.sync();
+
+  let dir = inner.dir().map(PathBuf::from);
+  let prefix = inner.prefix().map(String::from);
+  let suffix = inner.suffix().map(String::from);
+
+  state
+    .check_write("make_temp")
+    .into_future()
+    .and_then(move |_| {
+      blocking2(is_sync, move || -> OpResult {
+        // TODO(piscisaureus): use byte vector for paths, not a string.
+        // See https://github.com/denoland/deno/issues/627.
+        // We can't assume that paths are always valid utf8 strings.
+        let path = deno_fs::make_temp_dir(
+          // Converting Option<String> to Option<&str>
+          dir.as_ref().map(|x| &**x),
+          prefix.as_ref().map(|x| &**x),
+          suffix.as_ref().map(|x| &**x),
+        )?;
+        let builder = &mut FlatBufferBuilder::new();
+        let path_off = builder.create_string(path.to_str().unwrap());
+        let inner = msg::MakeTempDirRes::create(
+          builder,
+          &msg::MakeTempDirResArgs {
+            path: Some(path_off),
+          },
+        );
+        Ok(serialize_response(
+          cmd_id,
+          builder,
+          msg::BaseArgs {
+            inner: Some(inner.as_union_value()),
+            inner_type: msg::Any::MakeTempDirRes,
+            ..Default::default()
+          },
+        ))
+      })
+    })
+}
+
+#[allow(dead_code)]
+fn op_permissions_2(
+  state: &ThreadSafeState,
+  base: &msg::Base,
+  data: deno_buf,
+) -> impl OpWithError2 {
+  assert_eq!(data.len(), 0);
+  base
+    .respond(msg::Any::PermissionsRes, |fbb| {
+      msg::PermissionsRes::create(
+        fbb,
+        &msg::PermissionsResArgs {
+          run: state.permissions.allows_run(),
+          read: state.permissions.allows_read(),
+          write: state.permissions.allows_write(),
+          net: state.permissions.allows_net(),
+          env: state.permissions.allows_env(),
+          high_precision: state.permissions.allows_high_precision(),
+        },
+      )
+    })
+    .into_future()
 }
 
 // Returns a milliseconds and nanoseconds subsec
@@ -397,6 +542,33 @@ pub fn ok_future(buf: Buf) -> Box<OpWithError> {
 #[inline]
 pub fn odd_future(err: DenoError) -> Box<OpWithError> {
   Box::new(futures::future::err(err))
+}
+
+impl<'a> msg::Base<'a> {
+  fn respond<'fbb, T, F>(
+    &self,
+    inner_type: msg::Any,
+    f: F,
+  ) -> Result<Buf, DenoError>
+  where
+    F: FnOnce(
+      &mut flatbuffers::FlatBufferBuilder<'fbb>,
+    ) -> flatbuffers::WIPOffset<T>,
+  {
+    let cmd_id = self.cmd_id();
+    let mut builder: FlatBufferBuilder = FlatBufferBuilder::new();
+    let inner = f(&mut builder);
+    let base_args = msg::BaseArgs {
+      cmd_id,
+      inner_type,
+      inner: Some(inner.as_union_value()),
+      ..Default::default()
+    };
+    let base = msg::Base::create(&mut builder, &base_args);
+    msg::finish_base_buffer(&mut builder, base);
+    let data = builder.finished_data();
+    Ok(data.into())
+  }
 }
 
 // https://github.com/denoland/deno/blob/golang/os.go#L100-L154
@@ -1232,7 +1404,8 @@ fn op_read_dir(
             has_mode: cfg!(target_family = "unix"),
           },
         )
-      }).collect();
+      })
+      .collect();
 
     let entries = builder.create_vector(&entries);
     let inner = msg::ReadDirRes::create(
@@ -1613,7 +1786,8 @@ fn op_resources(
           repr: Some(repr),
         },
       )
-    }).collect();
+    })
+    .collect();
 
   let resources = builder.create_vector(&res);
   let inner = msg::ResourcesRes::create(
