@@ -44,6 +44,7 @@ tokio-executor = "0.1.7"
 tokio-fs = "0.1.6"
 tokio-io = "0.1.12"
 tokio-process = "0.2.3"
+tokio-rustls = "0.9.2"
 tokio-threadpool = "0.1.13"
 url = "1.7.2"
 
