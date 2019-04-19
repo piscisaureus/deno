@@ -112,7 +112,7 @@ impl OpError for DenoError {
 }
 
 pub trait OpWithError2 {
-  fn wrap(self, base: &msg::Base<'_>) -> BoxOp;
+  fn wrap(self, state: &ThreadSafeState, base: &msg::Base<'_>) -> BoxOp;
 }
 
 impl<T> OpWithError2 for T
@@ -122,7 +122,8 @@ where
   T::Item: OpError,
   T::Error: OpError,
 {
-  fn wrap(self, base: &msg::Base<'_>) -> BoxOp {
+  fn wrap(self, state: &ThreadSafeState, base: &msg::Base<'_>) -> BoxOp {
+    let state = state.clone();
     let cmd_id = base.cmd_id();
     let is_sync = base.sync();
 
@@ -130,7 +131,11 @@ where
       self
         .into_future()
         .map(move |result| result.serialize(cmd_id, is_sync))
-        .or_else(move |err| Ok(err.serialize(cmd_id, is_sync))),
+        .or_else(move |err| Ok(err.serialize(cmd_id, is_sync)))
+        .map(move |buf| {
+          state.metrics_op_completed(buf.len());
+          buf
+        }),
     )
   }
 }
@@ -303,8 +308,8 @@ pub fn op_creator_std<F, T>(
   data: deno_buf,
 ) -> Option<Box<Future<Item = Buf, Error = ()> + Send>> {
   Some(match inner_type {
-    msg::Any::Accept => op_accept_2(state, base, data).wrap(base),
-    msg::Any::Chdir => op_chdir_2(state, base, data).wrap(base),
+    msg::Any::Accept => op_accept_2(state, base, data).wrap(state, base),
+    msg::Any::Chdir => op_chdir_2(state, base, data).wrap(state, base),
     _ => return None,
   })
 }
@@ -384,7 +389,7 @@ fn op_make_temp_dir_2(
     .check_write("make_temp")
     .into_future()
     .and_then(move |_| {
-      blocking2(is_sync, move || -> OpResult {
+      blocking2(is_sync, move || {
         // TODO(piscisaureus): use byte vector for paths, not a string.
         // See https://github.com/denoland/deno/issues/627.
         // We can't assume that paths are always valid utf8 strings.
@@ -394,7 +399,19 @@ fn op_make_temp_dir_2(
           prefix.as_ref().map(|x| &**x),
           suffix.as_ref().map(|x| &**x),
         )?;
-        let builder = &mut FlatBufferBuilder::new();
+        let a: fn(
+          &'a mut flatbuffers::FlatBufferBuilder,
+          &msg::MakeTempDirResArgs,
+        ) -> flatbuffers::WIPOffset<msg::MakeTempDirRes<'a>> =
+          |a, b| msg::MakeTempDirRes::create(a, b);
+        Ok(Res(
+          msg::Any::MakeTempDirRes,
+          a,
+          move |fbb: &mut FlatBufferBuilder| msg::MakeTempDirResArgs {
+            path: Some(fbb.create_string(path.to_str().unwrap())),
+          },
+        ))
+        /*let builder = &mut FlatBufferBuilder::new();
         let path_off = builder.create_string(path.to_str().unwrap());
         let inner = msg::MakeTempDirRes::create(
           builder,
@@ -410,7 +427,7 @@ fn op_make_temp_dir_2(
             inner_type: msg::Any::MakeTempDirRes,
             ..Default::default()
           },
-        ))
+        ))*/
       })
     })
 }
@@ -627,6 +644,67 @@ pub fn odd_future(err: DenoError) -> Box<OpWithError> {
 }
 
 fn respond<'fbb, T, F>(
+  cmd_id: u32,
+  inner_type: msg::Any,
+  f: F,
+) -> Result<Buf, DenoError>
+where
+  F: FnOnce(
+    &mut flatbuffers::FlatBufferBuilder<'fbb>,
+  ) -> flatbuffers::WIPOffset<T>,
+{
+  let cmd_id = cmd_id;
+  let mut builder: FlatBufferBuilder = FlatBufferBuilder::new();
+  let inner = f(&mut builder);
+  let base_args = msg::BaseArgs {
+    cmd_id,
+    inner_type,
+    inner: Some(inner.as_union_value()),
+    ..Default::default()
+  };
+  let base = msg::Base::create(&mut builder, &base_args);
+  msg::finish_base_buffer(&mut builder, base);
+  let data = builder.finished_data();
+  Ok(data.into())
+}
+
+struct Res<
+  'fbb,
+  R,
+  A,
+  FnArgs: FnOnce(&mut flatbuffers::FlatBufferBuilder<'fbb>) -> A,
+>(
+  msg::Any,
+  fn(
+    &mut flatbuffers::FlatBufferBuilder<'fbb>,
+    &A,
+  ) -> flatbuffers::WIPOffset<R>,
+  FnArgs,
+);
+
+impl<'fbb, R, A, FnArgs> OpError for Res<'fbb, R, A, FnArgs>
+where
+  FnArgs: FnOnce(&mut flatbuffers::FlatBufferBuilder<'fbb>) -> A,
+{
+  fn serialize(self, cmd_id: u32, _: bool) -> Buf {
+    let Res(inner_type, create_fn, args_fn) = self;
+    let mut builder: FlatBufferBuilder = FlatBufferBuilder::new();
+    let inner_args = args_fn(&mut builder);
+    let inner = create_fn(&mut builder, &inner_args);
+    let base_args = msg::BaseArgs {
+      cmd_id,
+      inner_type,
+      inner: Some(inner.as_union_value()),
+      ..Default::default()
+    };
+    let base = msg::Base::create(&mut builder, &base_args);
+    msg::finish_base_buffer(&mut builder, base);
+    let data = builder.finished_data();
+    data.into()
+  }
+}
+
+fn respond2<'fbb, T, C, F>(
   cmd_id: u32,
   inner_type: msg::Any,
   f: F,
