@@ -1,4 +1,5 @@
 // Copyright 2018-2019 the Deno authors. All rights reserved. MIT license.
+use atty;
 use crate::ansi;
 use crate::errors;
 use crate::errors::{DenoError, DenoResult, ErrorKind};
@@ -20,7 +21,6 @@ use crate::tokio_write;
 use crate::version;
 use crate::worker::root_specifier_to_url;
 use crate::worker::Worker;
-use atty;
 use deno::deno_buf;
 use deno::js_check;
 use deno::Buf;
@@ -41,6 +41,7 @@ use remove_dir_all::remove_dir_all;
 use std;
 use std::convert::From;
 use std::fs;
+use std::marker::PhantomData;
 use std::net::Shutdown;
 use std::path::Path;
 use std::path::PathBuf;
@@ -63,17 +64,17 @@ pub type OpWithError = dyn Future<Item = Buf, Error = DenoError> + Send;
 
 pub type BoxOp = Box<Future<Item = Buf, Error = ()> + Send>;
 
-pub trait OpError {
+pub trait Serialize {
   fn serialize(self, cmd_id: u32, is_sync: bool) -> Buf;
 }
 
-impl OpError for Buf {
+impl Serialize for Buf {
   fn serialize(self, _: u32, _: bool) -> Buf {
     self
   }
 }
 
-impl OpError for () {
+impl Serialize for () {
   fn serialize(self, cmd_id: u32, is_sync: bool) -> Buf {
     // Handle empty responses. For sync responses we just want
     // to send null. For async we want to send a small message
@@ -92,7 +93,7 @@ impl OpError for () {
   }
 }
 
-impl OpError for DenoError {
+impl Serialize for DenoError {
   fn serialize(self, cmd_id: u32, _: bool) -> Buf {
     debug!("op err {}", self);
     // No matter whether we got an Err or Ok, we want a serialized message to
@@ -111,7 +112,58 @@ impl OpError for DenoError {
   }
 }
 
+struct Response<'fbb, T, F>
+where
+  F: FnOnce(&mut flatbuffers::FlatBufferBuilder<'fbb>)
+    -> flatbuffers::WIPOffset<T>,
+{
+  inner_type: msg::Any,
+  inner_create: F,
+  phantom: PhantomData<&'fbb T>,
+}
+
+impl<'fbb, T, F> Response<'fbb, T, F>
+where
+  F: FnOnce(&mut flatbuffers::FlatBufferBuilder<'fbb>)
+    -> flatbuffers::WIPOffset<T>,
+{
+  fn new(inner_type: msg::Any, inner_create: F) -> Self {
+    Self {
+      inner_type,
+      inner_create,
+      phantom: PhantomData,
+    }
+  }
+}
+
+impl<'fbb, T, F> Serialize for Response<'fbb, T, F>
+where
+  F: FnOnce(&mut flatbuffers::FlatBufferBuilder<'fbb>)
+    -> flatbuffers::WIPOffset<T>,
+{
+  fn serialize(self, cmd_id: u32, _: bool) -> Buf {
+    let Self {
+      inner_type,
+      inner_create,
+      ..
+    } = self;
+    let mut builder: FlatBufferBuilder = FlatBufferBuilder::new();
+    let inner = inner_create(&mut builder);
+    let base_args = msg::BaseArgs {
+      cmd_id,
+      inner_type,
+      inner: Some(inner.as_union_value()),
+      ..Default::default()
+    };
+    let base = msg::Base::create(&mut builder, &base_args);
+    msg::finish_base_buffer(&mut builder, base);
+    builder.finished_data().into()
+  }
+}
+
 pub trait OpWithError2 {
+  type Item;
+  type Error;
   fn wrap(self, state: &ThreadSafeState, base: &msg::Base<'_>) -> BoxOp;
 }
 
@@ -119,9 +171,11 @@ impl<T> OpWithError2 for T
 where
   T: IntoFuture + 'static,
   T::Future: Send,
-  T::Item: OpError,
-  T::Error: OpError,
+  T::Item: Serialize,
+  T::Error: Serialize,
 {
+  type Item = T::Item;
+  type Error = T::Error;
   fn wrap(self, state: &ThreadSafeState, base: &msg::Base<'_>) -> BoxOp {
     let state = state.clone();
     let cmd_id = base.cmd_id();
@@ -140,15 +194,29 @@ where
   }
 }
 
-//impl<T> OpWithError2 for T where T: IntoFuture<Item = Buf, Error = DenoError> {}
+fn blocking2<F, I, E>(is_sync: bool, f: F) -> impl Future<Item = I, Error = E>
+where
+  F: 'static + Send + FnOnce() -> Result<I, E>,
+{
+  if is_sync {
+    Either::A(f().into_future())
+  } else {
+    Either::B(tokio_util::poll_fn(
+      move || match tokio_threadpool::blocking(f) {
+        Ok(Ready(Ok(v))) => Ok(Ready(v)),
+        Ok(Ready(Err(err))) => Err(err),
+        Ok(NotReady) => Ok(NotReady),
+        Err(err) => panic!("tokio_threadpool::blocking() failed {}", err),
+      },
+    ))
+  }
+}
 
 // TODO Ideally we wouldn't have to box the OpWithError being returned.
 // The box is just to make it easier to get a prototype refactor working.
-type OpCreator = fn(
-  state: &ThreadSafeState,
-  base: &msg::Base<'_>,
-  data: deno_buf,
-) -> Box<OpWithError>;
+type OpCreator =
+  fn(state: &ThreadSafeState, base: &msg::Base<'_>, data: deno_buf)
+    -> Box<OpWithError>;
 
 pub type OpSelector = fn(inner_type: msg::Any) -> Option<OpCreator>;
 
@@ -200,8 +268,7 @@ pub fn dispatch_all(
           ..Default::default()
         },
       ))
-    })
-    .and_then(move |buf: Buf| -> Result<Buf, ()> {
+    }).and_then(move |buf: Buf| -> Result<Buf, ()> {
       // Handle empty responses. For sync responses we just want
       // to send null. For async we want to send a small message
       // with the cmd_id.
@@ -219,8 +286,7 @@ pub fn dispatch_all(
       };
       state.metrics_op_completed(buf.len());
       Ok(buf)
-    })
-    .map_err(|err| panic!("unexpected error {:?}", err)),
+    }).map_err(|err| panic!("unexpected error {:?}", err)),
   );
 
   debug!(
@@ -319,7 +385,6 @@ fn op_accept_2(
   base: &msg::Base<'_>,
   data: deno_buf,
 ) -> impl OpWithError2 {
-  //I::new(base, data)
   assert_eq!(data.len(), 0);
   let cmd_id = base.cmd_id();
   let inner = base.inner_as_accept().unwrap();
@@ -329,12 +394,10 @@ fn op_accept_2(
     .check_net("accept")
     .and_then(|_| {
       resources::lookup(server_rid).ok_or_else(errors::bad_resource)
-    })
-    .into_future()
+    }).into_future()
     .and_then(|server_resource| {
       tokio_util::accept(server_resource).map_err(DenoError::from)
-    })
-    .and_then(move |(tcp_stream, _)| new_conn(cmd_id, tcp_stream))
+    }).and_then(move |(tcp_stream, _)| new_conn(cmd_id, tcp_stream))
 }
 
 #[allow(dead_code)]
@@ -352,24 +415,6 @@ fn op_chdir_2(
     .map(|_| empty_buf())
 }
 
-fn blocking2<F, I, E>(is_sync: bool, f: F) -> impl Future<Item = I, Error = E>
-where
-  F: 'static + Send + FnOnce() -> Result<I, E>,
-{
-  if is_sync {
-    Either::A(futures::future::result(f()))
-  } else {
-    Either::B(tokio_util::poll_fn(
-      move || match tokio_threadpool::blocking(f) {
-        Ok(Ready(Ok(v))) => Ok(v.into()),
-        Ok(Ready(Err(err))) => Err(err),
-        Ok(NotReady) => Ok(NotReady),
-        Err(err) => panic!("tokio_threadpool::blocking() failed {}", err),
-      },
-    ))
-  }
-}
-
 #[allow(dead_code)]
 fn op_make_temp_dir_2(
   state: &ThreadSafeState,
@@ -378,7 +423,6 @@ fn op_make_temp_dir_2(
 ) -> impl OpWithError2 {
   assert_eq!(data.len(), 0);
   let inner = base.inner_as_make_temp_dir().unwrap();
-  let cmd_id = base.cmd_id();
   let is_sync = base.sync();
 
   let dir = inner.dir().map(PathBuf::from);
@@ -399,18 +443,12 @@ fn op_make_temp_dir_2(
           prefix.as_ref().map(|x| &**x),
           suffix.as_ref().map(|x| &**x),
         )?;
-        let a: fn(
-          &'a mut flatbuffers::FlatBufferBuilder,
-          &msg::MakeTempDirResArgs,
-        ) -> flatbuffers::WIPOffset<msg::MakeTempDirRes<'a>> =
-          |a, b| msg::MakeTempDirRes::create(a, b);
-        Ok(Res(
-          msg::Any::MakeTempDirRes,
-          a,
-          move |fbb: &mut FlatBufferBuilder| msg::MakeTempDirResArgs {
+        Ok(Response::new(msg::Any::MakeTempDirRes, move |fbb| {
+          let args = msg::MakeTempDirResArgs {
             path: Some(fbb.create_string(path.to_str().unwrap())),
-          },
-        ))
+          };
+          msg::MakeTempDirRes::create(fbb, &args)
+        }))
         /*let builder = &mut FlatBufferBuilder::new();
         let path_off = builder.create_string(path.to_str().unwrap());
         let inner = msg::MakeTempDirRes::create(
@@ -435,25 +473,24 @@ fn op_make_temp_dir_2(
 #[allow(dead_code)]
 fn op_permissions_2(
   state: &ThreadSafeState,
-  base: &msg::Base,
+  _base: &msg::Base,
   data: deno_buf,
-) -> impl OpWithError2 {
+) -> impl OpWithError2<Error = ()> {
   assert_eq!(data.len(), 0);
-  base
-    .respond(msg::Any::PermissionsRes, |fbb| {
-      msg::PermissionsRes::create(
-        fbb,
-        &msg::PermissionsResArgs {
-          run: state.permissions.allows_run(),
-          read: state.permissions.allows_read(),
-          write: state.permissions.allows_write(),
-          net: state.permissions.allows_net(),
-          env: state.permissions.allows_env(),
-          high_precision: state.permissions.allows_high_precision(),
-        },
-      )
-    })
-    .into_future()
+  let state = state.clone();
+  Ok(Response::new(msg::Any::PermissionsRes, move |fbb| {
+    msg::PermissionsRes::create(
+      fbb,
+      &msg::PermissionsResArgs {
+        run: state.permissions.allows_run(),
+        read: state.permissions.allows_read(),
+        write: state.permissions.allows_write(),
+        net: state.permissions.allows_net(),
+        env: state.permissions.allows_env(),
+        high_precision: state.permissions.allows_high_precision(),
+      },
+    )
+  }))
 }
 
 // Returns a milliseconds and nanoseconds subsec
@@ -641,107 +678,6 @@ pub fn ok_future(buf: Buf) -> Box<OpWithError> {
 #[inline]
 pub fn odd_future(err: DenoError) -> Box<OpWithError> {
   Box::new(futures::future::err(err))
-}
-
-fn respond<'fbb, T, F>(
-  cmd_id: u32,
-  inner_type: msg::Any,
-  f: F,
-) -> Result<Buf, DenoError>
-where
-  F: FnOnce(
-    &mut flatbuffers::FlatBufferBuilder<'fbb>,
-  ) -> flatbuffers::WIPOffset<T>,
-{
-  let cmd_id = cmd_id;
-  let mut builder: FlatBufferBuilder = FlatBufferBuilder::new();
-  let inner = f(&mut builder);
-  let base_args = msg::BaseArgs {
-    cmd_id,
-    inner_type,
-    inner: Some(inner.as_union_value()),
-    ..Default::default()
-  };
-  let base = msg::Base::create(&mut builder, &base_args);
-  msg::finish_base_buffer(&mut builder, base);
-  let data = builder.finished_data();
-  Ok(data.into())
-}
-
-struct Res<
-  'fbb,
-  R,
-  A,
-  FnArgs: FnOnce(&mut flatbuffers::FlatBufferBuilder<'fbb>) -> A,
->(
-  msg::Any,
-  fn(
-    &mut flatbuffers::FlatBufferBuilder<'fbb>,
-    &A,
-  ) -> flatbuffers::WIPOffset<R>,
-  FnArgs,
-);
-
-impl<'fbb, R, A, FnArgs> OpError for Res<'fbb, R, A, FnArgs>
-where
-  FnArgs: FnOnce(&mut flatbuffers::FlatBufferBuilder<'fbb>) -> A,
-{
-  fn serialize(self, cmd_id: u32, _: bool) -> Buf {
-    let Res(inner_type, create_fn, args_fn) = self;
-    let mut builder: FlatBufferBuilder = FlatBufferBuilder::new();
-    let inner_args = args_fn(&mut builder);
-    let inner = create_fn(&mut builder, &inner_args);
-    let base_args = msg::BaseArgs {
-      cmd_id,
-      inner_type,
-      inner: Some(inner.as_union_value()),
-      ..Default::default()
-    };
-    let base = msg::Base::create(&mut builder, &base_args);
-    msg::finish_base_buffer(&mut builder, base);
-    let data = builder.finished_data();
-    data.into()
-  }
-}
-
-fn respond2<'fbb, T, C, F>(
-  cmd_id: u32,
-  inner_type: msg::Any,
-  f: F,
-) -> Result<Buf, DenoError>
-where
-  F: FnOnce(
-    &mut flatbuffers::FlatBufferBuilder<'fbb>,
-  ) -> flatbuffers::WIPOffset<T>,
-{
-  let cmd_id = cmd_id;
-  let mut builder: FlatBufferBuilder = FlatBufferBuilder::new();
-  let inner = f(&mut builder);
-  let base_args = msg::BaseArgs {
-    cmd_id,
-    inner_type,
-    inner: Some(inner.as_union_value()),
-    ..Default::default()
-  };
-  let base = msg::Base::create(&mut builder, &base_args);
-  msg::finish_base_buffer(&mut builder, base);
-  let data = builder.finished_data();
-  Ok(data.into())
-}
-
-impl<'a> msg::Base<'a> {
-  fn respond<'fbb, T, F>(
-    &self,
-    inner_type: msg::Any,
-    f: F,
-  ) -> Result<Buf, DenoError>
-  where
-    F: FnOnce(
-      &mut flatbuffers::FlatBufferBuilder<'fbb>,
-    ) -> flatbuffers::WIPOffset<T>,
-  {
-    respond(self.cmd_id(), inner_type, f)
-  }
 }
 
 // https://github.com/denoland/deno/blob/golang/os.go#L100-L154
@@ -1577,8 +1513,7 @@ fn op_read_dir(
             has_mode: cfg!(target_family = "unix"),
           },
         )
-      })
-      .collect();
+      }).collect();
 
     let entries = builder.create_vector(&entries);
     let inner = msg::ReadDirRes::create(
@@ -1959,8 +1894,7 @@ fn op_resources(
           repr: Some(repr),
         },
       )
-    })
-    .collect();
+    }).collect();
 
   let resources = builder.create_vector(&res);
   let inner = msg::ResourcesRes::create(
