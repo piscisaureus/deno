@@ -173,17 +173,18 @@ impl std::fmt::Debug for Request {
 }
 
 #[allow(dead_code)]
-struct OpBuilder<I, E, Fut>(Fut)
+struct OpBuilder<C, I, E, Fut>(Fut)
 where
-  Fut: Future<Item = (Request, I), Error = (Request, E)>;
+  Fut: Future<Item = (C, I), Error = (C, E)>;
 
-fn new_op_builder<Fut2>(
-  request: Request,
+fn new_op_builder<C, Fut2>(
+  context: C,
   source: Fut2,
 ) -> OpBuilder<
+  C,
   Fut2::Item,
   Fut2::Error,
-  impl Future<Item = (Request, Fut2::Item), Error = (Request, Fut2::Error)>,
+  impl Future<Item = (C, Fut2::Item), Error = (C, Fut2::Error)>,
 >
 where
   Fut2: IntoFuture,
@@ -192,22 +193,22 @@ where
     source
       .into_future()
       .then(move |r2| match r2 {
-        Ok(i2) => Ok((request, i2)),
-        Err(e2) => Err((request, e2)),
+        Ok(i2) => Ok((context, i2)),
+        Err(e2) => Err((context, e2)),
       }).into_future(),
   )
 }
 
 #[allow(dead_code)]
-impl<I, E, Fut> OpBuilder<I, E, Fut>
+impl<C, I, E, Fut> OpBuilder<C, I, E, Fut>
 where
-  Fut: Future<Item = (Request, I), Error = (Request, E)>,
+  Fut: Future<Item = (C, I), Error = (C, E)>,
 {
   #[allow(clippy::new_ret_no_self)]
   fn new<Fut2>(
-    request: Request,
+    c: C,
     source: Fut2,
-  ) -> OpBuilder<I, E, impl Future<Item = (Request, I), Error = (Request, E)>>
+  ) -> OpBuilder<C, I, E, impl Future<Item = (C, I), Error = (C, E)>>
   where
     Fut2: IntoFuture<Item = I, Error = E>,
   {
@@ -215,8 +216,8 @@ where
       source
         .into_future()
         .then(move |r2| match r2 {
-          Ok(i2) => Ok((request, i2)),
-          Err(e2) => Err((request, e2)),
+          Ok(i2) => Ok((c, i2)),
+          Err(e2) => Err((c, e2)),
         }).into_future(),
     )
   }
@@ -224,26 +225,26 @@ where
   fn map<F, I2>(
     self,
     f: F,
-  ) -> OpBuilder<I2, E, impl Future<Item = (Request, I2), Error = (Request, E)>>
+  ) -> OpBuilder<C, I2, E, impl Future<Item = (C, I2), Error = (C, E)>>
   where
-    F: FnOnce(&mut Request, I) -> I2,
+    F: FnOnce(&mut C, I) -> I2,
   {
-    OpBuilder(self.0.map(move |(mut request, i)| {
-      let i2 = f(&mut request, i);
-      (request, i2)
+    OpBuilder(self.0.map(move |(mut c, i)| {
+      let i2 = f(&mut c, i);
+      (c, i2)
     }))
   }
 
   fn map_err<F, E2>(
     self,
     f: F,
-  ) -> OpBuilder<I, E2, impl Future<Item = (Request, I), Error = (Request, E2)>>
+  ) -> OpBuilder<C, I, E2, impl Future<Item = (C, I), Error = (C, E2)>>
   where
-    F: FnOnce(&mut Request, E) -> E2,
+    F: FnOnce(&mut C, E) -> E2,
   {
-    OpBuilder(self.0.map_err(move |(mut request, e)| {
-      let e2 = f(&mut request, e);
-      (request, e2)
+    OpBuilder(self.0.map_err(move |(mut c, e)| {
+      let e2 = f(&mut c, e);
+      (c, e2)
     }))
   }
 
@@ -251,20 +252,21 @@ where
     self,
     f: F,
   ) -> OpBuilder<
+    C,
     Fut2::Item,
     E,
-    impl Future<Item = (Request, Fut2::Item), Error = (Request, E)>,
+    impl Future<Item = (C, Fut2::Item), Error = (C, E)>,
   >
   where
-    F: FnOnce(&mut Request, I) -> Fut2,
+    F: FnOnce(&mut C, I) -> Fut2,
     Fut2: IntoFuture<Error = E>,
   {
-    OpBuilder(self.0.and_then(move |(mut request, i)| {
-      f(&mut request, i)
+    OpBuilder(self.0.and_then(move |(mut c, i)| {
+      f(&mut c, i)
         .into_future()
         .then(move |r2| match r2 {
-          Ok(i2) => Ok((request, i2)),
-          Err(e2) => Err((request, e2)),
+          Ok(i2) => Ok((c, i2)),
+          Err(e2) => Err((c, e2)),
         }).into_future()
     }))
   }
@@ -273,20 +275,21 @@ where
     self,
     f: F,
   ) -> OpBuilder<
+    C,
     I,
     Fut2::Error,
-    impl Future<Item = (Request, I), Error = (Request, Fut2::Error)>,
+    impl Future<Item = (C, I), Error = (C, Fut2::Error)>,
   >
   where
-    F: FnOnce(&mut Request, E) -> Fut2,
+    F: FnOnce(&mut C, E) -> Fut2,
     Fut2: IntoFuture<Item = I>,
   {
-    OpBuilder(self.0.or_else(move |(mut request, e)| {
-      f(&mut request, e)
+    OpBuilder(self.0.or_else(move |(mut c, e)| {
+      f(&mut c, e)
         .into_future()
         .then(move |r2| match r2 {
-          Ok(i2) => Ok((request, i2)),
-          Err(e2) => Err((request, e2)),
+          Ok(i2) => Ok((c, i2)),
+          Err(e2) => Err((c, e2)),
         }).into_future()
     }))
   }
@@ -295,30 +298,31 @@ where
     self,
     f: F,
   ) -> OpBuilder<
+    C,
     Fut2::Item,
     Fut2::Error,
-    impl Future<Item = (Request, Fut2::Item), Error = (Request, Fut2::Error)>,
+    impl Future<Item = (C, Fut2::Item), Error = (C, Fut2::Error)>,
   >
   where
-    F: FnOnce(&mut Request, Result<I, E>) -> Fut2,
+    F: FnOnce(&mut C, Result<I, E>) -> Fut2,
     Fut2: IntoFuture,
   {
     OpBuilder(self.0.then(move |v| {
-      let (mut request, r) = match v {
-        Ok((request, i)) => (request, Ok(i)),
-        Err((request, e)) => (request, Err(e)),
+      let (mut c, r) = match v {
+        Ok((c, i)) => (c, Ok(i)),
+        Err((c, e)) => (c, Err(e)),
       };
-      f(&mut request, r).into_future().then(move |r2| match r2 {
-        Ok(i2) => Ok((request, i2)),
-        Err(e2) => Err((request, e2)),
+      f(&mut c, r).into_future().then(move |r2| match r2 {
+        Ok(i2) => Ok((c, i2)),
+        Err(e2) => Err((c, e2)),
       })
     }))
   }
 }
 
-impl<I, E, Fut> Future for OpBuilder<I, E, Fut>
+impl<C, I, E, Fut> Future for OpBuilder<C, I, E, Fut>
 where
-  Fut: Future<Item = (Request, I), Error = (Request, E)>,
+  Fut: Future<Item = (C, I), Error = (C, E)>,
 {
   type Item = I;
   type Error = E;
@@ -332,7 +336,7 @@ where
   }
 }
 
-#[test]
+//#[test]
 fn test() {
   let req = Request {
     isolate: None,
@@ -351,7 +355,7 @@ fn test() {
       println!("res={:?}", r);
       r
     });
-  let p = f.poll();
+  let p = f.poll().expect("poll error");
   dbg!(p);
 }
 
