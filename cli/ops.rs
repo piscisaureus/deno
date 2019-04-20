@@ -161,13 +161,207 @@ where
   }
 }
 
-pub trait OpWithError2 {
+struct Request {
+  isolate: Option<ThreadSafeState>,
+  zero_copy: deno_buf,
+}
+
+impl std::fmt::Debug for Request {
+  fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    write!(f, "Request")
+  }
+}
+
+#[allow(dead_code)]
+struct OpBuilder<I, E, Fut>(Fut)
+where
+  Fut: Future<Item = (Request, I), Error = (Request, E)>;
+
+fn new_op_builder<Fut2>(
+  request: Request,
+  source: Fut2,
+) -> OpBuilder<
+  Fut2::Item,
+  Fut2::Error,
+  impl Future<Item = (Request, Fut2::Item), Error = (Request, Fut2::Error)>,
+>
+where
+  Fut2: IntoFuture,
+{
+  OpBuilder(
+    source
+      .into_future()
+      .then(move |r2| match r2 {
+        Ok(i2) => Ok((request, i2)),
+        Err(e2) => Err((request, e2)),
+      }).into_future(),
+  )
+}
+
+#[allow(dead_code)]
+impl<I, E, Fut> OpBuilder<I, E, Fut>
+where
+  Fut: Future<Item = (Request, I), Error = (Request, E)>,
+{
+  #[allow(clippy::new_ret_no_self)]
+  fn new<Fut2>(
+    request: Request,
+    source: Fut2,
+  ) -> OpBuilder<I, E, impl Future<Item = (Request, I), Error = (Request, E)>>
+  where
+    Fut2: IntoFuture<Item = I, Error = E>,
+  {
+    Self(
+      source
+        .into_future()
+        .then(move |r2| match r2 {
+          Ok(i2) => Ok((request, i2)),
+          Err(e2) => Err((request, e2)),
+        }).into_future(),
+    )
+  }
+
+  fn map<F, I2>(
+    self,
+    f: F,
+  ) -> OpBuilder<I2, E, impl Future<Item = (Request, I2), Error = (Request, E)>>
+  where
+    F: FnOnce(&mut Request, I) -> I2,
+  {
+    OpBuilder(self.0.map(move |(mut request, i)| {
+      let i2 = f(&mut request, i);
+      (request, i2)
+    }))
+  }
+
+  fn map_err<F, E2>(
+    self,
+    f: F,
+  ) -> OpBuilder<I, E2, impl Future<Item = (Request, I), Error = (Request, E2)>>
+  where
+    F: FnOnce(&mut Request, E) -> E2,
+  {
+    OpBuilder(self.0.map_err(move |(mut request, e)| {
+      let e2 = f(&mut request, e);
+      (request, e2)
+    }))
+  }
+
+  fn and_then<F, Fut2>(
+    self,
+    f: F,
+  ) -> OpBuilder<
+    Fut2::Item,
+    E,
+    impl Future<Item = (Request, Fut2::Item), Error = (Request, E)>,
+  >
+  where
+    F: FnOnce(&mut Request, I) -> Fut2,
+    Fut2: IntoFuture<Error = E>,
+  {
+    OpBuilder(self.0.and_then(move |(mut request, i)| {
+      f(&mut request, i)
+        .into_future()
+        .then(move |r2| match r2 {
+          Ok(i2) => Ok((request, i2)),
+          Err(e2) => Err((request, e2)),
+        }).into_future()
+    }))
+  }
+
+  fn or_else<F, Fut2>(
+    self,
+    f: F,
+  ) -> OpBuilder<
+    I,
+    Fut2::Error,
+    impl Future<Item = (Request, I), Error = (Request, Fut2::Error)>,
+  >
+  where
+    F: FnOnce(&mut Request, E) -> Fut2,
+    Fut2: IntoFuture<Item = I>,
+  {
+    OpBuilder(self.0.or_else(move |(mut request, e)| {
+      f(&mut request, e)
+        .into_future()
+        .then(move |r2| match r2 {
+          Ok(i2) => Ok((request, i2)),
+          Err(e2) => Err((request, e2)),
+        }).into_future()
+    }))
+  }
+
+  fn then<F, Fut2>(
+    self,
+    f: F,
+  ) -> OpBuilder<
+    Fut2::Item,
+    Fut2::Error,
+    impl Future<Item = (Request, Fut2::Item), Error = (Request, Fut2::Error)>,
+  >
+  where
+    F: FnOnce(&mut Request, Result<I, E>) -> Fut2,
+    Fut2: IntoFuture,
+  {
+    OpBuilder(self.0.then(move |v| {
+      let (mut request, r) = match v {
+        Ok((request, i)) => (request, Ok(i)),
+        Err((request, e)) => (request, Err(e)),
+      };
+      f(&mut request, r).into_future().then(move |r2| match r2 {
+        Ok(i2) => Ok((request, i2)),
+        Err(e2) => Err((request, e2)),
+      })
+    }))
+  }
+}
+
+impl<I, E, Fut> Future for OpBuilder<I, E, Fut>
+where
+  Fut: Future<Item = (Request, I), Error = (Request, E)>,
+{
+  type Item = I;
+  type Error = E;
+
+  fn poll(&mut self) -> Poll<I, E> {
+    match self.0.poll() {
+      Ok(NotReady) => Ok(NotReady),
+      Ok(Ready((_, i))) => Ok(Ready(i)),
+      Err((_, e)) => Err(e),
+    }
+  }
+}
+
+#[test]
+fn test() {
+  let req = Request {
+    isolate: None,
+    zero_copy: deno_buf::empty(),
+  };
+
+  let mut f = new_op_builder(req, futures::future::ok(()))
+    .map(|_: &mut Request, _| "foo")
+    .map(|_: &mut Request, f| std::path::PathBuf::from(f))
+    .and_then(|_: &mut Request, f| std::fs::File::open(f))
+    .map_err(|_: &mut Request, e| DenoError::from(e))
+    .or_else(|req: &mut Request, e| {
+      dbg!((req, e));
+      std::fs::File::open("bar")
+    }).then(|_: &mut Request, r: Result<_, _>| {
+      println!("res={:?}", r);
+      r
+    });
+  let p = f.poll();
+  dbg!(p);
+}
+
+pub trait IntoOp {
   type Item;
   type Error;
   fn wrap(self, state: &ThreadSafeState, base: &msg::Base<'_>) -> BoxOp;
 }
 
-impl<T> OpWithError2 for T
+impl<T> IntoOp for T
 where
   T: IntoFuture + 'static,
   T::Future: Send,
@@ -384,7 +578,7 @@ fn op_accept_2(
   state: &ThreadSafeState,
   base: &msg::Base<'_>,
   data: deno_buf,
-) -> impl OpWithError2 {
+) -> impl IntoOp {
   assert_eq!(data.len(), 0);
   let cmd_id = base.cmd_id();
   let inner = base.inner_as_accept().unwrap();
@@ -405,7 +599,7 @@ fn op_chdir_2(
   _state: &ThreadSafeState,
   base: &msg::Base<'_>,
   data: deno_buf,
-) -> impl OpWithError2 {
+) -> impl IntoOp {
   assert_eq!(data.len(), 0);
   let inner = base.inner_as_chdir().unwrap();
   let directory = inner.directory().unwrap();
@@ -420,7 +614,7 @@ fn op_make_temp_dir_2(
   state: &ThreadSafeState,
   base: &msg::Base<'_>,
   data: deno_buf,
-) -> impl OpWithError2 {
+) -> impl IntoOp {
   assert_eq!(data.len(), 0);
   let inner = base.inner_as_make_temp_dir().unwrap();
   let is_sync = base.sync();
@@ -475,7 +669,7 @@ fn op_permissions_2(
   state: &ThreadSafeState,
   _base: &msg::Base,
   data: deno_buf,
-) -> impl OpWithError2<Error = ()> {
+) -> impl IntoOp<Error = ()> {
   assert_eq!(data.len(), 0);
   let state = state.clone();
   Ok(Response::new(msg::Any::PermissionsRes, move |fbb| {
