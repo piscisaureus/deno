@@ -29,6 +29,7 @@ use deno::Op;
 use flatbuffers::FlatBufferBuilder;
 use futures;
 use futures::future::Either;
+use futures::future::FutureResult;
 use futures::Async;
 use futures::Async::*;
 use futures::IntoFuture;
@@ -177,33 +178,8 @@ struct OpBuilder<C, I, E, Fut>(Fut)
 where
   Fut: Future<Item = (C, I), Error = (C, E)>;
 
-fn new_op_builder<C, Fut2>(
-  context: C,
-  source: Fut2,
-) -> OpBuilder<
-  C,
-  Fut2::Item,
-  Fut2::Error,
-  impl Future<Item = (C, Fut2::Item), Error = (C, Fut2::Error)>,
->
-where
-  Fut2: IntoFuture,
-{
-  OpBuilder(
-    source
-      .into_future()
-      .then(move |r2| match r2 {
-        Ok(i2) => Ok((context, i2)),
-        Err(e2) => Err((context, e2)),
-      }).into_future(),
-  )
-}
-
 #[allow(dead_code)]
-impl<C, I, E, Fut> OpBuilder<C, I, E, Fut>
-where
-  Fut: Future<Item = (C, I), Error = (C, E)>,
-{
+impl<C, I, E> OpBuilder<C, I, E, FutureResult<(C, I), (C, E)>> {
   #[allow(clippy::new_ret_no_self)]
   fn new<Fut2>(
     c: C,
@@ -221,7 +197,12 @@ where
         }).into_future(),
     )
   }
+}
 
+impl<C, I, E, Fut> OpBuilder<C, I, E, Fut>
+where
+  Fut: Future<Item = (C, I), Error = (C, E)>,
+{
   fn map<F, I2>(
     self,
     f: F,
@@ -336,14 +317,14 @@ where
   }
 }
 
-//#[test]
+#[test]
 fn test() {
   let req = Request {
     isolate: None,
     zero_copy: deno_buf::empty(),
   };
 
-  let mut f = new_op_builder(req, futures::future::ok(()))
+  let mut f = OpBuilder::new(req, Ok(()))
     .map(|_: &mut Request, _| "foo")
     .map(|_: &mut Request, f| std::path::PathBuf::from(f))
     .and_then(|_: &mut Request, f| std::fs::File::open(f))
