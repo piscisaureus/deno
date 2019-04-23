@@ -1,3 +1,4 @@
+#![allow(warnings)]
 // Copyright 2018-2019 the Deno authors. All rights reserved. MIT license.
 use crate::ansi;
 use crate::errors;
@@ -28,6 +29,7 @@ use deno::JSError;
 use deno::Op;
 use flatbuffers::FlatBufferBuilder;
 use futures;
+use futures::future::poll_fn;
 use futures::future::Either;
 use futures::future::FutureResult;
 use futures::Async;
@@ -40,7 +42,9 @@ use hyper;
 use hyper::rt::Future;
 use remove_dir_all::remove_dir_all;
 use std;
+use std::borrow::{Borrow, BorrowMut};
 use std::convert::From;
+use std::convert::Into;
 use std::fs;
 use std::marker::PhantomData;
 use std::net::Shutdown;
@@ -176,14 +180,257 @@ impl std::fmt::Debug for Request {
   }
 }
 
-trait Tuple<A, B> {
-  fn get(self) -> (A, B);
+struct WrappedResult<C, I, E>(Result<(C, I), (C, E)>);
+
+impl<C, I, E> WrappedResult<C, I, E> {
+  pub fn then<I2, E2, OpFn>(self, f: OpFn) -> WrappedResult<C, I2, E2>
+  where
+    OpFn: FnOnce(&mut C, Result<I, E>) -> Result<I2, E2>,
+  {
+    let (mut ctx, res) = match self.0 {
+      Ok((ctx, val)) => (ctx, Ok(val)),
+      Err((ctx, err)) => (ctx, Err(err)),
+    };
+    let ctx_res = match f(&mut ctx, res) {
+      Ok(val) => Ok((ctx, val)),
+      Err(err) => Err((ctx, err)),
+    };
+    Self(ctx_res)
+  }
+
+  pub fn map<I2, OpFn>(self, f: OpFn) -> WrappedResult<C, I2, E>
+  where
+    OpFn: FnOnce(&mut C, I) -> I2,
+  {
+    self.then(|ctx, res| match res {
+      Ok(val) => Ok(f(ctx, val)),
+      Err(err) => Err(err),
+    })
+  }
+
+  pub fn map_err<E2, OpFn>(self, f: OpFn) -> WrappedResult<C, I, E2>
+  where
+    OpFn: FnOnce(&mut C, E) -> E2,
+  {
+    self.then(|ctx, res| match res {
+      Ok(val) => Ok(val),
+      Err(err) => Err(f(ctx, err)),
+    })
+  }
+
+  pub fn and_then<I2, OpFn>(self, f: OpFn) -> WrappedResult<C, I2, E>
+  where
+    OpFn: FnOnce(&mut C, I) -> Result<I2, E>,
+  {
+    self.then(|ctx, res| match res {
+      Ok(val) => f(ctx, val),
+      Err(err) => Err(err),
+    })
+  }
+
+  pub fn or_else<E2, OpFn>(self, f: OpFn) -> WrappedResult<C, I, E2>
+  where
+    OpFn: FnOnce(&mut C, E) -> Result<I, E2>,
+  {
+    self.then(|ctx, res| match res {
+      Ok(val) => Ok(val),
+      Err(err) => f(ctx, err),
+    })
+  }
 }
-impl<A, B> Tuple<A, B> for (A, B) {
-  fn get(self) -> (A, B) {
+
+// This trait is unfortunately necessary because associated types cannot be
+// constrained to a concrete type, but only to traits.
+trait Tuple<T, U>: Sized {
+  fn value(self) -> (T, U);
+  fn map<OpFn, R>(self, f: OpFn) -> R
+  where
+    OpFn: FnOnce((T, U)) -> R,
+  {
+    f(self.value())
+  }
+}
+impl<T, U> Tuple<T, U> for (T, U) {
+  fn value(self) -> (T, U) {
     self
   }
 }
+
+trait FutureWithContext: Sized {
+  type Future: Future<
+    Item = (Self::Context, Self::Item),
+    Error = (Self::Context, Self::Error),
+  >;
+  type Context;
+  type Item;
+  type Error;
+
+  fn as_future(self) -> Self::Future;
+}
+
+impl<F, C, I, E> FutureWithContext for F
+where
+  F: Future<Item = (C, I), Error = (C, E)>,
+{
+  type Future = F;
+  type Context = C;
+  type Item = I;
+  type Error = E;
+
+  fn as_future(self) -> F {
+    self
+  }
+}
+
+struct WrappedFuture<FC>(FC)
+where
+  FC: FutureWithContext;
+
+impl<FC, C, I, E> WrappedFuture<FC>
+where
+  FC: FutureWithContext<Context = C, Item = I, Error = E>,
+{
+  fn from(fc: FC) -> Self {
+    Self(fc)
+  }
+}
+
+struct WrappedFuture2<FC>(FC)
+where
+  FC: FutureWithContext;
+
+impl<FC, C, I, E> WrappedFuture2<FC>
+where
+  FC: Future<Item = (C, I), Error = (C, E)>,
+  FC: FutureWithContext<Context = C, Item = I, Error = E>,
+{
+  fn from(fc: FC) -> Self {
+    Self(fc)
+  }
+}
+
+impl<FC> WrappedFuture<FC>
+where
+  FC: FutureWithContext,
+  //FC: Future,
+  //<FC as Future>::Item:
+  //  Tuple<<FC as FutureWithContext>::Context, <FC as FutureWithContext>::Item>,
+  //<FC as Future>::Error:
+  //  Tuple<<FC as FutureWithContext>::Context, <FC as FutureWithContext>::Error>,
+{
+  pub fn then<F, OpFn>(self, f: OpFn) -> WrappedFuture2<impl FutureWithContext>
+  where
+    F: IntoFuture,
+    F::Future: FutureWithContext,
+    //<F as IntoFuture>::Item: Tuple<
+    //  <<F as IntoFuture>::Future as FutureWithContext>::Context,
+    //  <<F as IntoFuture>::Future as FutureWithContext>::Item,
+    //>,
+    //<F as IntoFuture>::Error: Tuple<
+    //  <<F as IntoFuture>::Future as FutureWithContext>::Context,
+    //  <<F as IntoFuture>::Future as FutureWithContext>::Error,
+    //>,
+    OpFn: FnOnce(
+      &mut FC::Context,
+      Result<<FC as FutureWithContext>::Item, <FC as FutureWithContext>::Error>,
+    ) -> F,
+  {
+    WrappedFuture2::from(
+      self.0.as_future().then(move |ctx_res| {
+        let (mut ctx, res) = match ctx_res {
+          Ok(v) => v.map(|(ctx, res)| (ctx, Ok(res))),
+          Err(v) => v.map(|(ctx, res)| (ctx, Err(res))),
+        };
+        f(&mut ctx, res).into_future().then(move |res2| match res2 {
+          Ok(val) => Ok((ctx, val)),
+          Err(err) => Err((ctx, err)),
+        })
+      }), // .into_future()
+    )
+  }
+
+  pub fn map<I2, OpFn>(self, f: OpFn) -> WrappedFuture2<impl FutureWithContext>
+  where
+    OpFn: FnOnce(&mut FC::Context, <FC as FutureWithContext>::Item) -> I2,
+  {
+    let r = self.then(|ctx, res| match res {
+      Ok(val) => Ok(f(ctx, val)),
+      Err(err) => Err(err),
+    });
+    r
+  }
+
+  pub fn map_err<E2, OpFn>(
+    self,
+    f: OpFn,
+  ) -> WrappedFuture<impl FutureWithContext>
+  where
+    OpFn: FnOnce(&mut FC::Context, <FC as FutureWithContext>::Error) -> E2,
+  {
+    self.then(|ctx, res| match res {
+      Ok(val) => Ok(val),
+      Err(err) => Err(f(ctx, err)),
+    })
+  }
+
+  pub fn and_then<F, OpFn>(
+    self,
+    f: OpFn,
+  ) -> WrappedFuture<impl FutureWithContext>
+  where
+    F: IntoFuture<Error = <FC as FutureWithContext>::Error>,
+    OpFn: FnOnce(&mut FC::Context, <FC as FutureWithContext>::Item) -> F,
+  {
+    self.then(|ctx, res| match res {
+      Ok(val) => Either::A(f(ctx, val).into_future()),
+      Err(err) => Either::B(Err(err).into_future()),
+    })
+  }
+
+  pub fn or_else<F, OpFn>(
+    self,
+    f: OpFn,
+  ) -> WrappedFuture<impl FutureWithContext>
+  where
+    F: IntoFuture<Item = <FC as FutureWithContext>::Item>,
+    OpFn: FnOnce(&mut FC::Context, <FC as FutureWithContext>::Error) -> F,
+  {
+    self.then(|ctx, res| match res {
+      Ok(val) => Either::A(Ok(val).into_future()),
+      Err(err) => Either::B(f(ctx, err).into_future()),
+    })
+  }
+}
+/*
+impl<FC> Future for WrappedFuture<FC>
+where
+  FC: FutureWithContext,
+  <FC as Future>::Item: Tuple<FC::Context, <FC as FutureWithContext>::Item)>,
+  <FC as Future>::Error: Tuple<FC::Context, <FC as FutureWithContext>::Error)>,
+{
+  type Item = <FC as FutureWithContext>::Item;
+  type Error = <FC as FutureWithContext>::Error;
+
+  fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    match self.0.poll() {
+      Ok(NotReady) => Ok(NotReady),
+      Ok(Ready(v)) => v.map(|(_, val)| Ok(Ready(val))),
+      Err(v) => v.map(|(_, err)| Err(err)),
+    }
+  }
+}*/
+
+/*
+
+
+impl<FC> WrappedFuture<FC> {
+  fn then<OpFn>(self, f: OpFn) -> WrappedFuture<impl FutureWithContext> {
+    self.0.then(|wr| WrappedResult(wr).then(move |ctx, res| f(ctx, res).into_future()
+  }
+}
+
+struct WrappedFuture<Inner>(Inner) where Inner: Future,
+Inner::Item: Type<()
 
 trait FutureWithContext
 where
@@ -376,6 +623,7 @@ where
     }
   }
 }
+*/
 
 #[test]
 fn test() {
@@ -384,8 +632,9 @@ fn test() {
     zero_copy: deno_buf::empty(),
   };
 
-  let mut f = OpBuilder::new(req, Ok(()))
-    .map(|_: &mut Request, _| "foo")
+  let mut f = Ok((req, ())).into_future().into_wrapped_future();
+  let mut f = f.map(|_: &mut Request, _| "foo");
+  let mut f = f
     .map(|_: &mut Request, f| std::path::PathBuf::from(f))
     .and_then(|_: &mut Request, f| std::fs::File::open(f))
     .map_err(|_: &mut Request, e| DenoError::from(e))
