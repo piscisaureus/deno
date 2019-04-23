@@ -1,5 +1,4 @@
 // Copyright 2018-2019 the Deno authors. All rights reserved. MIT license.
-use atty;
 use crate::ansi;
 use crate::errors;
 use crate::errors::{DenoError, DenoResult, ErrorKind};
@@ -21,6 +20,7 @@ use crate::tokio_write;
 use crate::version;
 use crate::worker::root_specifier_to_url;
 use crate::worker::Worker;
+use atty;
 use deno::deno_buf;
 use deno::js_check;
 use deno::Buf;
@@ -115,8 +115,9 @@ impl Serialize for DenoError {
 
 struct Response<'fbb, T, F>
 where
-  F: FnOnce(&mut flatbuffers::FlatBufferBuilder<'fbb>)
-    -> flatbuffers::WIPOffset<T>,
+  F: FnOnce(
+    &mut flatbuffers::FlatBufferBuilder<'fbb>,
+  ) -> flatbuffers::WIPOffset<T>,
 {
   inner_type: msg::Any,
   inner_create: F,
@@ -125,8 +126,9 @@ where
 
 impl<'fbb, T, F> Response<'fbb, T, F>
 where
-  F: FnOnce(&mut flatbuffers::FlatBufferBuilder<'fbb>)
-    -> flatbuffers::WIPOffset<T>,
+  F: FnOnce(
+    &mut flatbuffers::FlatBufferBuilder<'fbb>,
+  ) -> flatbuffers::WIPOffset<T>,
 {
   fn new(inner_type: msg::Any, inner_create: F) -> Self {
     Self {
@@ -139,8 +141,9 @@ where
 
 impl<'fbb, T, F> Serialize for Response<'fbb, T, F>
 where
-  F: FnOnce(&mut flatbuffers::FlatBufferBuilder<'fbb>)
-    -> flatbuffers::WIPOffset<T>,
+  F: FnOnce(
+    &mut flatbuffers::FlatBufferBuilder<'fbb>,
+  ) -> flatbuffers::WIPOffset<T>,
 {
   fn serialize(self, cmd_id: u32, _: bool) -> Buf {
     let Self {
@@ -173,10 +176,46 @@ impl std::fmt::Debug for Request {
   }
 }
 
+trait Tuple<A, B> {
+  fn get(self) -> (A, B);
+}
+impl<A, B> Tuple<A, B> for (A, B) {
+  fn get(self) -> (A, B) {
+    self
+  }
+}
+
+trait FutureWithContext
+where
+  Self: Future,
+{
+  type C;
+  type I;
+  type E;
+}
+impl<F, C, I, E> FutureWithContext for F
+where
+  F: Future<Item = (C, I), Error = (C, E)>,
+  F::Item: Tuple<C, I>,
+  F::Error: Tuple<C, E>,
+{
+  type C = C;
+  type I = I;
+  type E = E;
+}
+
 #[allow(dead_code)]
 struct OpBuilder<C, I, E, Fut>(Fut)
 where
-  Fut: Future<Item = (C, I), Error = (C, E)>;
+  Fut: FutureWithContext<C = C, I = I, E = E>;
+
+#[allow(dead_code)]
+struct OpBuilder2<Fut>(Fut)
+where
+  Fut: Future,
+  Fut::Item: Tuple<Fut::C, Fut::I>,
+  Fut::Error: Tuple<Fut::C, Fut::E>,
+  Fut: FutureWithContext;
 
 #[allow(dead_code)]
 impl<C, I, E> OpBuilder<C, I, E, FutureResult<(C, I), (C, E)>> {
@@ -194,34 +233,53 @@ impl<C, I, E> OpBuilder<C, I, E, FutureResult<(C, I), (C, E)>> {
         .then(move |r2| match r2 {
           Ok(i2) => Ok((c, i2)),
           Err(e2) => Err((c, e2)),
-        }).into_future(),
+        })
+        .into_future(),
     )
   }
 }
 
-impl<C, I, E, Fut> OpBuilder<C, I, E, Fut>
+impl<Fut> OpBuilder2<Fut>
 where
-  Fut: Future<Item = (C, I), Error = (C, E)>,
+  Fut: FutureWithContext,
+  Fut::Item: Tuple<Fut::C, Fut::I>,
+  Fut::Error: Tuple<Fut::C, Fut::E>,
 {
   fn map<F, I2>(
     self,
     f: F,
-  ) -> OpBuilder<C, I2, E, impl Future<Item = (C, I2), Error = (C, E)>>
+  ) -> OpBuilder<
+    Fut::C,
+    I2,
+    Fut::E,
+    impl Future<Item = (Fut::C, I2), Error = (Fut::C, Fut::E)>,
+  >
   where
-    F: FnOnce(&mut C, I) -> I2,
+    F: FnOnce(&mut Fut::C, Fut::I) -> I2,
   {
-    OpBuilder(self.0.map(move |(mut c, i)| {
-      let i2 = f(&mut c, i);
-      (c, i2)
-    }))
+    OpBuilder(
+      self
+        .0
+        .map(move |v| {
+          let (mut c, i) = v.get();
+          let i2 = f(&mut c, i);
+          (c, i2)
+        })
+        .map_err(|v| v.get()),
+    )
   }
 
   fn map_err<F, E2>(
     self,
     f: F,
-  ) -> OpBuilder<C, I, E2, impl Future<Item = (C, I), Error = (C, E2)>>
+  ) -> OpBuilder<
+    Fut::C,
+    Fut::I,
+    E2,
+    impl Future<Item = (Fut::C, Fut::I), Error = (Fut::C, E2)>,
+  >
   where
-    F: FnOnce(&mut C, E) -> E2,
+    F: FnOnce(&mut Fut::C, Fut::E) -> E2,
   {
     OpBuilder(self.0.map_err(move |(mut c, e)| {
       let e2 = f(&mut c, e);
@@ -233,14 +291,14 @@ where
     self,
     f: F,
   ) -> OpBuilder<
-    C,
+    Fut::C,
     Fut2::Item,
-    E,
-    impl Future<Item = (C, Fut2::Item), Error = (C, E)>,
+    Fut::E,
+    impl Future<Item = (Fut::C, Fut2::Item), Error = (Fut::C, Fut::E)>,
   >
   where
-    F: FnOnce(&mut C, I) -> Fut2,
-    Fut2: IntoFuture<Error = E>,
+    F: FnOnce(&mut Fut::C, Fut::I) -> Fut2,
+    Fut2: IntoFuture<Error = Fut::E>,
   {
     OpBuilder(self.0.and_then(move |(mut c, i)| {
       f(&mut c, i)
@@ -248,7 +306,8 @@ where
         .then(move |r2| match r2 {
           Ok(i2) => Ok((c, i2)),
           Err(e2) => Err((c, e2)),
-        }).into_future()
+        })
+        .into_future()
     }))
   }
 
@@ -256,14 +315,14 @@ where
     self,
     f: F,
   ) -> OpBuilder<
-    C,
-    I,
+    Fut::C,
+    Fut::I,
     Fut2::Error,
-    impl Future<Item = (C, I), Error = (C, Fut2::Error)>,
+    impl Future<Item = (Fut::C, Fut::I), Error = (Fut::C, Fut2::Error)>,
   >
   where
-    F: FnOnce(&mut C, E) -> Fut2,
-    Fut2: IntoFuture<Item = I>,
+    F: FnOnce(&mut Fut::C, Fut::E) -> Fut2,
+    Fut2: IntoFuture<Item = Fut::I>,
   {
     OpBuilder(self.0.or_else(move |(mut c, e)| {
       f(&mut c, e)
@@ -271,7 +330,8 @@ where
         .then(move |r2| match r2 {
           Ok(i2) => Ok((c, i2)),
           Err(e2) => Err((c, e2)),
-        }).into_future()
+        })
+        .into_future()
     }))
   }
 
@@ -279,13 +339,13 @@ where
     self,
     f: F,
   ) -> OpBuilder<
-    C,
+    Fut::C,
     Fut2::Item,
     Fut2::Error,
-    impl Future<Item = (C, Fut2::Item), Error = (C, Fut2::Error)>,
+    impl Future<Item = (Fut::C, Fut2::Item), Error = (Fut::C, Fut2::Error)>,
   >
   where
-    F: FnOnce(&mut C, Result<I, E>) -> Fut2,
+    F: FnOnce(&mut Fut::C, Result<Fut::I, Fut::E>) -> Fut2,
     Fut2: IntoFuture,
   {
     OpBuilder(self.0.then(move |v| {
@@ -332,7 +392,8 @@ fn test() {
     .or_else(|req: &mut Request, e| {
       dbg!((req, e));
       std::fs::File::open("bar")
-    }).then(|_: &mut Request, r: Result<_, _>| {
+    })
+    .then(|_: &mut Request, r: Result<_, _>| {
       println!("res={:?}", r);
       r
     });
@@ -393,9 +454,11 @@ where
 
 // TODO Ideally we wouldn't have to box the OpWithError being returned.
 // The box is just to make it easier to get a prototype refactor working.
-type OpCreator =
-  fn(state: &ThreadSafeState, base: &msg::Base<'_>, data: deno_buf)
-    -> Box<OpWithError>;
+type OpCreator = fn(
+  state: &ThreadSafeState,
+  base: &msg::Base<'_>,
+  data: deno_buf,
+) -> Box<OpWithError>;
 
 pub type OpSelector = fn(inner_type: msg::Any) -> Option<OpCreator>;
 
@@ -447,7 +510,8 @@ pub fn dispatch_all(
           ..Default::default()
         },
       ))
-    }).and_then(move |buf: Buf| -> Result<Buf, ()> {
+    })
+    .and_then(move |buf: Buf| -> Result<Buf, ()> {
       // Handle empty responses. For sync responses we just want
       // to send null. For async we want to send a small message
       // with the cmd_id.
@@ -465,7 +529,8 @@ pub fn dispatch_all(
       };
       state.metrics_op_completed(buf.len());
       Ok(buf)
-    }).map_err(|err| panic!("unexpected error {:?}", err)),
+    })
+    .map_err(|err| panic!("unexpected error {:?}", err)),
   );
 
   debug!(
@@ -573,10 +638,12 @@ fn op_accept_2(
     .check_net("accept")
     .and_then(|_| {
       resources::lookup(server_rid).ok_or_else(errors::bad_resource)
-    }).into_future()
+    })
+    .into_future()
     .and_then(|server_resource| {
       tokio_util::accept(server_resource).map_err(DenoError::from)
-    }).and_then(move |(tcp_stream, _)| new_conn(cmd_id, tcp_stream))
+    })
+    .and_then(move |(tcp_stream, _)| new_conn(cmd_id, tcp_stream))
 }
 
 #[allow(dead_code)]
@@ -1692,7 +1759,8 @@ fn op_read_dir(
             has_mode: cfg!(target_family = "unix"),
           },
         )
-      }).collect();
+      })
+      .collect();
 
     let entries = builder.create_vector(&entries);
     let inner = msg::ReadDirRes::create(
@@ -2073,7 +2141,8 @@ fn op_resources(
           repr: Some(repr),
         },
       )
-    }).collect();
+    })
+    .collect();
 
   let resources = builder.create_vector(&res);
   let inner = msg::ResourcesRes::create(
