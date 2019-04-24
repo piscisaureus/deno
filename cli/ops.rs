@@ -229,16 +229,15 @@ mod internal {
 
   pub trait FutureWithContext
   where
-    Self: Sized,
-    Self: ,
+    Self: Sized + Send,
   {
     type Future: Future<
         Item = (Self::Item, Self::Context),
         Error = (Self::Error, Self::Context),
       > + FutureWithContext;
-    type Item;
-    type Error;
-    type Context;
+    type Item: Send;
+    type Error: Send;
+    type Context: Send;
 
     fn into_inner_future(self) -> Self::Future;
     fn inner_future_mut(&mut self) -> &mut Self::Future;
@@ -246,7 +245,10 @@ mod internal {
 
   impl<F, I, E, C> FutureWithContext for F
   where
-    F: Future<Item = (I, C), Error = (E, C)>,
+    F: Future<Item = (I, C), Error = (E, C)> + Send,
+    I: Send,
+    E: Send,
+    C: Send,
   {
     type Future = F;
     type Item = I;
@@ -262,9 +264,16 @@ mod internal {
   }
 }
 
-pub struct WrappedFuture<FC>(FC);
+pub struct WrappedFuture<FC>(FC)
+where
+  FC: Send;
 
-impl<I, E, C> WrappedFuture<FutureResult<(I, C), (E, C)>> {
+impl<I, E, C> WrappedFuture<FutureResult<(I, C), (E, C)>>
+where
+  I: Send,
+  E: Send,
+  C: Send,
+{
   pub fn result(res: Result<I, E>, ctx: C) -> Self {
     Self(
       match res {
@@ -286,7 +295,7 @@ impl<I, E, C> WrappedFuture<FutureResult<(I, C), (E, C)>> {
 use internal::FutureWithContext;
 impl<FC> Future for WrappedFuture<FC>
 where
-  FC: FutureWithContext,
+  FC: FutureWithContext + Send,
 {
   type Item = FC::Item;
   type Error = FC::Error;
@@ -302,17 +311,21 @@ where
 
 impl<FC> WrappedFuture<FC>
 where
-  FC: FutureWithContext,
+  FC: FutureWithContext + Send,
 {
   pub fn then<F, R>(
     self,
     f: F,
   ) -> WrappedFuture<
-    impl FutureWithContext<Item = R::Item, Error = R::Error, Context = FC::Context>,
+    impl FutureWithContext<Item = R::Item, Error = R::Error, Context = FC::Context>
+      + Send,
   >
   where
     R: IntoFuture,
-    F: FnOnce(Result<FC::Item, FC::Error>, &mut FC::Context) -> R,
+    R::Future: Send,
+    R::Item: Send,
+    R::Error: Send,
+    F: FnOnce(Result<FC::Item, FC::Error>, &mut FC::Context) -> R + Send,
   {
     let fut_ctx = self.0.into_inner_future().then(move |res_ctx| {
       let (res, mut ctx) = match res_ctx {
@@ -334,7 +347,8 @@ where
     impl FutureWithContext<Item = R, Error = FC::Error, Context = FC::Context>,
   >
   where
-    F: FnOnce(FC::Item, &mut FC::Context) -> R,
+    F: FnOnce(FC::Item, &mut FC::Context) -> R + Send,
+    R: Send,
   {
     self.then(|res, ctx| match res {
       Ok(val) => Ok(f(val, ctx)),
@@ -349,7 +363,8 @@ where
     impl FutureWithContext<Item = FC::Item, Error = R, Context = FC::Context>,
   >
   where
-    F: FnOnce(FC::Error, &mut FC::Context) -> R,
+    F: FnOnce(FC::Error, &mut FC::Context) -> R + Send,
+    R: Send,
   {
     self.then(|res, ctx| match res {
       Ok(val) => Ok(val),
@@ -364,8 +379,10 @@ where
     impl FutureWithContext<Item = R::Item, Error = FC::Error, Context = FC::Context>,
   >
   where
+    F: FnOnce(FC::Item, &mut FC::Context) -> R + Send,
     R: IntoFuture<Error = FC::Error>,
-    F: FnOnce(FC::Item, &mut FC::Context) -> R,
+    R::Future: Send,
+    R::Item: Send,
   {
     self.then(|res, ctx| match res {
       Ok(val) => Either::A(f(val, ctx).into_future()),
@@ -380,8 +397,10 @@ where
     impl FutureWithContext<Item = FC::Item, Error = R::Error, Context = FC::Context>,
   >
   where
-    F: FnOnce(FC::Error, &mut FC::Context) -> R,
+    F: FnOnce(FC::Error, &mut FC::Context) -> R + Send,
     R: IntoFuture<Item = FC::Item>,
+    R::Future: Send,
+    R::Error: Send,
   {
     self.then(|res, ctx| match res {
       Ok(val) => Either::A(Ok(val).into_future()),
@@ -389,6 +408,13 @@ where
     })
   }
 }
+
+trait SomeTest<T>
+where
+  T: FutureWithContext,
+{
+}
+impl<T> SomeTest<T> for WrappedFuture<T> where T: FutureWithContext {}
 
 #[cfg(test)]
 mod tests {
@@ -645,24 +671,48 @@ pub fn op_creator_std<F, T>(
   })
 }
 
-fn op_accept_2(
+struct OpContext<T> {
+  state: ThreadSafeState,
+  data: deno_buf,
+  cmd_id: u32,
+  inner: T,
+}
+
+fn op_accept_2<'a>(
   state: &ThreadSafeState,
-  base: &msg::Base<'_>,
+  base: &msg::Base<'a>,
   data: deno_buf,
 ) -> impl IntoOp {
   assert_eq!(data.len(), 0);
   let cmd_id = base.cmd_id();
-  let inner = base.inner_as_accept().unwrap();
-  let server_rid = inner.rid();
+  let rid = base.inner_as_accept().unwrap().rid();
 
-  state
-    .check_net("accept")
-    .and_then(|_| {
-      resources::lookup(server_rid).ok_or_else(errors::bad_resource)
-    }).into_future()
-    .and_then(|server_resource| {
+  let state = state.clone();
+  let ctx = OpContext {
+    state,
+    cmd_id,
+    data,
+    inner: rid,
+  };
+
+  WrappedFuture::ok((), ctx)
+    .and_then(|_, ctx| ctx.state.check_net("accept"))
+    .and_then(|_, ctx| {
+      resources::lookup(ctx.inner).ok_or_else(errors::bad_resource)
+    }).and_then(|server_resource, _| {
       tokio_util::accept(server_resource).map_err(DenoError::from)
-    }).and_then(move |(tcp_stream, _)| new_conn(cmd_id, tcp_stream))
+    }).map(|(stream, addr), _| {
+      let rid = resources::add_tcp_stream(stream).rid;
+      let addr = format!("{}", addr);
+      Response::new(msg::Any::NewConn, move |fbb| {
+        let args = msg::NewConnArgs {
+          rid,
+          local_addr: None,
+          remote_addr: Some(fbb.create_string(&addr)),
+        };
+        msg::NewConn::create(fbb, &args)
+      })
+    })
 }
 
 #[allow(dead_code)]
