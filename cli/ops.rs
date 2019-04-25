@@ -140,6 +140,195 @@ where
   }
 }
 
+#[derive(Default)]
+struct Root(());
+#[derive(Default)]
+struct Join<B, T> {
+  base: B,
+  data: T,
+}
+
+trait Base {
+  type Base;
+  type Data;
+  fn base(&self) -> &Self::Base;
+  fn base_mut(&mut self) -> &mut Self::Base;
+  fn data(&self) -> &Self::Data;
+  fn data_mut(&mut self) -> &mut Self::Data;
+}
+
+static mut Nothing: () = ();
+
+/*
+impl Base for Root {
+  type Base = ();
+  type Data = ();
+  fn base(&self) -> &Self::Base {
+    &()
+  }
+  fn base_mut(&mut self) -> &mut Self::Base {
+    unsafe { &mut Nothing }
+  }
+  fn data(&self) -> &Self::Data {
+    &()
+  }
+  fn data_mut(&mut self) -> &mut Self::Data {
+    unsafe { &mut Nothing }
+  }
+}
+
+impl<B, T> Base for Join<B, T> {
+  type Base = B;
+  type Data = T;
+  fn base(&self) -> &Self::Base {
+    &self.base
+  }
+  fn base_mut(&mut self) -> &mut Self::Base {
+    &mut self.base
+  }
+  fn data(&self) -> &Self::Data {
+    &self.data
+  }
+  fn data_mut(&mut self) -> &mut Self::Data {
+    &mut self.data
+  }
+}
+*/
+
+/*
+trait Extends {
+  type Base;
+}
+impl<B, T> Extends for Join<B, T> {
+  type Base = B;
+}
+impl<T> Extends for T
+where
+  T: Extends,
+  T::Base: Extends,
+{
+  type Base = <<T as Extends>::Base as Extends>::Base;
+}
+*/
+
+use std::ops::Deref;
+
+struct Low(i32);
+struct Mid(Low);
+struct Hi(Mid);
+trait Foo<T> {
+  type X;
+  fn foo(&self) -> T;
+}
+impl Foo<i32> for Low {
+  type X = i32;
+  fn foo(&self) -> i32 {
+    42
+  }
+}
+impl Foo<&'static str> for Mid {
+  type X = &'static str;
+  fn foo(&self) -> &'static str {
+    "lol"
+  }
+}
+impl Foo<Option<bool>> for Hi {
+  type X = Option<bool>;
+  fn foo(&self) -> Option<bool> {
+    Option::None
+  }
+}
+impl Deref for Mid {
+  type Target = Low;
+  fn deref(&self) -> &Low {
+    &self.0
+  }
+}
+impl Deref for Hi {
+  type Target = Mid;
+  fn deref(&self) -> &Mid {
+    &self.0
+  }
+}
+
+#[derive(Default)]
+struct True;
+#[derive(Default)]
+struct False;
+trait No {}
+trait Yes {}
+trait Bool {}
+impl Bool for True {}
+impl Bool for False {}
+impl No for False {}
+impl Yes for True {}
+
+#[derive(Default)]
+struct Fallback<T>(std::marker::PhantomData<T>);
+#[derive(Default)]
+struct Mirror<T>(Fallback<T>);
+
+impl<T> Deref for Mirror<T> {
+  type Target = Fallback<T>;
+  fn deref(&self) -> &Fallback<T> {
+    &self.0
+  }
+}
+
+trait Fuk {}
+impl<T> Fuk for T where T: std::fmt::Debug {}
+
+trait HasDebug {
+  type R: Default + Bool;
+  fn get(&self) -> Self::R {
+    unimplemented!()
+  }
+}
+
+impl<T> HasDebug for Mirror<T>
+where
+  T: Fuk,
+{
+  type R = True;
+}
+
+impl<T> HasDebug for Fallback<T> {
+  type R = False;
+}
+
+#[derive(Debug, Default)]
+struct Wel(i32, f64);
+
+#[derive(Default)]
+struct Niet(i64, f32);
+
+fn res<T, R: Default, F: FnOnce(&Mirror<T>) -> R>(f: F) -> R {
+  Default::default()
+}
+
+fn test3() {
+  let wel = Mirror::<Wel>(Default::default());
+  let niet = Mirror::<Niet>(Default::default());
+
+  let r = wel.get();
+  let r = niet.get();
+
+  let r2 = res(|m: &Mirror<Wel>| m.get());
+  let r2 = res(|m: &Mirror<Niet>| m.get());
+
+  let h = |t: &Mirror<Wel>| t.get();
+  let h2 = |t: &Mirror<Niet>| t.get();
+}
+
+fn test2() {
+  let h = Hi(Mid(Low(1)));
+  let a1 = h.foo();
+  let a3 = Mid::foo(&h);
+  let a2: i32 = Low::foo(&h);
+}
+
+//impl<T, F> Borrow<T>
+
 impl<'fbb, T, F> Serialize for Response<'fbb, T, F>
 where
   F: FnOnce(&mut flatbuffers::FlatBufferBuilder<'fbb>)
