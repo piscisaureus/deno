@@ -267,19 +267,29 @@ fn test2() {
   // let is_mid = Low::get(&h);
 }
 
-pub struct State<P> {
-  next: P,
-}
+pub struct State<I>(I);
+
+struct Top;
 struct Bottom;
 
-impl<P> State<P> {
-  pub fn add<T>(self, data: T) -> State<Push<T, P>> {
-    State {
+impl State<Push<Top, Bottom>> {
+  fn new() -> Self {
+    Self(Push {
+      data: Top,
+      next: Bottom,
+    })
+  }
+}
+
+impl<N> State<Push<Top, N>> {
+  pub fn add<T>(self, data: T) -> State<Push<Top, Push<T, N>>> {
+    State(Push {
+      data: Top,
       next: Push {
         data,
-        next: self.next,
+        next: self.0.next,
       },
-    }
+    })
   }
 }
 
@@ -292,14 +302,13 @@ impl T2 for A {}
 //impl<T> T3 for T where T: T1 {}
 //impl<T> T3 for T where T: T2 {}
 
-impl<P> Deref for State<P> {
-  type Target = P;
-  fn deref(&self) -> &P {
-    &self.next
+impl<I> Deref for State<I> {
+  type Target = I;
+  fn deref(&self) -> &I {
+    &self.0
   }
 }
 
-use std::borrow::Borrow;
 pub struct Push<D, N> {
   data: D,
   next: N,
@@ -324,30 +333,46 @@ impl<T, N> Data for Push<T, N> {
   type Type = T;
 }
 
-//impl<D, N> Push<D, N> {
-//  pub fn get<T>(&self) -> &T
-//  where
-//    T: Get<Push<T, N>, T>,
-//  {
-//    T::get(self)
-//  }
-//}
-pub trait Get<O, T> {
-  type Owner;
-  fn get(owner: &O) -> &T;
-}
-impl<T, N> Get<Push<T, N>, T> for T {
-  type Owner = Push<T, N>;
-  fn get(p: &Push<T, N>) -> &T {
-    &p.data
-  }
-}
-
 impl<D, N> Deref for Push<D, N> {
   type Target = N;
   fn deref(&self) -> &N {
     &self.next
   }
+}
+
+pub trait Prev<T, N> {
+  type Link;
+  fn prev(link: &Self::Link) -> &Self::Link {
+    link
+  }
+}
+impl<T, N> Prev<T, N> for N {
+  type Link = Push<T, N>;
+}
+
+pub trait Get<T, N> {
+  type Link;
+  fn get_link(link: &Self::Link) -> &Self::Link {
+    link
+  }
+  fn get(link: &Self::Link) -> &T;
+}
+impl<T, N> Get<T, N> for T {
+  type Link = Push<T, N>;
+  fn get(link: &Self::Link) -> &T {
+    &link.data
+  }
+}
+
+pub trait Take<T, N>: Get<T, N> {
+  type Link;
+  //fn take(link: State) -> T;
+}
+impl<T, N> Take<T, N> for T {
+  type Link = Push<T, N>;
+  //fn get(link: &Self::Link) -> &T {
+  //  &link.data
+  //}
 }
 
 trait Type {
@@ -371,7 +396,7 @@ fn test4() {
     v: Option<ThreadSafeState>,
   }
 
-  let st = State { next: Bottom };
+  let st = State::new();
   let st = st.add(Ctx1 { a: 9, b: 17000.3 });
   let st = st.add(Ctx2 { s: "hoi", b: 2 });
   let st = st.add(Ctx3 { v: None });
