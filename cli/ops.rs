@@ -214,8 +214,8 @@ where
 use std::ops::Deref;
 
 struct Low(i32);
-struct Mid(Low);
-struct Hi(Mid);
+struct Mid<T>(T);
+struct Hi<T>(T);
 trait Foo<T> {
   type X;
   fn foo(&self) -> T;
@@ -226,34 +226,45 @@ impl Foo<i32> for Low {
     42
   }
 }
-impl Foo<&'static str> for Mid {
+impl<T> Foo<&'static str> for Mid<T> {
   type X = &'static str;
   fn foo(&self) -> &'static str {
     "lol"
   }
 }
-impl Foo<Option<bool>> for Hi {
+impl<T> Foo<Option<bool>> for Hi<T> {
   type X = Option<bool>;
   fn foo(&self) -> Option<bool> {
     Option::None
   }
 }
-impl Deref for Mid {
-  type Target = Low;
-  fn deref(&self) -> &Low {
+impl<T> Deref for Mid<T> {
+  type Target = T;
+  fn deref(&self) -> &T {
     &self.0
   }
 }
-impl Deref for Hi {
-  type Target = Mid;
-  fn deref(&self) -> &Mid {
+impl<T> Deref for Hi<T> {
+  type Target = T;
+  fn deref(&self) -> &T {
     &self.0
+  }
+}
+trait IsMid {
+  fn get(&self) -> &Low;
+}
+impl IsMid for Low {
+  fn get(&self) -> &Low {
+    self
   }
 }
 
-trait Data {
-  type Type;
-  fn get(&self) -> &Self::Type;
+fn test2() {
+  let h = Hi(Mid(Mid(Mid(Mid(Low(1))))));
+  let a1 = h.foo();
+  let a3 = Mid::foo(&h);
+  let a2: i32 = Low::foo(&h);
+  // let is_mid = Low::get(&h);
 }
 
 pub struct State<P> {
@@ -272,22 +283,61 @@ impl<P> State<P> {
   }
 }
 
+impl<P> Deref for State<P> {
+  type Target = P;
+  fn deref(&self) -> &P {
+    &self.next
+  }
+}
+
+use std::borrow::Borrow;
 pub struct Push<D, N> {
   data: D,
   next: N,
 }
-impl<D, N> Data for Push<D, N> {
-  type Type = D;
-  fn get(&self) -> &Self::Type {
-    &self.data
+impl<D, N> Push<D, N> {
+  pub fn get<T>(&self) -> &T
+  where
+    T: Get<Push<D, N>, T>,
+  {
+    T::get(self)
+  }
+}
+pub trait Get<O, T> {
+  fn get<'a>(owner: &'a O) -> &'a T;
+}
+impl<T, N> Get<Push<T, N>, T> for T {
+  fn get<'a>(p: &'a Push<T, N>) -> &'a T {
+    &p.data
   }
 }
 
-fn test2() {
-  let h = Hi(Mid(Low(1)));
-  let a1 = h.foo();
-  let a3 = Mid::foo(&h);
-  let a2: i32 = Low::foo(&h);
+impl<D, N> Deref for Push<D, N> {
+  type Target = N;
+  fn deref(&self) -> &N {
+    &self.next
+  }
+}
+
+fn test4() {
+  struct Ctx1 {
+    a: i32,
+    b: f64,
+  }
+  struct Ctx2 {
+    s: &'static str,
+    b: i16,
+  }
+  struct Ctx3 {
+    v: Option<ThreadSafeState>,
+  }
+
+  let st = State { next: Bottom };
+  let st = st.add(Ctx1 { a: 9, b: 17000.3 });
+  let st = st.add(Ctx2 { s: "hoi", b: 2 });
+  let st = st.add(Ctx3 { v: None });
+  let c2 = Ctx2::get(&st);
+  let c1: &Ctx2 = st.get();
 }
 
 impl<'fbb, T, F> Serialize for Response<'fbb, T, F>
