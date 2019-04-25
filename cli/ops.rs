@@ -251,73 +251,36 @@ impl Deref for Hi {
   }
 }
 
-#[derive(Default)]
-struct True;
-#[derive(Default)]
-struct False;
-trait No {}
-trait Yes {}
-trait Bool {}
-impl Bool for True {}
-impl Bool for False {}
-impl No for False {}
-impl Yes for True {}
+trait Data {
+  type Type;
+  fn get(&self) -> &Self::Type;
+}
 
-#[derive(Default)]
-struct Fallback<T>(std::marker::PhantomData<T>);
-#[derive(Default)]
-struct Mirror<T>(Fallback<T>);
+pub struct State<P> {
+  next: P,
+}
+struct Bottom;
 
-impl<T> Deref for Mirror<T> {
-  type Target = Fallback<T>;
-  fn deref(&self) -> &Fallback<T> {
-    &self.0
+impl<P> State<P> {
+  pub fn add<T>(self, data: T) -> State<Push<T, P>> {
+    State {
+      next: Push {
+        data,
+        next: self.next,
+      },
+    }
   }
 }
 
-trait Fuk {}
-impl<T> Fuk for T where T: std::fmt::Debug {}
-
-trait HasDebug {
-  type R: Default + Bool;
-  fn get(&self) -> Self::R {
-    unimplemented!()
+pub struct Push<D, N> {
+  data: D,
+  next: N,
+}
+impl<D, N> Data for Push<D, N> {
+  type Type = D;
+  fn get(&self) -> &Self::Type {
+    &self.data
   }
-}
-
-impl<T> HasDebug for Mirror<T>
-where
-  T: Fuk,
-{
-  type R = True;
-}
-
-impl<T> HasDebug for Fallback<T> {
-  type R = False;
-}
-
-#[derive(Debug, Default)]
-struct Wel(i32, f64);
-
-#[derive(Default)]
-struct Niet(i64, f32);
-
-fn res<T, R: Default, F: FnOnce(&Mirror<T>) -> R>(f: F) -> R {
-  Default::default()
-}
-
-fn test3() {
-  let wel = Mirror::<Wel>(Default::default());
-  let niet = Mirror::<Niet>(Default::default());
-
-  let r = wel.get();
-  let r = niet.get();
-
-  let r2 = res(|m: &Mirror<Wel>| m.get());
-  let r2 = res(|m: &Mirror<Niet>| m.get());
-
-  let h = |t: &Mirror<Wel>| t.get();
-  let h2 = |t: &Mirror<Niet>| t.get();
 }
 
 fn test2() {
@@ -326,8 +289,6 @@ fn test2() {
   let a3 = Mid::foo(&h);
   let a2: i32 = Low::foo(&h);
 }
-
-//impl<T, F> Borrow<T>
 
 impl<'fbb, T, F> Serialize for Response<'fbb, T, F>
 where
