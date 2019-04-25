@@ -283,6 +283,15 @@ impl<P> State<P> {
   }
 }
 
+struct A {}
+trait T1 {}
+trait T2 {}
+trait T3: T1 + T2 {}
+impl T1 for A {}
+impl T2 for A {}
+//impl<T> T3 for T where T: T1 {}
+//impl<T> T3 for T where T: T2 {}
+
 impl<P> Deref for State<P> {
   type Target = P;
   fn deref(&self) -> &P {
@@ -295,19 +304,41 @@ pub struct Push<D, N> {
   data: D,
   next: N,
 }
-impl<D, N> Push<D, N> {
-  pub fn get<T>(&self) -> &T
-  where
-    T: Get<Push<D, N>, T>,
-  {
-    T::get(self)
-  }
+
+//trait Delete<T> {
+//  type Replacement;
+//}
+//
+//impl<T,N> Delete<T> for Push<T, N> {
+//  type Replacement = N;
+//}
+//
+//impl<T, U> Delete<T> for U {
+//  type Replacement = U;
+//}
+
+pub trait Data {
+  type Type;
 }
+impl<T, N> Data for Push<T, N> {
+  type Type = T;
+}
+
+//impl<D, N> Push<D, N> {
+//  pub fn get<T>(&self) -> &T
+//  where
+//    T: Get<Push<T, N>, T>,
+//  {
+//    T::get(self)
+//  }
+//}
 pub trait Get<O, T> {
-  fn get<'a>(owner: &'a O) -> &'a T;
+  type Owner;
+  fn get(owner: &O) -> &T;
 }
 impl<T, N> Get<Push<T, N>, T> for T {
-  fn get<'a>(p: &'a Push<T, N>) -> &'a T {
+  type Owner = Push<T, N>;
+  fn get(p: &Push<T, N>) -> &T {
     &p.data
   }
 }
@@ -317,6 +348,14 @@ impl<D, N> Deref for Push<D, N> {
   fn deref(&self) -> &N {
     &self.next
   }
+}
+
+trait Type {
+  type Type;
+}
+struct TypeOf<T>(T);
+impl<T> Type for TypeOf<T> {
+  type Type = T;
 }
 
 fn test4() {
@@ -336,8 +375,12 @@ fn test4() {
   let st = st.add(Ctx1 { a: 9, b: 17000.3 });
   let st = st.add(Ctx2 { s: "hoi", b: 2 });
   let st = st.add(Ctx3 { v: None });
+  let st = st.add(Ctx3 { v: None });
   let c2 = Ctx2::get(&st);
-  let c1: &Ctx2 = st.get();
+  let c1 = Ctx1::get(&st);
+  let c3 = Ctx3::get(&st);
+  let a = TypeOf(st);
+  //let c1: &Ctx1 = st.get();
 }
 
 impl<'fbb, T, F> Serialize for Response<'fbb, T, F>
