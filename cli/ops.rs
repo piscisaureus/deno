@@ -308,7 +308,8 @@ where
   N1: Link,
   N1::Next: Last<N1, Bottom>,
 {
-  N1::Next::take_last(state.0, State::new())
+  let (last, rest) = N1::Next::take_last(state.0, Bottom);
+  (last, State(rest))
 }
 
 struct A {}
@@ -384,10 +385,7 @@ where
   type Last;
   type Remainder: MaybeLink;
   fn last(prev: &Prev) -> &Self::Last;
-  fn take_last(
-    prev: Prev,
-    new_state: State<N1>,
-  ) -> (Self::Last, State<Self::Remainder>);
+  fn take_last(prev: Prev, new_state: N1) -> (Self::Last, Self::Remainder);
 }
 impl<Prev, N1, T, N> Last<Prev, N1> for Push<T, N>
 where
@@ -404,16 +402,16 @@ where
     let last = N::last(this);
     last
   }
-  fn take_last(
-    prev: Prev,
-    remainder: State<N1>,
-  ) -> (Self::Last, State<Self::Remainder>) {
+  fn take_last(prev: Prev, remainder: N1) -> (Self::Last, Self::Remainder) {
     let Push {
       data: prev_data,
       next: prev_next,
     } = prev.into_link();
     let (last, remainder) = N::take_last(prev_next, remainder);
-    let remainder = remainder.add(prev_data);
+    let remainder = Push {
+      data: prev_data,
+      next: remainder,
+    };
     (last, remainder)
   }
 }
@@ -428,10 +426,7 @@ where
   fn last(prev: &Prev) -> &Self::Last {
     &prev.link().data
   }
-  fn take_last(
-    prev: Prev,
-    remainder: State<N1>,
-  ) -> (Self::Last, State<Self::Remainder>) {
+  fn take_last(prev: Prev, remainder: N1) -> (Self::Last, Self::Remainder) {
     (prev.into_link().data, remainder)
   }
 }
@@ -465,17 +460,6 @@ impl<T, N> Get<T, N> for T {
   fn get(link: &Self::Link) -> &T {
     &link.data
   }
-}
-
-pub trait Take<T, N>: Get<T, N> {
-  type Link;
-  //fn take(link: State) -> T;
-}
-impl<T, N> Take<T, N> for T {
-  type Link = Push<T, N>;
-  //fn get(link: &Self::Link) -> &T {
-  //  &link.data
-  //}
 }
 
 trait Type {
