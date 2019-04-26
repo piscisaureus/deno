@@ -269,39 +269,46 @@ fn test2() {
 
 pub struct State<I>(I);
 
-pub struct Top;
-struct Bottom;
+pub struct Bottom;
 
-impl State<Push<Top, Bottom>> {
+impl State<Bottom> {
   fn new() -> Self {
-    Self(Push {
-      data: Top,
-      next: Bottom,
-    })
+    Self(Bottom)
   }
 }
 
-impl<N1> State<Push<Top, N1>> {
-  pub fn add<T>(self, data: T) -> State<Push<Top, Push<T, N1>>> {
-    State(Push {
-      data: Top,
-      next: Push {
-        data,
-        next: self.0.next,
-      },
-    })
+impl<N1> State<N1>
+where
+  N1: MaybeLink,
+{
+  pub fn add<T>(self, data: T) -> State<Push<T, N1>> {
+    State(Push { data, next: self.0 })
   }
 }
 
 pub fn last<'a, N1>(
-  state: &'a State<Push<Top, N1>>,
-) -> &'a <N1 as Last<Push<Top, N1>>>::Last
+  state: &'a State<N1>,
+) -> &'a <N1::Next as Last<N1, Bottom>>::Last
 where
-  N1: MaybeLink + Last<Push<Top, N1>>,
+  N1: Link,
+  N1::Next: Last<N1, Bottom>,
 {
-  let last = N1::last(&state.0);
+  let last = N1::Next::last(&state.0);
   last
   //let state2 = State::new();
+}
+
+pub fn take_last<N1>(
+  state: State<N1>,
+) -> (
+  <N1::Next as Last<N1, Bottom>>::Last,
+  State<<N1::Next as Last<N1, Bottom>>::Remainder>,
+)
+where
+  N1: Link,
+  N1::Next: Last<N1, Bottom>,
+{
+  N1::Next::take_last(state.0, State::new())
 }
 
 struct A {}
@@ -368,49 +375,64 @@ impl MaybeLink for Bottom {
   }
 }
 
-pub trait Last<Prev>
+pub trait Last<Prev, N1>
 where
   Prev: Link,
+  N1: MaybeLink,
 {
   type Link;
   type Last;
+  type Remainder: MaybeLink;
   fn last(prev: &Prev) -> &Self::Last;
-  fn take_last<N1>(prev: Prev, new_state: State<Push<Top, N1>>) -> Self::Last;
+  fn take_last(
+    prev: Prev,
+    new_state: State<N1>,
+  ) -> (Self::Last, State<Self::Remainder>);
 }
-impl<Prev, T, N> Last<Prev> for Push<T, N>
+impl<Prev, N1, T, N> Last<Prev, N1> for Push<T, N>
 where
   Prev: Link,
+  N1: MaybeLink,
   Prev::Next: Link<Data = T, Next = N>,
-  N: MaybeLink + Last<Prev::Next> + Last<Self>,
+  N: MaybeLink + Last<Prev::Next, N1> + Last<Self, N1>,
 {
   type Link = Push<T, N>;
-  type Last = <N as Last<Prev::Next>>::Last;
+  type Last = <N as Last<Prev::Next, N1>>::Last;
+  type Remainder = Push<Prev::Data, <N as Last<Prev::Next, N1>>::Remainder>;
   fn last(prev: &Prev) -> &Self::Last {
     let this = &prev.link().next;
     let last = N::last(this);
     last
   }
-  fn take_last<N1>(prev: Prev, new_state: State<Push<Top, N1>>) -> Self::Last {
+  fn take_last(
+    prev: Prev,
+    remainder: State<N1>,
+  ) -> (Self::Last, State<Self::Remainder>) {
     let Push {
       data: prev_data,
       next: prev_next,
     } = prev.into_link();
-    let new_state = new_state.add(prev_data);
-    let last = N::take_last(prev_next, new_state);
-    last
+    let (last, remainder) = N::take_last(prev_next, remainder);
+    let remainder = remainder.add(prev_data);
+    (last, remainder)
   }
 }
-impl<Prev> Last<Prev> for Bottom
+impl<Prev, N1> Last<Prev, N1> for Bottom
 where
   Prev: Link,
+  N1: MaybeLink,
 {
   type Link = Prev;
-  type Last = Prev;
+  type Last = Prev::Data;
+  type Remainder = N1;
   fn last(prev: &Prev) -> &Self::Last {
-    prev
+    &prev.link().data
   }
-  fn take_last<N1>(prev: Prev, new_state: State<Push<Top, N1>>) -> Self::Last {
-    prev
+  fn take_last(
+    prev: Prev,
+    remainder: State<N1>,
+  ) -> (Self::Last, State<Self::Remainder>) {
+    (prev.into_link().data, remainder)
   }
 }
 
@@ -488,7 +510,10 @@ fn test4() {
   let c2 = Ctx2::get(&st);
   let c1 = Ctx1::get(&st);
   let c3 = Ctx3::get(&st);
-  let last = last(&st);
+  let (last, st) = take_last(st);
+  let (last, st) = take_last(st);
+  let (last, st) = take_last(st);
+  let (last, st) = take_last(st);
   //let c1: &Ctx1 = st.get();
 }
 
