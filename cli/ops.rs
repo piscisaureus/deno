@@ -269,7 +269,7 @@ fn test2() {
 
 pub struct State<I>(I);
 
-struct Top;
+pub struct Top;
 struct Bottom;
 
 impl State<Push<Top, Bottom>> {
@@ -281,8 +281,8 @@ impl State<Push<Top, Bottom>> {
   }
 }
 
-impl<N> State<Push<Top, N>> {
-  pub fn add<T>(self, data: T) -> State<Push<Top, Push<T, N>>> {
+impl<N1> State<Push<Top, N1>> {
+  pub fn add<T>(self, data: T) -> State<Push<Top, Push<T, N1>>> {
     State(Push {
       data: Top,
       next: Push {
@@ -291,6 +291,17 @@ impl<N> State<Push<Top, N>> {
       },
     })
   }
+}
+
+pub fn last<'a, N1>(
+  state: &'a State<Push<Top, N1>>,
+) -> &'a <N1 as Last<Push<Top, N1>>>::Last
+where
+  N1: MaybeLink + Last<Push<Top, N1>>,
+{
+  let last = N1::last(&state.0);
+  last
+  //let state2 = State::new();
 }
 
 struct A {}
@@ -314,23 +325,93 @@ pub struct Push<D, N> {
   next: N,
 }
 
-//trait Delete<T> {
-//  type Replacement;
-//}
-//
-//impl<T,N> Delete<T> for Push<T, N> {
-//  type Replacement = N;
-//}
-//
-//impl<T, U> Delete<T> for U {
-//  type Replacement = U;
-//}
-
-pub trait Data {
-  type Type;
+pub trait Link {
+  type Data;
+  type Next: MaybeLink;
+  fn link(&self) -> &Push<Self::Data, Self::Next>;
+  fn into_link(self) -> Push<Self::Data, Self::Next>;
 }
-impl<T, N> Data for Push<T, N> {
-  type Type = T;
+impl<T, N> Link for Push<T, N>
+where
+  N: MaybeLink,
+{
+  type Data = T;
+  type Next = N;
+  fn link(&self) -> &Push<Self::Data, Self::Next> {
+    &self
+  }
+  fn into_link(self) -> Push<Self::Data, Self::Next> {
+    self
+  }
+}
+
+pub trait MaybeLink {
+  type Data;
+  type Next: MaybeLink;
+  fn maybe_link(&self) -> Option<&Push<Self::Data, Self::Next>>;
+}
+impl<T, N> MaybeLink for Push<T, N>
+where
+  N: MaybeLink,
+{
+  type Data = T;
+  type Next = N;
+  fn maybe_link(&self) -> Option<&Push<Self::Data, Self::Next>> {
+    Some(&self)
+  }
+}
+impl MaybeLink for Bottom {
+  type Data = ();
+  type Next = Bottom;
+  fn maybe_link(&self) -> Option<&Push<Self::Data, Self::Next>> {
+    None
+  }
+}
+
+pub trait Last<Prev>
+where
+  Prev: Link,
+{
+  type Link;
+  type Last;
+  fn last(prev: &Prev) -> &Self::Last;
+  fn take_last<N1>(prev: Prev, new_state: State<Push<Top, N1>>) -> Self::Last;
+}
+impl<Prev, T, N> Last<Prev> for Push<T, N>
+where
+  Prev: Link,
+  Prev::Next: Link<Data = T, Next = N>,
+  N: MaybeLink + Last<Prev::Next> + Last<Self>,
+{
+  type Link = Push<T, N>;
+  type Last = <N as Last<Prev::Next>>::Last;
+  fn last(prev: &Prev) -> &Self::Last {
+    let this = &prev.link().next;
+    let last = N::last(this);
+    last
+  }
+  fn take_last<N1>(prev: Prev, new_state: State<Push<Top, N1>>) -> Self::Last {
+    let Push {
+      data: prev_data,
+      next: prev_next,
+    } = prev.into_link();
+    let new_state = new_state.add(prev_data);
+    let last = N::take_last(prev_next, new_state);
+    last
+  }
+}
+impl<Prev> Last<Prev> for Bottom
+where
+  Prev: Link,
+{
+  type Link = Prev;
+  type Last = Prev;
+  fn last(prev: &Prev) -> &Self::Last {
+    prev
+  }
+  fn take_last<N1>(prev: Prev, new_state: State<Push<Top, N1>>) -> Self::Last {
+    prev
+  }
 }
 
 impl<D, N> Deref for Push<D, N> {
@@ -395,6 +476,9 @@ fn test4() {
   struct Ctx3 {
     v: Option<ThreadSafeState>,
   }
+  struct Ctx4 {
+    x: String,
+  }
 
   let st = State::new();
   let st = st.add(Ctx1 { a: 9, b: 17000.3 });
@@ -404,7 +488,7 @@ fn test4() {
   let c2 = Ctx2::get(&st);
   let c1 = Ctx1::get(&st);
   let c3 = Ctx3::get(&st);
-  let a = TypeOf(st);
+  let last = last(&st);
   //let c1: &Ctx1 = st.get();
 }
 
