@@ -281,8 +281,12 @@ impl<N1> State<N1>
 where
   N1: MaybeLink,
 {
-  pub fn add<T>(self, data: T) -> State<Push<T, N1>> {
-    State(Push { data, next: self.0 })
+  pub fn add<T>(self, data: T) -> State<Push<T, N1, Bottom>> {
+    State(Push {
+      data,
+      next: self.0,
+      prev: PhantomData,
+    })
   }
 }
 
@@ -328,50 +332,52 @@ impl<I> Deref for State<I> {
   }
 }
 
-pub struct Push<D, N> {
+pub struct Push<D, N, P> {
   data: D,
   next: N,
+  prev: PhantomData<P>,
 }
 
-pub trait Link {
+pub trait Link: MaybeLink {
   type Data;
   type Next: MaybeLink;
-  fn link(&self) -> &Push<Self::Data, Self::Next>;
-  fn into_link(self) -> Push<Self::Data, Self::Next>;
+  type Prev: MaybeLink;
+  fn link(&self) -> &Push<Self::Data, Self::Next, Self::Prev>;
+  fn into_link(self) -> Push<Self::Data, Self::Next, Self::Prev>;
 }
-impl<T, N> Link for Push<T, N>
+impl<T, N, P> Link for Push<T, N, P>
 where
   N: MaybeLink,
+  P: MaybeLink,
 {
   type Data = T;
   type Next = N;
-  fn link(&self) -> &Push<Self::Data, Self::Next> {
+  type Prev = P;
+  fn link(&self) -> &Push<Self::Data, Self::Next, Self::Prev> {
     &self
   }
-  fn into_link(self) -> Push<Self::Data, Self::Next> {
+  fn into_link(self) -> Push<Self::Data, Self::Next, Self::Prev> {
     self
   }
 }
 
 pub trait MaybeLink {
-  type Data;
-  type Next: MaybeLink;
-  fn maybe_link(&self) -> Option<&Push<Self::Data, Self::Next>>;
+  type Link;
+  fn maybe_link(&self) -> Option<&Self::Link>;
 }
-impl<T, N> MaybeLink for Push<T, N>
+impl<T, N, P> MaybeLink for Push<T, N, P>
 where
   N: MaybeLink,
+  P: MaybeLink,
 {
-  type Data = T;
-  type Next = N;
-  fn maybe_link(&self) -> Option<&Push<Self::Data, Self::Next>> {
+  type Link = Self;
+  fn maybe_link(&self) -> Option<&Self> {
     Some(&self)
   }
 }
 impl MaybeLink for Bottom {
-  type Data = ();
-  type Next = Bottom;
-  fn maybe_link(&self) -> Option<&Push<Self::Data, Self::Next>> {
+  type Link = ();
+  fn maybe_link(&self) -> Option<&Self::Link> {
     None
   }
 }
@@ -381,22 +387,22 @@ where
   Prev: Link,
   N1: MaybeLink,
 {
-  type Link;
   type Last;
   type Remainder: MaybeLink;
   fn last(prev: &Prev) -> &Self::Last;
   fn take_last(prev: Prev, new_state: N1) -> (Self::Last, Self::Remainder);
 }
-impl<Prev, N1, T, N> Last<Prev, N1> for Push<T, N>
+impl<Prev, N1, T, N, P> Last<Prev, N1> for Push<T, N, P>
 where
   Prev: Link,
   N1: MaybeLink,
   Prev::Next: Link<Data = T, Next = N>,
   N: MaybeLink + Last<Prev::Next, N1> + Last<Self, N1>,
+  P: MaybeLink,
 {
-  type Link = Push<T, N>;
   type Last = <N as Last<Prev::Next, N1>>::Last;
-  type Remainder = Push<Prev::Data, <N as Last<Prev::Next, N1>>::Remainder>;
+  type Remainder =
+    Push<Prev::Data, <N as Last<Prev::Next, N1>>::Remainder, Prev>;
   fn last(prev: &Prev) -> &Self::Last {
     let this = &prev.link().next;
     let last = N::last(this);
@@ -406,11 +412,13 @@ where
     let Push {
       data: prev_data,
       next: prev_next,
+      ..
     } = prev.into_link();
     let (last, remainder) = N::take_last(prev_next, remainder);
     let remainder = Push {
       data: prev_data,
       next: remainder,
+      prev: PhantomData,
     };
     (last, remainder)
   }
@@ -420,7 +428,6 @@ where
   Prev: Link,
   N1: MaybeLink,
 {
-  type Link = Prev;
   type Last = Prev::Data;
   type Remainder = N1;
   fn last(prev: &Prev) -> &Self::Last {
@@ -431,32 +438,22 @@ where
   }
 }
 
-impl<D, N> Deref for Push<D, N> {
+impl<D, N, P> Deref for Push<D, N, P> {
   type Target = N;
   fn deref(&self) -> &N {
     &self.next
   }
 }
 
-pub trait Prev<T, N> {
-  type Link;
-  fn prev(link: &Self::Link) -> &Self::Link {
-    link
-  }
-}
-impl<T, N> Prev<T, N> for N {
-  type Link = Push<T, N>;
-}
-
-pub trait Get<T, N> {
+pub trait Get<T, N, P> {
   type Link;
   fn get_link(link: &Self::Link) -> &Self::Link {
     link
   }
   fn get(link: &Self::Link) -> &T;
 }
-impl<T, N> Get<T, N> for T {
-  type Link = Push<T, N>;
+impl<T, N, P> Get<T, N, P> for T {
+  type Link = Push<T, N, P>;
   fn get(link: &Self::Link) -> &T {
     &link.data
   }
