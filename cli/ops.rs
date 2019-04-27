@@ -1,6 +1,3 @@
-///#![allow(warnings)]
-// Copyright 2018-2019 the Deno authors. All rights reserved. MIT license.
-use atty;
 use crate::ansi;
 use crate::errors;
 use crate::errors::{DenoError, DenoResult, ErrorKind};
@@ -23,6 +20,9 @@ use crate::tokio_write;
 use crate::version;
 use crate::worker::root_specifier_to_url;
 use crate::worker::Worker;
+///#![allow(warnings)]
+// Copyright 2018-2019 the Deno authors. All rights reserved. MIT license.
+use atty;
 use deno::deno_buf;
 use deno::js_check;
 use deno::Buf;
@@ -118,8 +118,9 @@ impl Serialize for DenoError {
 
 struct Response<'fbb, T, F>
 where
-  F: FnOnce(&mut flatbuffers::FlatBufferBuilder<'fbb>)
-    -> flatbuffers::WIPOffset<T>,
+  F: FnOnce(
+    &mut flatbuffers::FlatBufferBuilder<'fbb>,
+  ) -> flatbuffers::WIPOffset<T>,
 {
   inner_type: msg::Any,
   inner_create: F,
@@ -128,8 +129,9 @@ where
 
 impl<'fbb, T, F> Response<'fbb, T, F>
 where
-  F: FnOnce(&mut flatbuffers::FlatBufferBuilder<'fbb>)
-    -> flatbuffers::WIPOffset<T>,
+  F: FnOnce(
+    &mut flatbuffers::FlatBufferBuilder<'fbb>,
+  ) -> flatbuffers::WIPOffset<T>,
 {
   fn new(inner_type: msg::Any, inner_create: F) -> Self {
     Self {
@@ -500,8 +502,9 @@ fn test4() {
 
 impl<'fbb, T, F> Serialize for Response<'fbb, T, F>
 where
-  F: FnOnce(&mut flatbuffers::FlatBufferBuilder<'fbb>)
-    -> flatbuffers::WIPOffset<T>,
+  F: FnOnce(
+    &mut flatbuffers::FlatBufferBuilder<'fbb>,
+  ) -> flatbuffers::WIPOffset<T>,
 {
   fn serialize(self, cmd_id: u32, _: bool) -> Buf {
     let Self {
@@ -637,7 +640,8 @@ where
       match res {
         Ok(val) => Ok((val, ctx)),
         Err(err) => Err((err, ctx)),
-      }.into(),
+      }
+      .into(),
     )
   }
 
@@ -800,7 +804,8 @@ mod tests {
         assert!(maybe_foo.is_some());
         assert_eq!(e.kind(), ErrorKind::NotFound);
         std::fs::File::open("bar")
-      }).then(|r: Result<_, _>, ctx: &mut Request| {
+      })
+      .then(|r: Result<_, _>, ctx: &mut Request| {
         println!("maybe_foo={:?}, bar={:?}", ctx.maybe_foo, ctx.bar);
         r
       });
@@ -862,9 +867,11 @@ where
 
 // TODO Ideally we wouldn't have to box the OpWithError being returned.
 // The box is just to make it easier to get a prototype refactor working.
-type OpCreator =
-  fn(state: &ThreadSafeState, base: &msg::Base<'_>, data: deno_buf)
-    -> Box<OpWithError>;
+type OpCreator = fn(
+  state: &ThreadSafeState,
+  base: &msg::Base<'_>,
+  data: deno_buf,
+) -> Box<OpWithError>;
 
 pub type OpSelector = fn(inner_type: msg::Any) -> Option<OpCreator>;
 
@@ -916,7 +923,8 @@ pub fn dispatch_all(
           ..Default::default()
         },
       ))
-    }).and_then(move |buf: Buf| -> Result<Buf, ()> {
+    })
+    .and_then(move |buf: Buf| -> Result<Buf, ()> {
       // Handle empty responses. For sync responses we just want
       // to send null. For async we want to send a small message
       // with the cmd_id.
@@ -934,7 +942,8 @@ pub fn dispatch_all(
       };
       state.metrics_op_completed(buf.len());
       Ok(buf)
-    }).map_err(|err| panic!("unexpected error {:?}", err)),
+    })
+    .map_err(|err| panic!("unexpected error {:?}", err)),
   );
 
   debug!(
@@ -1057,9 +1066,11 @@ fn op_accept_2<'a>(
     .and_then(|_, ctx| ctx.state.check_net("accept"))
     .and_then(|_, ctx| {
       resources::lookup(ctx.inner).ok_or_else(errors::bad_resource)
-    }).and_then(|server_resource, _| {
+    })
+    .and_then(|server_resource, _| {
       tokio_util::accept(server_resource).map_err(DenoError::from)
-    }).map(|(stream, addr), _| {
+    })
+    .map(|(stream, addr), _| {
       let rid = resources::add_tcp_stream(stream).rid;
       let addr = format!("{}", addr);
       Response::new(msg::Any::NewConn, move |fbb| {
@@ -2201,7 +2212,8 @@ fn op_read_dir(
             has_mode: cfg!(target_family = "unix"),
           },
         )
-      }).collect();
+      })
+      .collect();
 
     let entries = builder.create_vector(&entries);
     let inner = msg::ReadDirRes::create(
@@ -2582,7 +2594,8 @@ fn op_resources(
           repr: Some(repr),
         },
       )
-    }).collect();
+    })
+    .collect();
 
   let resources = builder.create_vector(&res);
   let inner = msg::ResourcesRes::create(
