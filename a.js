@@ -1,5 +1,6 @@
 let { readFileSync } = require("fs");
 require("util").inspect.defaultOptions.depth = null;
+require("util").inspect.defaultOptions.maxArrayLength = null;
 //Error.stackTraceLimit = Infinity;
 
 function main() {
@@ -437,11 +438,17 @@ class CallableDeclBase extends DeclNodeBase {
       "virtual"
     ]);
 
-    parser.try(p => {
-      p.skip(" ").expect("noexcept-");
-      this.noexcept_spec = p.expect(/^\w+/);
-      this.noexcept_source = this.parse_node_ref(p);
-    });
+    const noexcept = parser.try(
+      p => {
+        p.skip(" ").expect("noexcept-");
+        return {
+          noexcept_spec: p.expect(/^\w+/),
+          noexcept_source: this.parse_node_ref(p)
+        };
+      },
+      { noexcept_spec: undefined, noexcept_source: undefined }
+    );
+    Object.assign(this, noexcept);
 
     this.overrides = [];
     parser.try(p => {
