@@ -6,17 +6,16 @@ function main() {
   let ast_dump = readFileSync("o3", "utf8");
   let parser = new Parser(ast_dump);
   let result = parser.expect(p => new TranslationUnit(p));
-  //parser.skip(/^$/);
+  parser.skip(/^$/);
   console.log(parser.ratify(result));
 }
 
 class ParseError extends Error {
   constructor(input, pattern) {
-    const q = JSON.stringify;
-    input = input.slice(0, 80);
-    super(
-      `Parse error\n` + `  pattern: ${q(pattern)}\n` + `  input:   ${q(input)}`
-    );
+    input = JSON.stringify(input.slice(0, 200));
+    pattern =
+      typeof pattern === "string" ? JSON.stringify(pattern) : `${pattern}`;
+    super(`Parse error\n` + `  pattern: ${pattern}\n` + `  input:   ${input}`);
   }
 }
 
@@ -174,6 +173,10 @@ class Node {
     this.children = [];
     this.parse_prefix(parser);
     this.parse(parser);
+    let rest = parser.expect(/^.*/);
+    if (rest.length) {
+      console.error(this.constructor.name, " == ", rest);
+    }
     parser.skip(/^\r?\n/);
     this.parse_children(parser);
   }
@@ -193,12 +196,15 @@ class Node {
   }
 
   parse_child(parser) {
-    let kind = parser.peek(p => {
+    const kind = parser.peek(p => {
       this.parse_child_prefix(p);
-      return p.expect(/^\w+/);
+      return this.parse_kind(p);
     });
     if (!parser.ok()) return;
     let ctor = node_type_map.get(kind);
+    if (typeof ctor !== "function") {
+      console.error("???", kind, ctor);
+    }
     return parser.ratify(new ctor(parser, this));
   }
 
@@ -211,16 +217,43 @@ class Node {
     this.children = this.children.concat(children);
   }
 
+  parse_kind(parser) {
+    return parser.expect(/^[A-Z]\w*/);
+  }
+
   parse_address(parser) {
     return parser.skip(" ").expect(/^0x[\da-f]+/);
   }
 
   parse_name(parser) {
-    this.name = parser.skip(" ").expect(/^[:\w]+/);
+    return parser.skip(" ").expect(/^[:\w]+/);
   }
 
   parse_type(parser) {
     return parser.skip(" ").expect(p => new Type(p));
+  }
+
+  parse_cast_kind(parser) {
+    const cast_kind = parser.skip(" <").expect(/^\w+/);
+    parser.skip(">");
+    return cast_kind;
+  }
+
+  parse_position(parser) {
+    return parser.skip(" ").expect(p => new TemplateParameterPosition(p));
+  }
+
+  parse_storage_class(parser) {
+    return parser.try(
+      p => p.skip(" ").expect(/^(?:auto|extern|static|register)/),
+      "none"
+    );
+  }
+
+  parse_operator(parser) {
+    let operator = parser.skip(" '").expect(/^[^'\w]+/);
+    parser.skip("'");
+    return operator;
   }
 
   parse_attributes(parser, attrs) {
@@ -241,7 +274,7 @@ class Node {
 class KindedNode extends Node {
   parse(parser) {
     super.parse(parser);
-    this.kind = parser.expect(/^\w+/);
+    this.kind = this.parse_kind(parser);
   }
 }
 
@@ -251,6 +284,9 @@ class AddressableNode extends KindedNode {
     this.address = this.parse_address(parser);
     this.prev = parser.try(p =>
       p.skip(" prev").expect(p => this.parse_address(p))
+    );
+    this.parent = parser.try(p =>
+      p.skip(" parent").expect(p => this.parse_address(p))
     );
   }
 }
@@ -272,14 +308,14 @@ class SrcRangeLocNode extends SrcRangeNode {
 class DeclNodeBase extends SrcRangeLocNode {
   parse(parser) {
     super.parse(parser);
-    this.parse_attributes(parser, ["implicit"]);
+    this.parse_attributes(parser, ["implicit", "referenced", "used"]);
   }
 }
 
 class NamedDeclNodeBase extends DeclNodeBase {
   parse(parser) {
     super.parse(parser);
-    this.parse_name(parser);
+    this.name = this.parse_name(parser);
   }
 }
 
@@ -293,7 +329,7 @@ class TypedDeclNodeBase extends DeclNodeBase {
 class NamedAndTypedDeclNodeBase extends DeclNodeBase {
   parse(parser) {
     super.parse(parser);
-    this.parse_name(parser);
+    this.name = this.parse_name(parser);
     this.type = this.parse_type(parser);
   }
 }
@@ -303,15 +339,15 @@ class RecordNodeBase extends DeclNodeBase {
     super.parse(parser);
     this.record_kind = parser
       .skip(" ")
-      .expect(/^class|struct|union|interface|enum/);
-    this.parse_name(parser);
-    
+      .expect(/^(?:class|struct|union|interface|enum)/);
+    this.name = this.parse_name(parser);
+
     if (parser.try(p => p.skip(" ").expect("definition"))) {
       this.is_definition = true;
       this.definition = parser.expect(p => new RecordDefinition(p, this));
     } else {
       this.is_definition = false;
-    }    
+    }
   }
 }
 
@@ -346,17 +382,15 @@ class TypeNodeBase extends SrcRangeNode {
 class ExprNodeBase extends SrcRangeNode {
   parse(parser) {
     super.parse(parser);
-    this.result_type = this.parse_type(parser);
+    this.type = this.parse_type(parser);
+    this.value_kind = parser.try(
+      p => p.skip(" ").expect(/^(?:lvalue|xvalue)/),
+      "rvalue"
+    );
   }
 }
 
 class StmtNodeBase extends SrcRangeNode {
-  parse(parser) {
-    super.parse(parser);
-  }
-}
-
-class OperatorNodeBase extends SrcRangeNode {
   parse(parser) {
     super.parse(parser);
   }
@@ -392,9 +426,10 @@ class FieldNodeBase extends SrcRangeNode {
   }
 }
 
-class LiteralNodeBase extends SrcRangeNode {
+class LiteralNodeBase extends ExprNodeBase {
   parse(parser) {
     super.parse(parser);
+    this.source = parser.skip(" ").expect(/^.*\S/);
   }
 }
 
@@ -458,9 +493,10 @@ const node_types = [
       super.parse(parser);
     }
   },
-  class BinaryOperator extends OperatorNodeBase {
+  class BinaryOperator extends ExprNodeBase {
     parse(parser) {
       super.parse(parser);
+      this.operator = this.parse_operator(parser);
     }
   },
   class BlockCommandComment extends CommentNodeBase {
@@ -495,9 +531,10 @@ const node_types = [
       super.parse(parser);
     }
   },
-  class CXXBoolLiteralExpr extends ExprNodeBase {
+  class CXXBoolLiteralExpr extends LiteralNodeBase {
     parse(parser) {
       super.parse(parser);
+      this.value = JSON.parse(this.source);
     }
   },
   class CXXCatchStmt extends StmtNodeBase {
@@ -653,11 +690,7 @@ const node_types = [
     }
   },
   class ClassTemplateDecl extends NamedDeclNodeBase {},
-  class ClassTemplatePartialSpecializationDecl extends DeclNodeBase {
-    parse(parser) {
-      super.parse(parser);
-    }
-  },
+  class ClassTemplatePartialSpecializationDecl extends RecordNodeBase {},
   class ClassTemplateSpecialization extends SpecializationNodeBase {
     parse(parser) {
       super.parse(parser);
@@ -668,7 +701,7 @@ const node_types = [
       super.parse(parser);
     }
   },
-  class CompoundAssignOperator extends OperatorNodeBase {
+  class CompoundAssignOperator extends ExprNodeBase {
     parse(parser) {
       super.parse(parser);
     }
@@ -678,7 +711,7 @@ const node_types = [
       super.parse(parser);
     }
   },
-  class ConditionalOperator extends OperatorNodeBase {
+  class ConditionalOperator extends ExprNodeBase {
     parse(parser) {
       super.parse(parser);
     }
@@ -701,6 +734,9 @@ const node_types = [
   class DeclRefExpr extends ExprNodeBase {
     parse(parser) {
       super.parse(parser);
+      this.decl_kind = parser.skip(" ").expect(/^\w+/);
+      this.decl_address = this.parse_address(parser);
+      parser.skip(/^.*/); // The rest of the line is redundant info.
     }
   },
   class DeclStmt extends StmtNodeBase {
@@ -731,13 +767,12 @@ const node_types = [
   class DeprecatedAttr extends AttrNodeBase {
     parse(parser) {
       super.parse(parser);
+      // There seems to be an always-empty string after the message.
+      // Unclear what this is for.
+      this.message = parser.expect(/^ "(?<message>.*)" ""/).message;
     }
   },
-  class ElaboratedType extends TypeNodeBase {
-    parse(parser) {
-      super.parse(parser);
-    }
-  },
+  class ElaboratedType extends TypedNode {},
   class EmptyDecl extends DeclNodeBase {
     parse(parser) {
       super.parse(parser);
@@ -748,14 +783,16 @@ const node_types = [
       super.parse(parser);
     }
   },
-  class EnumConstantDecl extends DeclNodeBase {
-    parse(parser) {
-      super.parse(parser);
-    }
-  },
+  class EnumConstantDecl extends NamedAndTypedDeclNodeBase {},
   class EnumDecl extends DeclNodeBase {
     parse(parser) {
       super.parse(parser);
+      this.scope = parser.try(
+        p => p.skip(" ").expect(/^(?:class|struct)/),
+        "unscoped"
+      );
+      this.name = parser.try(p => this.parse_name(p));
+      this.type = parser.try(p => this.parse_type(p));
     }
   },
   class EnumType extends TypeNodeBase {
@@ -773,11 +810,7 @@ const node_types = [
       super.parse(parser);
     }
   },
-  class FieldDecl extends DeclNodeBase {
-    parse(parser) {
-      super.parse(parser);
-    }
-  },
+  class FieldDecl extends NamedAndTypedDeclNodeBase {},
   class FinalAttr extends AttrNodeBase {
     parse(parser) {
       super.parse(parser);
@@ -816,9 +849,15 @@ const node_types = [
   class FunctionDecl extends NamedAndTypedDeclNodeBase {
     parse(parser) {
       super.parse(parser);
-      this.storage_class = parser.try(p =>
-        p.skip(" ").expect(/^extern|^static/)
-      );
+      this.storage_class = this.parse_storage_class(parser);
+      this.parse_attributes(parser, [
+        "default",
+        "delete",
+        "inline",
+        "pure",
+        "trivial",
+        "virtual"
+      ]);
     }
   },
   class FunctionProtoType extends TypeNodeBase {
@@ -826,7 +865,7 @@ const node_types = [
       super.parse(parser);
     }
   },
-  class FunctionTemplateDecl extends DeclNodeBase {
+  class FunctionTemplateDecl extends NamedDeclNodeBase {
     parse(parser) {
       super.parse(parser);
     }
@@ -839,6 +878,7 @@ const node_types = [
   class ImplicitCastExpr extends ExprNodeBase {
     parse(parser) {
       super.parse(parser);
+      this.cast_kind = this.parse_cast_kind(parser);
     }
   },
   class IndirectFieldDecl extends DeclNodeBase {
@@ -900,6 +940,7 @@ const node_types = [
   class MaxFieldAlignmentAttr extends AttrNodeBase {
     parse(parser) {
       super.parse(parser);
+      this.alignment = Number(parser.skip(" ").expect(/^\d+/));
     }
   },
   class MemberExpr extends ExprNodeBase {
@@ -907,7 +948,24 @@ const node_types = [
       super.parse(parser);
     }
   },
-  class NamespaceDecl extends NamedDeclNodeBase {},
+  class NamespaceDecl extends NamedDeclNodeBase {
+    parse(parser) {
+      super.parse(parser);
+
+      const original = parser.try(p => {
+        p.skip(/^\r?\n/);
+        this.parse_child_prefix(p);
+        p.skip("original ");
+        const original = {
+          original_kind: this.parse_kind(p),
+          original_address: this.parse_address(p)
+        };
+        p.skip(/^.*/);
+        return original;
+      }, {});
+      Object.assign(this, original);
+    }
+  },
   class NoAliasAttr extends AttrNodeBase {
     parse(parser) {
       super.parse(parser);
@@ -926,6 +984,9 @@ const node_types = [
   class NonTypeTemplateParmDecl extends DeclNodeBase {
     parse(parser) {
       super.parse(parser);
+      this.type = this.parse_type(parser);
+      this.position = this.parse_position(parser);
+      this.name = this.parse_name(parser);
     }
   },
   class NullStmt extends StmtNodeBase {
@@ -968,7 +1029,13 @@ const node_types = [
       super.parse(parser);
     }
   },
-  class ParmVarDecl extends TypedDeclNodeBase {},
+  class ParmVarDecl extends DeclNodeBase {
+    parse(parser) {
+      super.parse(parser);
+      this.name = parser.try(p => this.parse_name(p));
+      this.type = this.parse_type(parser);
+    }
+  },
   class PragmaCommentDecl extends DeclNodeBase {
     parse(parser) {
       super.parse(parser);
@@ -977,6 +1044,10 @@ const node_types = [
   class PragmaDetectMismatchDecl extends DeclNodeBase {
     parse(parser) {
       super.parse(parser);
+      Object.assign(
+        this,
+        parser.skip(" ").expect(/"(?<name>.+)" "(?<value>.*)"/)
+      );
     }
   },
   class PureAttr extends AttrNodeBase {
@@ -1025,7 +1096,7 @@ const node_types = [
       super.parse(parser);
     }
   },
-  class SubstTemplateTypeParmType extends TypeNodeBase {
+  class SubstTemplateTypeParmType extends TypedNode {
     parse(parser) {
       super.parse(parser);
     }
@@ -1040,23 +1111,38 @@ const node_types = [
       super.parse(parser);
     }
   },
-  class TemplateTypeParm extends ParmNodeBase {
-    parse(parser) {
-      super.parse(parser);
-    }
-  },
+  class TemplateTypeParm extends TypedNode {},
   class TemplateTypeParmDecl extends DeclNodeBase {
     parse(parser) {
       super.parse(parser);
-      this.type_kind = parser.skip(" ").expect(/^(class|typename)/);
-      this.depth = parser.skip(" depth ").expect(/^\d+/);
-      this.index = parser.skip(" index ").expect(/^\d+/);
-      this.parse_name(parser);
+      this.type_kind = parser.skip(" ").expect(/^(?:class|typename)/);
+      this.position = this.parse_position(parser);
+      this.name = this.parse_name(parser);
     }
   },
-  class TemplateTypeParmType extends TypeNodeBase {
+  class TemplateTypeParmType extends TypedNode {
     parse(parser) {
       super.parse(parser);
+      this.position = this.parse_position(parser);
+    }
+  },
+  class TemplateArgument extends KindedNode {
+    parse(parser) {
+      super.parse(parser);
+      this.kind = parser
+        .skip(" ")
+        .expect(
+          /^(?:decl|expr|integral|null|nullptr|pack|template|expansion|template|type)/
+        );
+      switch (this.kind) {
+        case "type":
+          this.type = this.parse_type(parser);
+          break;
+
+        case "integral":
+          this.integral = parser.skip(" ").expect(/^\d+/);
+          break;
+      }
     }
   },
   class TextComment extends CommentNodeBase {
@@ -1100,7 +1186,7 @@ const node_types = [
     parse(parser) {
       super.parse(parser);
       this.parse_attributes(parser, ["referenced", "used"]);
-      this.parse_name(parser);
+      this.name = this.parse_name(parser);
       this.type = parser.skip(" ").expect(p => new Type(p));
       parser.ratify(this);
     }
@@ -1111,9 +1197,14 @@ const node_types = [
       super.parse(parser);
     }
   },
-  class UnaryOperator extends OperatorNodeBase {
+  class UnaryOperator extends ExprNodeBase {
     parse(parser) {
       super.parse(parser);
+      this.attachment = parser.skip(" ").expect(/^(?:prefix|postfix)/);
+      this.operator = this.parse_operator(parser);
+      this.can_overflow = !parser.try(p =>
+        p.skip(" ").expect("cannot overflow")
+      );
     }
   },
   class UnaryTransformType extends TypeNodeBase {
@@ -1124,6 +1215,7 @@ const node_types = [
   class UnresolvedLookupExpr extends ExprNodeBase {
     parse(parser) {
       super.parse(parser);
+      this.unknown = parser.skip(" ").expect(/^.*/);
     }
   },
   class UnresolvedMemberExpr extends ExprNodeBase {
@@ -1154,6 +1246,9 @@ const node_types = [
   class VarDecl extends DeclNodeBase {
     parse(parser) {
       super.parse(parser);
+      this.name = this.parse_name(parser);
+      this.type = this.parse_type(parser);
+      this.storage_class = this.parse_storage_class(parser);
     }
   },
   class VarTemplateDecl extends DeclNodeBase {
@@ -1250,17 +1345,28 @@ class SourceLocation {
   }
 }
 
+class TemplateParameterPosition {
+  constructor(parser) {
+    this.parse(parser);
+  }
+
+  parse(parser) {
+    parser.skip("depth ");
+    this.depth = Number(parser.expect(/^\d+/));
+    parser.skip(" index ");
+    this.index = Number(parser.expect(/^\d+/));
+  }
+}
+
 class RecordDefinition {
   constructor(parser, parent) {
     this._parent = parent;
     this.parse(parser);
-    console.log(this);
   }
 
   parse(parser) {
     const top_level_flags = parser.expect(p => this.parse_top_level_flags(p));
-    console.log("ok=",parser.str.slice(0,100));
-    Object.assign(this, parser.ratify(top_level_flags));
+    Object.assign(this, top_level_flags);
 
     const subset_parser_fns = [
       this.parse_default_constructor_flags,
@@ -1312,12 +1418,6 @@ class RecordDefinition {
       "has_variant_members", // hasVariantMembers
       "can_const_default_init" // allowConstDefaultInit
     ]);
-  }
-
-  parse_nested_flag_sets(parser, subset_parsers) {
-    const results = {};
-
-    return results;
   }
 
   parse_nested_flags(parser, identifier, flags) {
