@@ -334,7 +334,14 @@ class Node {
     outer: while (flags.length) {
       for (let i = 0; i < flags.length; i++) {
         const flag = flags[i];
-        if (parser.try(p => p.skip(" ").expect(flag))) {
+        if (
+          parser.try(p => {
+            p.skip(" ");
+            p.expect(flag);
+            p.peek(/^\s/);
+            return true;
+          })
+        ) {
           this[flag] = true;
           flags.splice(i, 1);
           continue outer;
@@ -518,44 +525,59 @@ class ExprNodeBase extends SrcRangeNode {
 }
 
 class CastExprBase extends ExprNodeBase {
-  parse_cast_kind(parser) {
-    this.cast_kind = parser.skip(" <").expect(/^\w+/);
-    if (
-      this.cast_kind === "DerivedToBase" ||
-      this.cast_kind === "UncheckedDerivedToBase"
-    ) {
-      parser.expect(" (");
-      this.derive_to_base_path = parser
-        .expect(/^.*(?=\)>)/)
-        .split(" -> ")
-        .map(name => Type.construct({ name }));
-      parser.expect(")");
-    } else {
-      // Not applicable to other cast types.
-      this.derive_to_base_path = undefined;
+  parse_cast(parser, is_implicit_cast = false) {
+    // This function SETS the cast_kind and base_path fields.
+    // It also SETS the `part_of_explicit_cast` if `is_implicit_cast` is set.
+    // It RETURNS the cast description which may need further processing by the caller.
+
+    parser.try_skip(" ");
+    let line = parser.expect(/^.*/);
+
+    if (is_implicit_cast) {
+      const m0 = line.match(/^(?<line>.*) (?<flag>part_of_explicit_cast)$/);
+      this.part_of_explicit_cast = !!m0;
+      line = m0 ? m0.groups.line : line;
     }
-    parser.expect(">");
+
+    const m1 = line.match(
+      /^((?<description>.*) )?<(?<cast_kind>(Unchecked)?(BaseToDerived|DerivedToBase)) \((?<base_path>.+)\)>$/
+    );
+    if (m1) {
+      const { description, cast_kind, base_path } = m1.groups;
+      this.cast_kind = cast_kind;
+      this.base_path = base_path.split(" -> ");
+      return description || "";
+    }
+
+    const m2 = line.match(/^((?<description>.*) )?<(?<cast_kind>[a-zA-Z]+)>$/);
+    if (m2) {
+      const { description, cast_kind } = m2.groups;
+      this.cast_kind = cast_kind;
+      this.base_path = undefined;
+      return description || "";
+    }
+
+    throw new Error(`Could not parse cast. ${line}`);
   }
 }
 
 class ImplicitCastExprBase extends CastExprBase {
   parse(parser) {
     super.parse(parser);
-    this.parse_cast_kind(parser);
+    const description = this.parse_cast(parser, true);
+    assert(description === "");
   }
 }
 
 class CXXNamedCastExprBase extends CastExprBase {
   parse(parser) {
     super.parse(parser);
+    const description = this.parse_cast(parser);
     // The type inside the angle brackets (static_cast<this_type>) is redundant.
     // It's the same as the result type of this expression (which is parsed by
     // our base class).
-    parser.skip(" ");
-    this.cast_name = parser.expect(
-      /^(?<cast_name>\w+_cast)(?:<.*>)(?= <\w+>$)/m
-    ).cast_name;
-    this.parse_cast_kind(parser);
+    console.log("DESC", description);
+    this.cast_name = /^[a-z_]+_cast(?=<.+>$)/.exec(description)[0];
   }
 }
 
@@ -578,12 +600,6 @@ class SpecializationNodeBase extends SrcRangeNode {
 }
 
 class CleanupsNodeBase extends SrcRangeNode {
-  parse(parser) {
-    super.parse(parser);
-  }
-}
-
-class FieldNodeBase extends SrcRangeNode {
   parse(parser) {
     super.parse(parser);
   }
@@ -670,11 +686,7 @@ const node_types = [
   class BuiltinTemplateDecl extends NamedDeclNodeBase {},
   class BuiltinType extends TypedNode {},
   class PointerType extends TypedNode {},
-  class CStyleCastExpr extends ImplicitCastExprBase {
-    parse(parser) {
-      super.parse(parser);
-    }
-  },
+  class CStyleCastExpr extends ImplicitCastExprBase {},
   class CXX11NoReturnAttr extends AttrNodeBase {
     parse(parser) {
       super.parse(parser);
@@ -761,7 +773,14 @@ const node_types = [
       super.parse(parser);
     }
   },
-  class CXXFunctionalCastExpr extends CXXNamedCastExprBase {},
+  class CXXFunctionalCastExpr extends CastExprBase {
+    parse(parser) {
+      super.parse(parser);
+      const description = this.parse_cast(parser);
+      // Further information in the description is redundant.
+      assert(/^functional cast to .*\S$/.test(description));
+    }
+  },
   class CXXMemberCallExpr extends ExprNodeBase {
     parse(parser) {
       super.parse(parser);
@@ -941,12 +960,22 @@ const node_types = [
       super.parse(parser);
     }
   },
-  class Field extends FieldNodeBase {
+  class Field extends AddressableNode {
     parse(parser) {
       super.parse(parser);
+      parser.expect(" '");
+      this.name = parser.expect(/^[^']*/);
+      parser.expect("'");
+      this.type = this.parse_type(parser);
     }
   },
-  class FieldDecl extends NamedAndTypedDeclNodeBase {},
+  class FieldDecl extends DeclNodeBase {
+    parse(parser) {
+      super.parse(parser);
+      this.name = parser.try(p => this.parse_name(p));
+      this.type = this.parse_type(parser);
+    }
+  },
   class FinalAttr extends AttrNodeBase {
     parse(parser) {
       super.parse(parser);
@@ -1002,12 +1031,7 @@ const node_types = [
       super.parse(parser);
     }
   },
-  class ImplicitCastExpr extends ImplicitCastExprBase {
-    parse(parser) {
-      super.parse(parser);
-      this.parse_flags(parser, ["part_of_explicit_cast"]);
-    }
-  },
+  class ImplicitCastExpr extends ImplicitCastExprBase {},
   class IndirectFieldDecl extends DeclNodeBase {
     parse(parser) {
       super.parse(parser);
