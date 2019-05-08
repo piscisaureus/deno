@@ -529,7 +529,6 @@ class CastExprBase extends ExprNodeBase {
     // This function SETS the cast_kind and base_path fields.
     // It also SETS the `part_of_explicit_cast` if `is_implicit_cast` is set.
     // It RETURNS the cast description which may need further processing by the caller.
-
     parser.try_skip(" ");
     let line = parser.expect(/^.*/);
 
@@ -576,7 +575,6 @@ class CXXNamedCastExprBase extends CastExprBase {
     // The type inside the angle brackets (static_cast<this_type>) is redundant.
     // It's the same as the result type of this expression (which is parsed by
     // our base class).
-    console.log("DESC", description);
     this.cast_name = /^[a-z_]+_cast(?=<.+>$)/.exec(description)[0];
   }
 }
