@@ -8,7 +8,7 @@ function main() {
   let parser = new Parser(ast_dump);
   let result = parser.expect(p => new TranslationUnitDecl(p));
   parser.skip(/^$/);
-  console.log(parser.ratify(result));
+  //console.log(parser.ratify(result));
 }
 
 class ParseError extends Error {
@@ -263,7 +263,9 @@ class Node {
   }
 
   parse_name(parser) {
-    let name = parser.skip(" ").expect(/^(?:operator\s*.[^\s\(]*|::|~|\w)+<?/);
+    let name = parser
+      .try_skip(" ")
+      .expect(/^(?:operator\s*.[^\s\(]*|::|~|\w)+<?/);
     if (!parser.ok()) return;
     if (!/</.test(name) || /operator/.test(name)) return name;
 
@@ -329,6 +331,10 @@ class Node {
     let operator = parser.skip(" '").expect(/^[^'\w]+/);
     parser.skip("'");
     return operator;
+  }
+
+  parse_text_comment(parser) {
+    return parser.skip(" ").expect(/^Text="(?<text>.*)"/).text;
   }
 
   parse_flags(parser, flags) {
@@ -420,6 +426,18 @@ class NamedAndTypedDeclNodeBase extends DeclNodeBase {
     super.parse(parser);
     this.name = this.parse_name(parser);
     this.type = this.parse_type(parser);
+  }
+}
+
+class VarDeclBase extends DeclNodeBase {
+  parse(parser) {
+    super.parse(parser);
+    this.name = parser.try(p => this.parse_name(p));
+    this.type = this.parse_type(parser);
+    this.storage_class = this.parse_storage_class(parser);
+    this.tls_kind = this.parse_tls_kind(parser);
+    this.parse_flags(parser, ["nrvo", "inline", "constexpr"]);
+    this.init_style = this.parse_init_style(parser);
   }
 }
 
@@ -604,12 +622,6 @@ class SpecializationNodeBase extends SrcRangeNode {
   }
 }
 
-class CleanupsNodeBase extends SrcRangeNode {
-  parse(parser) {
-    super.parse(parser);
-  }
-}
-
 class LiteralNodeBase extends ExprNodeBase {
   parse(parser) {
     super.parse(parser);
@@ -657,11 +669,7 @@ const node_types = [
       this.access = this.parse_access_specifier(parser);
     }
   },
-  class AlwaysInlineAttr extends AttrNodeBase {
-    parse(parser) {
-      super.parse(parser);
-    }
-  },
+  class AlwaysInlineAttr extends SimpleAttr {},
   class ArraySubscriptExpr extends ExprNodeBase {
     parse(parser) {
       super.parse(parser);
@@ -769,6 +777,8 @@ const node_types = [
   class CXXDependentScopeMemberExpr extends ExprNodeBase {
     parse(parser) {
       super.parse(parser);
+      this.operator = parser.try_skip(" ").expect(/^(\.|->)/);
+      this.member_name = this.parse_name(parser);
     }
   },
   class CXXDestructorDecl extends CallableDeclBase {},
@@ -834,6 +844,8 @@ const node_types = [
   class CXXThisExpr extends ExprNodeBase {
     parse(parser) {
       super.parse(parser);
+      this.implicit = Boolean(parser.try(" implicit"));
+      this.name = parser.skip(" ").expect("this");
     }
   },
   class CXXThrowExpr extends ExprNodeBase {
@@ -854,6 +866,12 @@ const node_types = [
   class CXXUnresolvedConstructExpr extends ExprNodeBase {
     parse(parser) {
       super.parse(parser);
+
+      // This type is redundant.
+      const type = this.parse_type(parser);
+      assert(type.name === this.type.name);
+
+      this.parse_flags(parser, ["list"]);
     }
   },
   class CallExpr extends ExprNodeBase {
@@ -960,7 +978,7 @@ const node_types = [
       super.parse(parser);
     }
   },
-  class ExprWithCleanups extends CleanupsNodeBase {
+  class ExprWithCleanups extends ExprNodeBase {
     parse(parser) {
       super.parse(parser);
     }
@@ -981,11 +999,7 @@ const node_types = [
       this.type = this.parse_type(parser);
     }
   },
-  class FinalAttr extends AttrNodeBase {
-    parse(parser) {
-      super.parse(parser);
-    }
-  },
+  class FinalAttr extends SimpleAttr {},
   class FloatingLiteral extends LiteralNodeBase {
     parse(parser) {
       super.parse(parser);
@@ -1004,6 +1018,7 @@ const node_types = [
   class FriendDecl extends DeclNodeBase {
     parse(parser) {
       super.parse(parser);
+      this.friend_type = parser.try(p => this.parse_type(p));
     }
   },
   class FullComment extends CommentNodeBase {
@@ -1109,6 +1124,9 @@ const node_types = [
   class MemberExpr extends ExprNodeBase {
     parse(parser) {
       super.parse(parser);
+      this.operator = parser.try_skip(" ").expect(/^(\.|->)/);
+      this.member_name = this.parse_name(parser);
+      this.member_decl = this.parse_node_ref(parser);
     }
   },
   class NamespaceDecl extends NamedDeclNodeBase {
@@ -1190,13 +1208,8 @@ const node_types = [
       super.parse(parser);
     }
   },
-  class ParmVarDecl extends DeclNodeBase {
-    parse(parser) {
-      super.parse(parser);
-      this.name = parser.try(p => this.parse_name(p));
-      this.type = this.parse_type(parser);
-    }
-  },
+  class VarDecl extends VarDeclBase {},
+  class ParmVarDecl extends VarDeclBase {},
   class PragmaCommentDecl extends DeclNodeBase {
     parse(parser) {
       super.parse(parser);
@@ -1258,6 +1271,8 @@ const node_types = [
   class TemplateSpecializationType extends TypedNode {
     parse(parser) {
       super.parse(parser);
+      this.parse_flags(parser, ["alias"]);
+      this.template_name = this.parse_name(parser);
     }
   },
   class TemplateTemplateParmDecl extends DeclNodeBase {
@@ -1311,6 +1326,7 @@ const node_types = [
   class TextComment extends CommentNodeBase {
     parse(parser) {
       super.parse(parser);
+      this.text = this.parse_text_comment(parser);
     }
   },
   class TranslationUnitDecl extends DeclNodeBase {
@@ -1389,17 +1405,6 @@ const node_types = [
       parser.skip(" ").skip(/^.*/); // Redundant.
     }
   },
-  class VarDecl extends DeclNodeBase {
-    parse(parser) {
-      super.parse(parser);
-      this.name = this.parse_name(parser);
-      this.type = this.parse_type(parser);
-      this.storage_class = this.parse_storage_class(parser);
-      this.tls_kind = this.parse_tls_kind(parser);
-      this.parse_flags(parser, ["nrvo", "inline", "constexpr"]);
-      this.init_style = this.parse_init_style(parser);
-    }
-  },
   class VarTemplateDecl extends DeclNodeBase {
     parse(parser) {
       super.parse(parser);
@@ -1418,6 +1423,7 @@ const node_types = [
   class VerbatimBlockComment extends CommentNodeBase {
     parse(parser) {
       super.parse(parser);
+      this.text = this.parse_text_comment(parser);
     }
   },
   class VerbatimBlockLineComment extends CommentNodeBase {
