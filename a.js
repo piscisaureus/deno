@@ -300,6 +300,12 @@ class Node {
     return this.parse_flags(parser, ["const", "resrict", "volatile"]);
   }
 
+  parse_array_type(parser) {
+    if (parser.try(p => " static")) return "static";
+    if (parser.try(p => " *")) return "star";
+    return "normal";
+  }
+
   parse_storage_class(parser) {
     return parser.try(
       p => p.skip(" ").expect(/^(?:auto|extern|static|register)/),
@@ -806,6 +812,8 @@ const node_types = [
   class CXXNewExpr extends ExprNodeBase {
     parse(parser) {
       super.parse(parser);
+      this.parse_flags(parser, ["array", "global"]);
+      // Todo: parse reference to `operator new` if it exists.
     }
   },
   class CXXNoexceptExpr extends ExprNodeBase {
@@ -907,6 +915,11 @@ const node_types = [
   class ConstantArrayType extends TypedNode {
     parse(parser) {
       super.parse(parser);
+      this.size = Number(parser.skip(" ").expect(/^\d+/));
+      this.array_type = this.parse_array_type(parser);
+      parser.try(/^[ ]+(?= )/); // Skip extra spaces.
+      this.parse_type_qualifiers(parser);
+      parser.try(" ");
     }
   },
   class ConstantExpr extends ExprNodeBase {
@@ -1053,6 +1066,7 @@ const node_types = [
   class IfStmt extends StmtNodeBase {
     parse(parser) {
       super.parse(parser);
+      this.parse_flags(parser, ["has_init", "has_var", "has_else"]);
     }
   },
   class ImplicitCastExpr extends ImplicitCastExprBase {},
