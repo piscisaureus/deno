@@ -9,6 +9,7 @@ function main() {
   let result = parser.expect(p => new TranslationUnitDecl(p));
   parser.skip(/^$/);
   //console.log(parser.ratify(result));
+  Type.dumpIndex();
 }
 
 class ParseError extends Error {
@@ -118,7 +119,7 @@ class Parser {
     const now = Date.now();
     if (!global.last || now - global.last > 1000) {
       global.last = now;
-      console.log(this.str.length);
+      console.error(this.str.length);
     }
     return r;
   }
@@ -1013,6 +1014,9 @@ const node_types = [
   class FormatAttr extends AttrNodeBase {
     parse(parser) {
       super.parse(parser);
+      this.format_attr_kind = parser.skip(" ").expect(/^\w+/);
+      this.format_idx = Number(parser.skip(" ").expect(/^\d+/));
+      this.first_arg_idx = Number(parser.skip(" ").expect(/^\d+/));
     }
   },
   class FriendDecl extends DeclNodeBase {
@@ -1134,12 +1138,13 @@ const node_types = [
       super.parse(parser);
 
       this.original = parser.try(p => {
+        debugger;
         p.expect(/^\r?\n/);
         this.parse_child_prefix(p);
         p.expect("original");
         this.parse_kind(p); // Redundant.
         const original = this.parse_node_ref(p);
-        parser.expect(/^.*/); // Redundant.
+        p.expect(/^.*/); // Redundant.
         return original;
       });
     }
@@ -1461,11 +1466,15 @@ class ImplicitValueInitExpr extends ExprNodeBase {
 class Type {
   constructor(parser) {
     Object.assign(this, this.parse(parser));
+    if (!parser.ok()) return;
+    Type.add(this);
   }
 
   static construct(props = {}) {
     // TODO: clean this up.
-    return Object.assign(Object.create(Type.prototype), props);
+    const type = Object.assign(Object.create(Type.prototype), props);
+    Type.add(type);
+    return type;
   }
 
   parse(parser) {
@@ -1476,7 +1485,19 @@ class Type {
     });
     return { name, desugared };
   }
+
+  static add(type) {
+    Type.index.push(type);
+  }
+
+  static dumpIndex() {
+    let s = Type.index
+      .map(({ name, desugared }) => `${name} ${desugared ? "@" : " "}\n`)
+      .join("");
+    process.stdout.write(s);
+  }
 }
+Type.index = [];
 
 class NodeRef {
   constructor(parser) {
