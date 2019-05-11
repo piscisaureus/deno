@@ -10,9 +10,8 @@ function main() {
   let parser = new Parser(ast_dump);
   let result = parser.expect(p => new TranslationUnitDecl(p));
   parser.skip(/^$/);
-  parser.ratify();
-  //console.log(parser.ratify(result));
-  //Type.dumpIndex();
+  console.log(result);
+  Type.dumpIndex();
 }
 
 class ParseError extends Error {
@@ -58,32 +57,47 @@ function fatal(message) {
   );
 }
 
-class Parser {
-  constructor(str) {
+class NoMatch {
+  constructor(pattern, offset) {
+    this.pattern = pattern;
+    this.offset = offset;
+  }
+}
+
+class ParserImpl {
+  constructor(str, orig, is_root) {
     this.str = str === undefined ? "" : `${str}`;
-    this.error = null;
+    this.orig = orig;
+    this.is_root = is_root;
   }
 
   _fork() {
-    let fork = new Parser(this.str);
-    return fork;
+    return new ParserImpl(this.str, this.orig, false);
   }
 
   _unfork(fork) {
-    assert(fork.error === null);
     this.str = fork.str;
   }
 
   _fail(pattern) {
-    if (!this.error) {
-      this.error = new ParseError(this.str, pattern);
-    }
-    return Parser.FAILED;
+    throw new NoMatch(pattern, this.orig.length - this.str.length);
   }
 
-  _match(matcher) {
-    assert(this.error === null);
+  _catch_try(err, is_try) {
+    if (err instanceof NoMatch) {
+      if (is_try) return;
+      if (this.is_root) {
+        throw new Error(
+          "Parse error\n" +
+            `  expected pattern: '${err.pattern}'\n` +
+            `  found: '${this.orig.slice(err.offset, 100)}'`
+        );
+      }
+    }
+    throw err;
+  }
 
+  _match(matcher, is_try) {
     switch (typeof matcher) {
       case "string": {
         const len = matcher.length;
@@ -130,8 +144,11 @@ class Parser {
   }
 
   _expect(matcher) {
-    if (this.error) return Parser.FAILED;
-    return this._match(matcher);
+    try {
+      return this._match(matcher);
+    } catch (err) {
+      this._catch_try(err, false);
+    }
   }
 
   expect(matcher) {
@@ -145,12 +162,15 @@ class Parser {
   }
 
   try(matcher, or_else) {
-    if (this.error) return Parser.FAILED;
-    const fork = this._fork();
-    const result = fork.expect(matcher);
-    if (fork.error !== null) return or_else;
-    this._unfork(fork);
-    return result;
+    const fork = this._fork(true);
+    try {
+      const result = fork.expect(matcher);
+      this._unfork(fork);
+      return result;
+    } catch (err) {
+      this._catch_try(err, true);
+      return or_else;
+    }
   }
 
   skip(matcher) {
@@ -164,51 +184,34 @@ class Parser {
   }
 
   peek(matcher) {
-    if (this.error) return Parser.FAILED;
-    const fork = this._fork();
-    const result = fork.expect(matcher);
-    if (fork.error !== null) {
-      this.error = fork.error;
-    }
-    return result;
+    return this._fork().expect(matcher);
   }
 
   try_peek(matcher, or_else) {
-    if (this.error) return Parser.FAILED;
-    const fork = this._fork();
-    const result = fork.expect(matcher);
-    if (fork.error !== null) return or_else;
-    return result;
+    return this._fork().try(matcher);
   }
 
   repeat(matcher) {
-    if (this.error) return Parser.FAILED;
     let results = [];
     for (;;) {
-      const fork = this._fork();
-      const result = fork.expect(matcher);
-      if (fork.error) {
-        return results;
-      } else {
+      const fork = this._fork(true);
+      try {
+        const result = fork.expect(matcher);
         this._unfork(fork);
         results.push(result);
+      } catch (err) {
+        this._catch_try(err, true);
+        return results;
       }
     }
   }
+}
 
-  ok() {
-    return this.error === null;
-  }
-
-  ratify(value) {
-    if (this.error !== null) {
-      throw this.error;
-    } else {
-      return value;
-    }
+class Parser extends ParserImpl {
+  constructor(str) {
+    super(str, str, true);
   }
 }
-Parser.FAILED = Symbol("Parser.FAILED");
 
 class Node {
   constructor(parser, parent) {
@@ -232,9 +235,7 @@ class Node {
 
   parse_child_prefix(parser) {
     const base = parser.expect(this.prefix);
-    if (!parser.ok()) return;
     const extension = parser.expect(/^[|`]-/);
-    if (!parser.ok()) return;
     return base + extension.replace(/[`\-]/g, " ");
   }
 
@@ -257,15 +258,12 @@ class Node {
       }
     });
     DebugHistory.log(ctor, parser.try_peek(/^.*/));
-    if (!parser.ok()) return;
-    //if (ctor == null) return;
     return new ctor(parser, this);
   }
 
   parse_children(parser) {
     let children = parser.repeat(p => {
       p.peek(p => this.parse_child_prefix(p));
-      if (!parser.ok()) return;
       return this.parse_child(p);
     });
     this.children = this.children.concat(children);
@@ -287,7 +285,6 @@ class Node {
     let name = parser
       .try_skip(" ")
       .expect(/^(?:operator\s*.[^\s\(]*|::|~|\w)+<?/);
-    if (!parser.ok()) return;
     if (!/</.test(name) || /operator/.test(name)) return name;
 
     const count = re => {
@@ -567,13 +564,10 @@ class CallableDeclBase extends DeclNodeBase {
       p.expect(/^\r?\n/);
       this.parse_child_prefix(p);
       p.expect("Overrides: [");
-      if (!p.ok()) return;
-
       do {
         this.overrides.push(this.parse_node_ref(p));
         this.parse_name(p); // Redundant.
         this.parse_type(p); // Redundant.
-        assert(p.ok());
       } while (p.try(","));
       p.expect(" ]");
     });
@@ -1370,7 +1364,6 @@ const node_types = [
       this.param_index = parser.try(p => {
         p.skip(" ");
         p.expect("ParamIndex=");
-        if (!p.ok()) return;
         return Number(p.expect(/^\d+/));
       });
     }
@@ -1695,7 +1688,6 @@ class ImplicitValueInitExpr extends ExprNodeBase {
 class Type {
   constructor(parser) {
     Object.assign(this, this.parse(parser));
-    if (!parser.ok()) return;
     Type.add(this);
   }
 
@@ -1984,9 +1976,7 @@ class CXXBaseSpecifier {
     this.virtual = Boolean(parser.try("virtual"));
     this.access = Node.prototype.parse_access_specifier(parser);
     this.type = Node.prototype.parse_type(parser);
-    this.is_pack_expansion = Node.prototype.parse_parameter_pack_indicator(
-      parser
-    );
+    this.pack_expansion = Node.prototype.parse_parameter_pack_indicator(parser);
   }
 }
 
@@ -2020,7 +2010,6 @@ class TemplateArgumentInheritedDefault {
         status = "overridden";
         break;
       default:
-        assert(!parser.ok());
         return;
     }
 
