@@ -7,27 +7,17 @@ const assign = Object.assign;
 
 function main() {
   let ast_dump = readFileSync(process.argv[2] || "o3", "utf8");
-  let parser = new Parser(ast_dump);
-  let result = parser.expect(p => new TranslationUnitDecl(p));
-  parser.skip(/^$/);
+  let parser = new ClangAstDumpParser(ast_dump);
+  let result = parser.parse_node();
+  parser.skip(/^\r?\n?$/);
   console.log(result);
   Type.dumpIndex();
 }
 
-class ParseError extends Error {
-  constructor(input, pattern) {
-    input = JSON.stringify(input.slice(0, 200));
-    pattern =
-      typeof pattern === "string" ? JSON.stringify(pattern) : `${pattern}`;
-    super(`Parse error\n` + `  pattern: ${pattern}\n` + `  input:   ${input}`);
-    //super("Parse error");
-  }
-}
-
 class DebugHistory {
-  static log(...args) {
+  static log(non_match) {
     const { history, max_entries } = DebugHistory;
-    history.push(args);
+    history.push(non_match);
     if (history.length >= max_entries * 2) {
       history.splice(0, history.length - max_entries);
     }
@@ -35,8 +25,8 @@ class DebugHistory {
 
   static dump() {
     const { history, max_entries } = DebugHistory;
-    for (const args of history.slice(-max_entries)) {
-      console.error(...args);
+    for (const non_match of history.slice(-max_entries)) {
+      console.error(non_match.get_message());
     }
   }
 }
@@ -57,22 +47,44 @@ function fatal(message) {
   );
 }
 
+class ParseError extends Error {}
+
 class NoMatch {
-  constructor(pattern, offset) {
+  constructor(pattern, str, orig) {
     this.pattern = pattern;
-    this.offset = offset;
+    this.str = str;
+    this.orig = orig;
+    DebugHistory.log(this);
+  }
+
+  get_message() {
+    const offset = this.orig.length - this.str.length;
+    const $ = val =>
+      val instanceof RegExp ? val.toString() : JSON.stringify(val);
+    return (
+      "Parse error\n" +
+      `  pattern: ${$(this.pattern)}\n` +
+      `    found: ... ${$(this.orig.slice(0, offset).slice(-80))}\n` +
+      `           ==> ${$(this.str.slice(0, 80))} ...`
+    );
+  }
+
+  throw() {
+    throw new ParseError(this.get_message());
   }
 }
 
-class ParserImpl {
-  constructor(str, orig, is_root) {
+class Parser {
+  constructor(str) {
     this.str = str === undefined ? "" : `${str}`;
-    this.orig = orig;
-    this.is_root = is_root;
+    this.orig = str;
+    this.is_root = true;
   }
 
   _fork() {
-    return new ParserImpl(this.str, this.orig, false);
+    const fork = Object.create(this.constructor.prototype);
+    Object.assign(fork, { str: this.str, orig: this.orig, is_root: false });
+    return fork;
   }
 
   _unfork(fork) {
@@ -80,18 +92,14 @@ class ParserImpl {
   }
 
   _fail(pattern) {
-    throw new NoMatch(pattern, this.orig.length - this.str.length);
+    throw new NoMatch(pattern, this.str, this.orig);
   }
 
   _catch_try(err, is_try) {
     if (err instanceof NoMatch) {
       if (is_try) return;
       if (this.is_root) {
-        throw new Error(
-          "Parse error\n" +
-            `  expected pattern: '${err.pattern}'\n` +
-            `  found: '${this.orig.slice(err.offset, 100)}'`
-        );
+        err.throw();
       }
     }
     throw err;
@@ -138,7 +146,8 @@ class ParserImpl {
 
       default:
         throw new Error(
-          "First argument should be a function, string, or regular expression."
+          `First argument should be a function, string, or regular expression. ` +
+            `It is a ${typeof matcher} (${matcher}) instead.`
         );
     }
   }
@@ -207,84 +216,69 @@ class ParserImpl {
   }
 }
 
-class Parser extends ParserImpl {
+class ClangAstDumpParser extends Parser {
   constructor(str) {
-    super(str, str, true);
+    super(str);
+    this.prefix = "";
   }
-}
 
-class Node {
-  constructor(parser, parent) {
-    this.parent = parent;
-    this.children = [];
-    this.parse_prefix(parser);
-    this.parse(parser);
-    let rest = parser.expect(/^.*/);
-    if (rest.length) {
-      console.error(this.constructor.name, " == ", rest);
+  _fork() {
+    const fork = super._fork();
+    fork.prefix = this.prefix;
+    return fork;
+  }
+
+  parse_leaf(matcher) {
+    const fork = this._fork();
+    fork.prefix = fork.parse_prefix(this.prefix);
+    const result = fork.expect(matcher);
+    this._unfork(fork);
+    return result;
+  }
+
+  try_parse_leaf(matcher) {
+    return this.try(p => p.parse_leaf(matcher));
+  }
+
+  parse_prefix(parent_prefix) {
+    this.expect(/\r?\n/);
+    return (
+      this.expect(parent_prefix) + this.expect(/^[|`]-/).replace(/[`\-]/g, " ")
+    );
+  }
+
+  parse_kind() {
+    return this.try_skip(" ").expect(/^(?:[A-Z]\w*\b|<<<NULL>>>)/);
+  }
+
+  parse_node() {
+    const kind = this.parse_kind();
+    const ctor = node_type_map.get(kind);
+    assert(ctor != null, `No constructor for '${kind}'`);
+    const node_data = {
+      kind,
+      children: [],
+      ...new ctor(this)
+    };
+    let child;
+    while ((child = this.try(p => p.parse_child_node()))) {
+      node_data.children.push(child);
     }
-    parser.skip(/^\r?\n/);
-    this.parse_children(parser);
+    return node_data;
   }
 
-  parse(parser) {}
-
-  parse_prefix(parser) {
-    this.prefix = this.parent.parse_child_prefix(parser);
+  parse_child_node() {
+    return this.parse_leaf(p => p.parse_node());
   }
 
-  parse_child_prefix(parser) {
-    const base = parser.expect(this.prefix);
-    const extension = parser.expect(/^[|`]-/);
-    return base + extension.replace(/[`\-]/g, " ");
+  parse_address() {
+    return this.try_skip(" ").expect(/^0x[\da-f]+/);
   }
 
-  parse_child(parser) {
-    const ctor = parser.peek(p => {
-      if (this.parse_child_prefix(p) == null) {
-        return;
-      }
-      const kind = p.try(p => this.parse_kind(p));
-      if (kind != null) {
-        const ctor = node_type_map.get(kind);
-        if (!ctor) {
-          throw new Error(`No constructor for node kind '${kind}'`);
-        }
-        return ctor;
-      }
-      const null_node = p.try(p => this.parse_null_node(p));
-      if (null_node != null) {
-        return NullNode;
-      }
-    });
-    DebugHistory.log(ctor, parser.try_peek(/^.*/));
-    return new ctor(parser, this);
-  }
-
-  parse_children(parser) {
-    let children = parser.repeat(p => {
-      p.peek(p => this.parse_child_prefix(p));
-      return this.parse_child(p);
-    });
-    this.children = this.children.concat(children);
-  }
-
-  parse_kind(parser) {
-    return parser.try_skip(" ").expect(/^[A-Z]\w*/);
-  }
-
-  parse_null_node(parser) {
-    return parser.expect("<<<NULL>>>");
-  }
-
-  parse_address(parser) {
-    return parser.try_skip(" ").expect(/^0x[\da-f]+/);
-  }
-
-  parse_name(parser) {
-    let name = parser
-      .try_skip(" ")
-      .expect(/^(?:operator\s*.[^\s\(]*|::|~|\w)+<?/);
+  parse_name() {
+    let name = this.try_skip(" ").expect(
+      /^(?:operator\s*.[^\s\(]*|::|~|\w)+<?/
+    );
     if (!/</.test(name) || /operator/.test(name)) return name;
 
     const count = re => {
@@ -292,155 +286,100 @@ class Node {
       return (matches && matches.length) || 0;
     };
     while (count(/</g) > count(/>/g)) {
-      name += parser.expect(/^.*?>/);
+      name += this.expect(/^.*?>/);
     }
     return name;
   }
 
-  parse_type(parser) {
-    return parser.try_skip(" ").expect(p => new Type(p));
+  parse_type() {
+    return this.try_skip(" ").expect(p => new Type(p));
   }
 
-  parse_node_ref(parser) {
-    return parser.skip(" ").expect(p => new NodeRef(p));
+  parse_node_ref() {
+    return this.skip(" ").expect(p => new NodeRef(p));
   }
 
-  parse_position(parser) {
-    return parser.skip(" ").expect(p => new TemplateParameterPosition(p));
+  parse_position() {
+    return this.skip(" ").expect(p => new TemplateParameterPosition(p));
   }
 
-  parse_parameter_pack_indicator(parser) {
-    return Boolean(parser.try(" ..."));
+  parse_parameter_pack_indicator() {
+    return Boolean(this.try(" ..."));
   }
 
-  parse_type_qualifiers(parser) {
-    return this.parse_flags(parser, ["const", "resrict", "volatile"]);
+  parse_type_qualifiers() {
+    return this.parse_flags(["const", "restrict", "volatile"]);
   }
 
-  parse_array_type(parser) {
-    if (parser.try(p => " static")) return "static";
-    if (parser.try(p => " *")) return "star";
+  parse_array_type() {
+    if (this.try(" static")) return "static";
+    if (this.try(" *")) return "star";
     return "normal";
   }
 
-  parse_visibility(parser) {
-    return parser.skip(" ").expect(/^Default|Hidden|Protected/);
+  parse_visibility() {
+    return this.skip(" ").expect(/^Default|Hidden|Protected/);
   }
 
-  parse_storage_class(parser) {
-    return parser.try(
+  parse_storage_class() {
+    return this.try(
       p => p.skip(" ").expect(/^(?:auto|extern|static|register)/),
       "none"
     );
   }
 
-  parse_tls_kind(parser) {
-    return parser.try(
-      p => p.skip(" ").expect(/^(?:tls|tls_dynamic)\b/),
-      "none"
-    );
+  parse_tls_kind() {
+    return this.try(p => p.skip(" ").expect(/^(?:tls|tls_dynamic)\b/), "none");
   }
 
-  parse_var_decl(parser) {
+  parse_var_decl() {
     return {
-      type: this.parse_type(parser),
-      storage_class: this.parse_storage_class(parser),
-      tls_kind: this.parse_tls_kind(parser),
-      ...this.parse_flags(parser, ["nrvo", "inline", "constexpr"]),
-      init_style: this.parse_init_style(parser)
+      type: this.parse_type(),
+      storage_class: this.parse_storage_class(),
+      tls_kind: this.parse_tls_kind(),
+      ...this.parse_flags(["nrvo", "inline", "constexpr"]),
+      init_style: this.parse_init_style()
     };
   }
 
-  parse_named_var_decl(parser) {
+  parse_named_var_decl() {
     return {
-      name: this.parse_name(parser),
-      ...this.parse_var_decl(parser)
+      name: this.parse_name(),
+      ...this.parse_var_decl()
     };
   }
 
-  parse_init_style(parser) {
-    return parser.try(
+  parse_init_style() {
+    return this.try(
       p => p.skip(" ").expect(/^(?:cinit|callinit|listinit)\b/),
       "none"
     );
   }
 
-  parse_access_specifier(parser) {
-    return parser.try(
+  parse_access_specifier() {
+    return this.try(
       p => p.try_skip(" ").expect(/^(?:private|protected|public)/),
       "none"
     );
   }
 
-  parse_operator(parser) {
-    let operator = parser.skip(" '").expect(/^[^'\w]+/);
-    parser.skip("'");
+  parse_operator() {
+    let operator = this.skip(" '").expect(/^[^'\w]+/);
+    this.skip("'");
     return operator;
   }
 
-  parse_text_comment(parser) {
-    return parser.skip(" ").expect(/^Text="(?<text>.*)"/).text;
+  parse_text_comment() {
+    return this.skip(" ").expect(/^Text="(?<text>.*)"/).text;
   }
 
-  /*parse_assign(parser, matcher, mappings = undefined) {
-    const groups = parser.expect(matcher);
-    switch (typeof mappings) {
-      //case "function":
-      //  groups = mapper(groups);
-      //  break;
-      //  
-      case "object": {
-        for (const key in groups) {
-          const get_map_fn = suffix => {
-            const map_key = `${key}{suffix}`;
-            if (!mappings.hasOwnProperty(map_key)) return;
-            const map_val = mappings[map_key];
-            if (typeof map_val === 'function') return map_val;
-            return () => map_val;
-          }
-          let map_any = get_map_fn("");
-          let map_opt = get_map_fn("?");
-          let map_present = get_map_fn("+");
-          let map_absent = get_map_fn("-");
-          if (map_any) {
-            assert(map_present === NOT_SET);
-            assert(map_absent === NOT_SET);
-            map_present = map_any;
-            map_absent = map_any;
-          }
-          if (map_opt) {
-            assert(map_present === NOT_SET);
-            assert(map_absent === NOT_SET);
-            map_present = map_opt;
-            map_absent = () => undefined;
-          }
-          let value = groups[value];
-          let map_fn = (value !== undefined) ? map_present : map_absent;
-          if (!map_fn) {
-            throw new Error("No mapping for match group " + JSON.stringify({[key]: value}));
-          }
-          this[key] = map_fn(value);
-        }
-        break;
-      }
-      
-      case "undefined":
-        Object.assign(this, groups);
-        break;
-      
-      default:
-        throw new Error("Unexpected type of mapper");
-
-    }      
-  }*/
-
-  parse_flags(parser, flags) {
+  parse_flags(flags) {
     const result = {};
     outer: while (flags.length) {
       for (let i = 0; i < flags.length; i++) {
         const flag = flags[i];
         if (
-          parser.try(p => {
+          this.try(p => {
             p.skip(" ");
             p.expect(flag);
             p.peek(/^\s/);
@@ -458,29 +397,39 @@ class Node {
   }
 }
 
+class Node {
+  constructor(parser) {
+    this.parse(parser);
+    let rest = parser.expect(/^.*/);
+    if (rest.length) {
+      console.error(this.constructor.name, " == ", rest);
+    }
+  }
+
+  parse(parser) {}
+}
+
 class KindedNode extends Node {
   parse(parser) {
     super.parse(parser);
-    this.kind = parser.expect(this.constructor.name);
   }
 }
 
 class NullNode extends Node {
   parse(parser) {
     super.parse(parser);
-    this.parse_null_node(parser);
   }
 }
 
 class AddressableNode extends KindedNode {
   parse(parser) {
     super.parse(parser);
-    this.address = this.parse_address(parser);
+    this.address = parser.parse_address();
     this.semantic_parent = parser.try(p =>
-      p.skip(" parent").expect(p => this.parse_node_ref(p))
+      p.skip(" parent").expect(p => p.parse_node_ref())
     );
     this.prev = parser.try(p =>
-      p.skip(" prev").expect(p => this.parse_node_ref(p))
+      p.skip(" prev").expect(p => p.parse_node_ref())
     );
   }
 }
@@ -504,7 +453,7 @@ class DeclNodeBase extends SrcRangeLocNode {
     super.parse(parser);
     assign(
       this,
-      this.parse_flags(parser, ["implicit", "referenced", "used", "constexpr"])
+      parser.parse_flags(["implicit", "referenced", "used", "constexpr"])
     );
   }
 }
@@ -512,22 +461,22 @@ class DeclNodeBase extends SrcRangeLocNode {
 class NamedDeclNodeBase extends DeclNodeBase {
   parse(parser) {
     super.parse(parser);
-    this.name = this.parse_name(parser);
+    this.name = parser.parse_name();
   }
 }
 
 class TypedDeclNodeBase extends DeclNodeBase {
   parse(parser) {
     super.parse(parser);
-    this.type = this.parse_type(parser);
+    this.type = parser.parse_type();
   }
 }
 
 class NamedAndTypedDeclNodeBase extends DeclNodeBase {
   parse(parser) {
     super.parse(parser);
-    this.name = this.parse_name(parser);
-    this.type = this.parse_type(parser);
+    this.name = parser.parse_name();
+    this.type = parser.parse_type();
   }
 }
 
@@ -535,9 +484,9 @@ class CallableDeclBase extends DeclNodeBase {
   parse(parser) {
     super.parse(parser);
     this.name = parser.try_skip(" ").expect(/^~?\w[^']*?(?=\s+')/);
-    this.type = this.parse_type(parser);
-    this.storage_class = this.parse_storage_class(parser);
-    this.parse_flags(parser, [
+    this.type = parser.parse_type();
+    this.storage_class = parser.parse_storage_class();
+    parser.parse_flags([
       "default",
       "default_delete",
       "delete",
@@ -552,22 +501,20 @@ class CallableDeclBase extends DeclNodeBase {
         p.skip(" ").expect("noexcept-");
         return {
           noexcept_spec: p.expect(/^\w+/),
-          noexcept_source: this.parse_node_ref(p)
+          noexcept_source: p.parse_node_ref()
         };
       },
       { noexcept_spec: undefined, noexcept_source: undefined }
     );
     Object.assign(this, noexcept);
 
-    this.overrides = [];
-    parser.try(p => {
-      p.expect(/^\r?\n/);
-      this.parse_child_prefix(p);
+    this.overrides = parser.try_parse_leaf(p => {
+      const overrides = [];
       p.expect("Overrides: [");
       do {
-        this.overrides.push(this.parse_node_ref(p));
-        this.parse_name(p); // Redundant.
-        this.parse_type(p); // Redundant.
+        overrides.push(p.parse_node_ref());
+        p.parse_name(); // Redundant.
+        p.parse_type(); // Redundant.
       } while (p.try(","));
       p.expect(" ]");
     });
@@ -583,14 +530,16 @@ class RecordNodeBase extends DeclNodeBase {
 
     // Umbiguity is unavoidable here - just never call your class 'definition'.
     // TODO: disambiguate using color output?
-    if (!parser.try_peek(/^ definition\r?\n/)) {
-      this.name = this.parse_name(parser);
+    if (!parser.try_peek(/^ definition(?=\r?\n)/)) {
+      this.name = parser.parse_name();
     }
 
     if (parser.try(p => p.skip(" ").expect("definition"))) {
       this.is_definition = true;
-      this.definition = parser.expect(p => new RecordDefinition(p, this));
-      this.bases = parser.repeat(p => new CXXBaseSpecifier(p, this));
+      this.definition = parser.parse_leaf(p => new RecordDefinition(p, this));
+      this.bases = parser.repeat(p =>
+        p.parse_leaf(p => new CXXBaseSpecifier(p))
+      );
     } else {
       this.is_definition = false;
     }
@@ -601,7 +550,7 @@ class TypedNode extends AddressableNode {
   parse(parser) {
     super.parse(parser);
     this.type = parser.skip(" ").expect(p => new Type(p));
-    this.parse_flags(parser, [
+    parser.parse_flags([
       "sugar",
       "dependent",
       "instantiation_dependent",
@@ -615,7 +564,7 @@ class TypedNode extends AddressableNode {
 class AttrNodeBase extends SrcRangeNode {
   parse(parser) {
     super.parse(parser);
-    assign(this, this.parse_flags(parser, ["Inherited", "Implicit"]));
+    assign(this, parser.parse_flags(["Inherited", "Implicit"]));
   }
 }
 
@@ -629,7 +578,7 @@ class SimpleAttr extends AttrNodeBase {
 class ExprNodeBase extends SrcRangeNode {
   parse(parser) {
     super.parse(parser);
-    this.type = this.parse_type(parser);
+    this.type = parser.parse_type();
     this.value_kind = parser.try(
       p => p.skip(" ").expect(/^(?:lvalue|xvalue)/),
       "rvalue"
@@ -640,8 +589,8 @@ class ExprNodeBase extends SrcRangeNode {
 class ConstructExprBase extends ExprNodeBase {
   parse(parser) {
     super.parse(parser);
-    this.constructor_type = this.parse_type(parser);
-    this.parse_flags(parser, [
+    this.constructor_type = parser.parse_type();
+    parser.parse_flags([
       "elidable",
       "list",
       "std::initializer_list",
@@ -754,15 +703,6 @@ class TypedefNodeBase extends SrcRangeNode {
   }
 }
 
-class TranslationUnitDecl extends DeclNodeBase {
-  constructor(parser) {
-    super(parser, null);
-  }
-  parse_prefix(parser) {
-    this.prefix = "";
-  }
-}
-
 class CXXTemporary {
   constructor(parser, parent) {
     this.parent = parent;
@@ -772,15 +712,20 @@ class CXXTemporary {
   parse(parser) {
     this.kind = parser.expect(this.constructor.name);
     parser.skip(" ");
-    this.address = Node.prototype.parse_address(parser);
+    this.address = parser.parse_address();
   }
 }
 
 const node_types = [
+  class TranslationUnitDecl extends DeclNodeBase {
+    constructor(parser) {
+      super(parser, null);
+    }
+  },
   class AccessSpecDecl extends DeclNodeBase {
     parse(parser) {
       super.parse(parser);
-      this.access = this.parse_access_specifier(parser);
+      this.access = parser.parse_access_specifier();
     }
   },
   class AlwaysInlineAttr extends SimpleAttr {},
@@ -797,7 +742,7 @@ const node_types = [
   class BinaryOperator extends ExprNodeBase {
     parse(parser) {
       super.parse(parser);
-      this.operator = this.parse_operator(parser);
+      this.operator = parser.parse_operator();
     }
   },
   class BlockCommandComment extends CommentNodeBase {
@@ -846,8 +791,8 @@ const node_types = [
     parse(parser) {
       super.parse(parser);
       const field = parser.try(p => {
-        this.parse_kind(p); // Redundant
-        const ref = this.parse_node_ref(p);
+        p.parse_kind(); // Redundant
+        const ref = p.parse_node_ref();
         p.skip(/^.*/); // Skip redundant info which replicated from the referenced field.
         return ref;
       });
@@ -857,7 +802,7 @@ const node_types = [
       } else {
         // Initializer intializes a base class or delegates to another constructor.
         // TODO: can we distinguish between those?
-        this.base = this.parse_type(parser);
+        this.base = parser.parse_type();
       }
     }
   },
@@ -879,10 +824,10 @@ const node_types = [
   class CXXDeleteExpr extends ExprNodeBase {
     parse(parser) {
       super.parse(parser);
-      assign(this, this.parse_flags(parser, ["array", "global"]));
+      assign(this, parser.parse_flags(["array", "global"]));
       parser.try(p => {
         p.skip(" ").expect("Function");
-        this.function_decl = this.parse_node_ref(p);
+        this.function_decl = p.parse_node_ref();
         p.skip(" ").expect(/^.*/); // Redundant info.
       });
     }
@@ -891,7 +836,7 @@ const node_types = [
     parse(parser) {
       super.parse(parser);
       this.operator = parser.try_skip(" ").expect(/^(\.|->)/);
-      this.member_name = this.parse_name(parser);
+      this.member_name = parser.parse_name();
     }
   },
   class CXXDestructorDecl extends CallableDeclBase {},
@@ -918,7 +863,7 @@ const node_types = [
   class CXXNewExpr extends ExprNodeBase {
     parse(parser) {
       super.parse(parser);
-      assign(this, this.parse_flags(parser, ["array", "global"]));
+      assign(this, parser.parse_flags(["array", "global"]));
       // Todo: parse reference to `operator new` if it exists.
     }
   },
@@ -979,10 +924,10 @@ const node_types = [
       super.parse(parser);
 
       // This type is redundant.
-      const type = this.parse_type(parser);
+      const type = parser.parse_type();
       assert(type.name === this.type.name);
 
-      assign(this, this.parse_flags(parser, ["list"]));
+      assign(this, parser.parse_flags(["list"]));
     }
   },
   class CallExpr extends ExprNodeBase {
@@ -1002,9 +947,9 @@ const node_types = [
       this.operator = parser.expect(/^[^']+/);
       parser.expect("'");
       parser.skip(" ").expect("ComputeLHSTy=");
-      this.computation_lhs_type = this.parse_type(parser);
+      this.computation_lhs_type = parser.parse_type();
       parser.skip(" ").expect("ComputeResultTy=");
-      this.computation_result_type = this.parse_type(parser);
+      this.computation_result_type = parser.parse_type();
     }
   },
   class CompoundStmt extends StmtNodeBase {
@@ -1026,9 +971,9 @@ const node_types = [
     parse(parser) {
       super.parse(parser);
       this.size = Number(parser.skip(" ").expect(/^\d+/));
-      this.array_type = this.parse_array_type(parser);
+      this.array_type = parser.parse_array_type();
       parser.try(/^[ ]+(?= )/); // Skip extra spaces.
-      assign(this, this.parse_type_qualifiers(parser));
+      assign(this, parser.parse_type_qualifiers());
       parser.try(" ");
     }
   },
@@ -1040,8 +985,8 @@ const node_types = [
   class DeclRefExpr extends ExprNodeBase {
     parse(parser) {
       super.parse(parser);
-      this.parse_kind(parser); // Redundant info.
-      this.decl = this.parse_node_ref(parser);
+      parser.parse_kind(); // Redundant info.
+      this.decl = parser.parse_node_ref();
       parser.skip(/^.*/); // The rest of the line is also redundant.
     }
   },
@@ -1093,8 +1038,8 @@ const node_types = [
         p => p.skip(" ").expect(/^(?:class|struct)/),
         "unscoped"
       );
-      this.name = parser.try(p => this.parse_name(p));
-      this.type = parser.try(p => this.parse_type(p));
+      this.name = parser.try(p => p.parse_name());
+      this.type = parser.try(p => p.parse_type());
     }
   },
   class EnumType extends TypedNode {
@@ -1113,15 +1058,15 @@ const node_types = [
       parser.expect(" '");
       this.name = parser.expect(/^[^']*/);
       parser.expect("'");
-      this.type = this.parse_type(parser);
+      this.type = parser.parse_type();
     }
   },
   class FieldDecl extends DeclNodeBase {
     parse(parser) {
       super.parse(parser);
-      this.name = parser.try(p => this.parse_name(p));
-      this.type = this.parse_type(parser);
-      assign(this, this.parse_flags(parser, ["mutable"]));
+      this.name = parser.try(p => p.parse_name());
+      this.type = parser.parse_type();
+      assign(this, parser.parse_flags(["mutable"]));
     }
   },
   class FinalAttr extends SimpleAttr {},
@@ -1146,7 +1091,7 @@ const node_types = [
   class FriendDecl extends DeclNodeBase {
     parse(parser) {
       super.parse(parser);
-      this.friend_type = parser.try(p => this.parse_type(p));
+      this.friend_type = parser.try(p => p.parse_type());
     }
   },
   class FullComment extends CommentNodeBase {
@@ -1160,16 +1105,16 @@ const node_types = [
       parser.expect(" '");
       this.name = parser.expect(/^[^']+/);
       parser.expect("'");
-      this.type = this.parse_type(parser);
+      this.type = parser.parse_type();
     }
   },
   class FunctionDecl extends CallableDeclBase {},
   class FunctionProtoType extends TypedNode {
     parse(parser) {
       super.parse(parser);
-      assign(this, this.parse_flags(parser, ["trailing_return"])),
-        assign(this, this.parse_type_qualifiers(parser));
-      assign(this, this.parse_flags(parser, ["variadic"])),
+      assign(this, parser.parse_flags(["trailing_return"])),
+        assign(this, parser.parse_type_qualifiers());
+      assign(this, parser.parse_flags(["variadic"])),
         (this.ref_qualifier = {
           "": "none",
           "&": "lvalue",
@@ -1177,7 +1122,7 @@ const node_types = [
         }[parser.try(p => p.skip(" ").expect(/^&+/), "")]);
       assign(
         this,
-        this.parse_flags(parser, ["noreturn", "produces_result", "regparm"])
+        parser.parse_flags(["noreturn", "produces_result", "regparm"])
       );
       this.calling_convention = parser
         .skip(" ")
@@ -1194,10 +1139,7 @@ const node_types = [
   class IfStmt extends StmtNodeBase {
     parse(parser) {
       super.parse(parser);
-      assign(
-        this,
-        this.parse_flags(parser, ["has_init", "has_var", "has_else"])
-      );
+      assign(this, parser.parse_flags(["has_init", "has_var", "has_else"]));
     }
   },
   class ImplicitCastExpr extends ImplicitCastExprBase {},
@@ -1208,15 +1150,12 @@ const node_types = [
     }
   },
   class InitListExpr extends ExprNodeBase {
-    parse_children(parser) {
-      // Todo: don't auto-consume newlines in parse().
-      let child = parser.try(p => new ImplicitValueInitExpr(p, this));
-      if (child && child.label === "array_filler") {
-        this.array_filler = child;
-      } else if (child) {
-        this.children.push(child);
-      }
-      super.parse_children(parser);
+    parse(parser) {
+      super.parse(parser);
+      this.array_filler = parser.try_parse_leaf(p => {
+        p.expect("array_filler: ");
+        p.parse_node();
+      });
     }
   },
   class InjectedClassNameType extends TypedNode {
@@ -1278,21 +1217,17 @@ const node_types = [
     parse(parser) {
       super.parse(parser);
       this.operator = parser.try_skip(" ").expect(/^(\.|->)/);
-      this.member_name = this.parse_name(parser);
-      this.member_decl = this.parse_node_ref(parser);
+      this.member_name = parser.parse_name();
+      this.member_decl = parser.parse_node_ref();
     }
   },
   class NamespaceDecl extends NamedDeclNodeBase {
     parse(parser) {
       super.parse(parser);
-
-      this.original = parser.try(p => {
-        debugger;
-        p.expect(/^\r?\n/);
-        this.parse_child_prefix(p);
-        p.expect("original");
-        this.parse_kind(p); // Redundant.
-        const original = this.parse_node_ref(p);
+      this.original = parser.try_parse_leaf(p => {
+        p.expect("original ");
+        p.parse_kind(); // Redundant.
+        const original = p.parse_node_ref();
         p.expect(/^.*/); // Redundant.
         return original;
       });
@@ -1316,10 +1251,10 @@ const node_types = [
   class NonTypeTemplateParmDecl extends DeclNodeBase {
     parse(parser) {
       super.parse(parser);
-      this.type = this.parse_type(parser);
-      this.position = this.parse_position(parser);
-      this.is_parameter_pack = this.parse_parameter_pack_indicator(parser);
-      this.name = parser.try(p => this.parse_name(p));
+      this.type = parser.parse_type();
+      this.position = parser.parse_position();
+      this.is_parameter_pack = parser.parse_parameter_pack_indicator();
+      this.name = parser.try(p => p.parse_name());
     }
   },
   class NullStmt extends StmtNodeBase {
@@ -1386,14 +1321,14 @@ const node_types = [
   class VarDecl extends DeclNodeBase {
     parse(parser) {
       super.parse(parser);
-      assign(this, this.parse_named_var_decl(parser));
+      assign(this, parser.parse_named_var_decl());
     }
   },
   class ParmVarDecl extends DeclNodeBase {
     parse(parser) {
       super.parse(parser);
-      this.name = parser.try(p => this.parse_name(p));
-      assign(this, this.parse_var_decl(parser));
+      this.name = parser.try(p => p.parse_name());
+      assign(this, parser.parse_var_decl());
     }
   },
   class PragmaCommentDecl extends DeclNodeBase {
@@ -1419,7 +1354,7 @@ const node_types = [
   class QualType extends TypedNode {
     parse(parser) {
       super.parse(parser);
-      assign(this, this.parse_type_qualifiers(parser));
+      assign(this, parser.parse_type_qualifiers());
     }
   },
   class RValueReferenceType extends TypedNode {
@@ -1437,8 +1372,8 @@ const node_types = [
   class SizeOfPackExpr extends ExprNodeBase {
     parse(parser) {
       super.parse(parser);
-      this.pack = this.parse_node_ref(parser);
-      this.parse_name(parser); // Name of pack; redundant.
+      this.pack = parser.parse_node_ref();
+      parser.parse_name(); // Name of pack; redundant.
     }
   },
   class StaticAssertDecl extends DeclNodeBase {
@@ -1464,16 +1399,16 @@ const node_types = [
   class TemplateSpecializationType extends TypedNode {
     parse(parser) {
       super.parse(parser);
-      assign(this, this.parse_flags(parser, ["alias"]));
-      this.template_name = this.parse_name(parser);
+      assign(this, parser.parse_flags(["alias"]));
+      this.template_name = parser.parse_name();
     }
   },
   class TemplateTemplateParmDecl extends DeclNodeBase {
     parse(parser) {
       super.parse(parser);
-      this.position = this.parse_position(parser);
-      this.is_parameter_pack = this.parse_parameter_pack_indicator(parser);
-      this.name = parser.try(p => this.parse_name(p));
+      this.position = parser.parse_position();
+      this.is_parameter_pack = parser.parse_parameter_pack_indicator();
+      this.name = parser.try(p => p.parse_name());
     }
   },
   class TemplateTypeParm extends TypedNode {},
@@ -1481,15 +1416,15 @@ const node_types = [
     parse(parser) {
       super.parse(parser);
       this.type_kind = parser.skip(" ").expect(/^(?:class|typename)/);
-      this.position = this.parse_position(parser);
-      this.is_parameter_pack = this.parse_parameter_pack_indicator(parser);
-      this.name = parser.try(p => this.parse_name(p));
+      this.position = parser.parse_position();
+      this.is_parameter_pack = parser.parse_parameter_pack_indicator();
+      this.name = parser.try(p => p.parse_name());
     }
   },
   class TemplateTypeParmType extends TypedNode {
     parse(parser) {
       super.parse(parser);
-      this.position = this.parse_position(parser);
+      this.position = parser.parse_position();
     }
   },
   class TemplateArgument extends KindedNode {
@@ -1514,15 +1449,15 @@ const node_types = [
 
         case "template":
         case "template_expansion":
-          this.template_name = this.parse_name(parser);
+          this.template_name = parser.parse_name();
           break;
 
         case "type": {
-          this.type = this.parse_type(parser);
+          this.type = parser.parse_type();
           // This info is sometimes present up to clang 8.x, starting with
           // clang 9 it's moved to the VarTemplateSpecializationDecl node.
-          // We'll do the same here.
-          this.parent.var = parser.try(p => this.parse_named_var_decl(p));
+          // So we'll eventually move the 'var' field to the parent node.
+          this.var = parser.try(p => p.parse_named_var_decl());
           break;
         }
 
@@ -1546,7 +1481,7 @@ const node_types = [
   class TextComment extends CommentNodeBase {
     parse(parser) {
       super.parse(parser);
-      this.text = this.parse_text_comment(parser);
+      this.text = parser.parse_text_comment();
     }
   },
   class TranslationUnitDecl extends DeclNodeBase {
@@ -1565,7 +1500,7 @@ const node_types = [
   class TypeVisibilityAttr extends AttrNodeBase {
     parse(parser) {
       super.parse(parser);
-      this.type_visibility = this.parse_visibility(parser);
+      this.type_visibility = parser.parse_visibility();
     }
   },
   class Typedef extends TypedNode {},
@@ -1575,14 +1510,14 @@ const node_types = [
     parse(parser) {
       super.parse(parser);
       this.operator = parser.skip(" ").expect(/^[\w]+/);
-      this.argument_type = this.parse_type(parser);
+      this.argument_type = parser.parse_type();
     }
   },
   class UnaryOperator extends ExprNodeBase {
     parse(parser) {
       super.parse(parser);
       this.attachment = parser.skip(" ").expect(/^(?:prefix|postfix)/);
-      this.operator = this.parse_operator(parser);
+      this.operator = parser.parse_operator();
       this.can_overflow = !parser.try(p =>
         p.skip(" ").expect("cannot overflow")
       );
@@ -1613,8 +1548,8 @@ const node_types = [
   class UsingShadowDecl extends DeclNodeBase {
     parse(parser) {
       super.parse(parser);
-      this.parse_kind(parser); // Redundant.
-      this.target = this.parse_node_ref(parser);
+      parser.parse_kind(); // Redundant.
+      this.target = parser.parse_node_ref();
       parser.skip(" ").skip(/^.*/); // Redundant.
     }
   },
@@ -1628,7 +1563,7 @@ const node_types = [
       super.parse(parser);
       // This info is present here from clang 9.0.0-pre. Up to v0.8 it's usually
       // appended to the first template argument.
-      this.var = parser.try(p => this.parse_named_var_decl(p));
+      this.var = parser.try(p => p.parse_named_var_decl());
     }
   },
   class VarTemplateSpecializationDecl extends DeclNodeBase {
@@ -1636,7 +1571,7 @@ const node_types = [
       super.parse(parser);
       // This info is present here from clang 9.0.0-pre. Up to v0.8 it's usually
       // appended to the first template argument.
-      this.var = parser.try(p => this.parse_named_var_decl(p));
+      this.var = parser.try(p => p.parse_named_var_decl());
     }
   },
   class VerbatimBlockComment extends CommentNodeBase {
@@ -1654,13 +1589,13 @@ const node_types = [
   class VerbatimBlockLineComment extends CommentNodeBase {
     parse(parser) {
       super.parse(parser);
-      this.text = this.parse_text_comment(parser);
+      this.text = parser.parse_text_comment();
     }
   },
   class VisibilityAttr extends AttrNodeBase {
     parse(parser) {
       super.parse(parser);
-      this.visibility = this.parse_visibility(parser);
+      this.visibility = parser.parse_visibility();
     }
   },
   class WarnUnusedResultAttr extends SimpleAttr {},
@@ -1668,22 +1603,12 @@ const node_types = [
     parse(parser) {
       super.parse(parser);
     }
-  }
+  },
+  class ImplicitValueInitExpr extends ExprNodeBase {}
 ];
 
 var node_type_map = new Map(node_types.map(cl => [cl.name, cl]));
-
-class ImplicitValueInitExpr extends ExprNodeBase {
-  // This type may be have the 'array_filler:' label.
-  parse_prefix(parser) {
-    super.parse_prefix(parser);
-    this.label = parser.try(p => {
-      const label = p.expect(/^[a-z_]+/);
-      p.expect(": ");
-      return label;
-    });
-  }
-}
+node_type_map.set("<<<NULL>>>", NullNode);
 
 class Type {
   constructor(parser) {
@@ -1726,7 +1651,7 @@ class NodeRef {
   }
 
   parse(parser) {
-    this.address = Node.prototype.parse_address(parser);
+    this.address = parser.parse_address();
   }
 }
 
@@ -1779,8 +1704,7 @@ class TemplateParameterPosition {
 }
 
 class RecordDefinition {
-  constructor(parser, parent) {
-    this._parent = parent;
+  constructor(parser) {
     this.parse(parser);
   }
 
@@ -1800,21 +1724,18 @@ class RecordDefinition {
       parser,
       subset_parser_fns.map(parse_fn => {
         parse_fn = parse_fn.bind(this);
+        const match_fn = p => p.parse_leaf(parse_fn);
         return {
-          match: parse_fn,
+          match: match_fn,
           on_match: r => Object.assign(this, r),
-          on_unmatch: () => parser.expect(parse_fn)
+          on_unmatch: match_fn
         };
       })
     );
   }
 
   parse_top_level_flags(parser) {
-    parser
-      .skip(/^\r?\n/)
-      .skip(this._parent.prefix)
-      .skip(/^[`|]-/)
-      .skip("DefinitionData");
+    parser.expect("DefinitionData");
     return this.parse_flags(parser, [
       "parsing_base_specifiers", // isParsingBaseSpecifiers
 
@@ -1844,12 +1765,7 @@ class RecordDefinition {
     const field_name = identifier
       .replace(/^[A-Z]/, l => l.toLowerCase())
       .replace(/[A-Z]/g, l => "_" + l.toLowerCase());
-    parser
-      .skip(/^\r?\n/)
-      .skip(this._parent.prefix)
-      .skip(/^[| ] /)
-      .skip(/^[`|]-/)
-      .skip(identifier);
+    parser.expect(identifier);
     return { [field_name]: this.parse_flags(parser, flags) };
   }
 
@@ -1943,7 +1859,7 @@ class RecordDefinition {
       break;
     }
     for (const item of items) {
-      item.on_unmatch();
+      item.on_unmatch(parser);
     }
   }
 
@@ -1962,45 +1878,34 @@ class RecordDefinition {
 }
 
 class CXXBaseSpecifier {
-  constructor(parser, parent) {
-    this._parent = parent;
+  constructor(parser) {
     this.parse(parser);
   }
 
   parse(parser) {
-    parser
-      .skip(/^\r?\n/)
-      .skip(this._parent.prefix)
-      .skip(/^[`|]-/);
-
     this.virtual = Boolean(parser.try("virtual"));
-    this.access = Node.prototype.parse_access_specifier(parser);
-    this.type = Node.prototype.parse_type(parser);
-    this.pack_expansion = Node.prototype.parse_parameter_pack_indicator(parser);
+    this.access = parser.parse_access_specifier();
+    this.type = parser.parse_type();
+    this.pack_expansion = parser.parse_parameter_pack_indicator();
   }
 }
 
 class TemplateArgumentInheritedDefault {
-  constructor(parser, parent) {
-    this._parent = parent;
+  constructor(parser) {
     this.parse(parser);
   }
 
   parse(parser) {
-    Object.assign(
+    assign(
       this,
-      parser.try(p => this.parse_reference(p), {
+      parser.try_parse_leaf(p => this.parse_reference(p)) || {
         status: "none",
         origin: undefined
-      })
+      }
     );
   }
 
   parse_reference(parser) {
-    parser.expect(/^\r?\n/);
-    parser.expect(this._parent.prefix);
-    parser.expect(/^[`|]-/);
-
     let status;
     switch (parser.expect(/^(?:inherited from|previous)/)) {
       case "inherited from":
@@ -2014,8 +1919,8 @@ class TemplateArgumentInheritedDefault {
     }
 
     parser.skip(" ");
-    Node.prototype.parse_kind(parser); // Redundant.
-    const origin = Node.prototype.parse_node_ref(parser);
+    parser.parse_kind(); // Redundant.
+    const origin = parser.parse_node_ref();
     parser.skip(/^.*/); // Redundant.
 
     return { status, origin };
