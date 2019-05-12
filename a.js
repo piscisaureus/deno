@@ -79,11 +79,21 @@ class Parser {
     this.str = str === undefined ? "" : `${str}`;
     this.orig = str;
     this.is_root = true;
+    this.fail_fast_ = false;
+  }
+
+  fail_fast(enable = true) {
+    this.fail_fast_ = enable;
   }
 
   _fork() {
     const fork = Object.create(this.constructor.prototype);
-    Object.assign(fork, { str: this.str, orig: this.orig, is_root: false });
+    Object.assign(fork, {
+      str: this.str,
+      orig: this.orig,
+      is_root: false,
+      fail_fast_: false
+    });
     return fork;
   }
 
@@ -98,7 +108,7 @@ class Parser {
   _catch_try(err, is_try) {
     if (err instanceof NoMatch) {
       if (is_try) return;
-      if (this.is_root) {
+      if (this.is_root || this.fail_fast_) {
         err.throw();
       }
     }
@@ -403,7 +413,7 @@ class ClangAstDumpParser extends Parser {
   }
 
   parse_node_kind_specific(kind) {
-    this.is_root = true;
+    this.fail_fast();
     //console.log(kind, this.try_peek(/^.*/));
     switch (kind) {
       case "<<<NULL>>>":
@@ -414,35 +424,52 @@ class ClangAstDumpParser extends Parser {
         return this.parse_function();
       case "CXX11NoReturnAttr":
       case "ConstAttr":
-        return this.parse_attr_node_base();
-      case "DeprecatedAttr":
-        return this.parse_deprecated_attr();
-      case "FormatAttr":
-        return this.parse_format_attr();
+      case "ExcludeFromExplicitInstantiationAttr":
+      case "FallThroughAttr":
+      case "GNUInlineAttr":
       case "MSAllocatorAttr":
       case "MSNoVTableAttr":
-        return this.parse_attr_node_base();
-      case "MSVtorDispAttr":
-        return this.parse_ms_vtor_disp_attr();
-      case "MaxFieldAlignmentAttr":
-        return this.parse_max_field_alignment_attr();
       case "NoAliasAttr":
       case "NoInlineAttr":
       case "NoThrowAttr":
       case "OverrideAttr":
       case "PureAttr":
-        return this.parse_attr_node_base();
+      case "ReturnsTwiceAttr":
+      case "WeakAttr":
+        return this.parse_attr_node();
+      case "AlignedAttr":
       case "AlwaysInlineAttr":
       case "FinalAttr":
       case "RestrictAttr":
       case "WarnUnusedResultAttr":
-        return this.parse_simple_attr();
+        return this.parse_singleton_attr();
+      case "AsmLabelAttr":
+        return this.parse_asm_label_attr();
+      case "DeprecatedAttr":
+        return this.parse_deprecated_attr();
+      case "DiagnoseIfAttr":
+        return this.parse_diagnose_if_attr();
+      case "EnableIfAttr":
+        return this.parse_enable_if_attr();
+      case "FormatAttr":
+        return this.parse_format_attr();
+      case "ModeAttr":
+        return this.parse_mode_attr();
+      case "MSVtorDispAttr":
+        return this.parse_ms_vtor_disp_attr();
+      case "MaxFieldAlignmentAttr":
+        return this.parse_max_field_alignment_attr();
+      case "NonNullAttr":
+        return this.parse_non_null_attr();
+      case "NoSanitizeAttr":
+        return this.parse_no_sanitize_attr();
       case "TypeVisibilityAttr":
         return this.parse_type_visibility_attr();
       case "VisibilityAttr":
         return this.parse_visibility_attr();
       case "BlockCommandComment":
         return this.parse_block_command_comment();
+      case "AttributedStmt":
       case "BreakStmt":
       case "CXXCatchStmt":
       case "CXXForRangeStmt":
@@ -453,10 +480,13 @@ class ClangAstDumpParser extends Parser {
       case "DeclStmt":
       case "DefaultStmt":
       case "DoStmt":
+      case "ForStmt":
+      case "WhileStmt":
         return this.parse_stmt_node();
       case "ArrayInitIndexExpr":
       case "ArrayInitLoopExpr":
       case "ArraySubscriptExpr":
+      case "AtomicExpr":
         return this.parse_expr_node();
       case "BinaryOperator":
         return this.parse_binary_operator();
@@ -477,6 +507,7 @@ class ClangAstDumpParser extends Parser {
       case "CXXNullPtrLiteralExpr":
       case "CXXPseudoDestructorExpr":
       case "CXXScalarValueInitExpr":
+      case "GNUNullExpr":
         return this.parse_expr_node();
       case "CXXThrowExpr":
       case "CXXTypeidExpr":
@@ -546,22 +577,28 @@ class ClangAstDumpParser extends Parser {
         return this.parse_unresolved_lookup_expr();
       case "UnresolvedMemberExpr":
         return this.parse_expr_node();
-      case "ForStmt":
       case "FullComment":
         return this.parse_stmt_node();
+      case "GotoStmt":
+        return this.parse_goto_stmt();
       case "IfStmt":
         return this.parse_if_stmt();
-      case "InlineCommandComment":
-        return this.parse_inline_command_comment();
+      case "LabelStmt":
+        return this.parse_label_stmt();
       case "Kind":
       case "NullStmt":
       case "ParagraphComment":
         return this.parse_stmt_node();
+      case "InlineCommandComment":
+        return this.parse_inline_command_comment();
       case "ParamCommandComment":
         return this.parse_param_command_comment();
       case "ReturnStmt":
       case "SwitchStmt":
         return this.parse_stmt_node();
+      case "FileScopeAsmDecl":
+      case "EmptyDecl":
+        return this.parse_decl_node();
       case "AccessSpecDecl":
         return this.parse_access_spec_decl();
       case "CXXConstructorDecl":
@@ -571,8 +608,6 @@ class ClangAstDumpParser extends Parser {
       case "FunctionDecl":
       case "MethodDecl":
         return this.parse_callable_decl();
-      case "EmptyDecl":
-        return this.parse_decl_node();
       case "EnumDecl":
         return this.parse_enum_decl();
       case "FieldDecl":
@@ -635,35 +670,33 @@ class ClangAstDumpParser extends Parser {
         return this.parse_verbatim_block_comment();
       case "VerbatimBlockLineComment":
         return this.parse_verbatim_block_line_comment();
-      case "WhileStmt":
-        return this.parse_stmt_node();
       case "AttributedType":
       case "BuiltinType":
       case "CXXRecord":
       case "ClassTemplateSpecialization":
-        return this.parse_type_node();
-      case "ConstantArrayType":
-        return this.parse_constant_array_type();
+      case "ClassTemplatePartialSpecialization":
       case "DecltypeType":
       case "DependentNameType":
       case "DependentTemplateSpecializationType":
       case "ElaboratedType":
       case "Enum":
       case "EnumType":
-        return this.parse_type_node();
-      case "FunctionProtoType":
-        return this.parse_function_proto_type();
       case "InjectedClassNameType":
       case "LValueReferenceType":
       case "ParenType":
       case "PointerType":
-        return this.parse_type_node();
-      case "QualType":
-        return this.parse_qual_type();
       case "RValueReferenceType":
       case "RecordType":
       case "SubstTemplateTypeParmType":
         return this.parse_type_node();
+      case "ConstantArrayType":
+        return this.parse_constant_array_type();
+      case "FunctionProtoType":
+        return this.parse_function_proto_type();
+      case "PackExpansionType":
+        return this.parse_pack_expansion_type();
+      case "QualType":
+        return this.parse_qual_type();
       case "TemplateSpecializationType":
         return this.parse_template_specialization_type();
       case "TemplateTypeParm":
@@ -681,9 +714,23 @@ class ClangAstDumpParser extends Parser {
       case "TemplateArgument":
         return this.parse_template_argument();
       default:
-        return { raw: this.expect(/^.*/) };
-        fatal(`Unsupported AST node kind: ${kind}`);
+        console.error(
+          `Warning: unsupported AST node: ${kind}${this.try_peek(/.*/)}`
+        );
+        return this.parse_unsupported_node();
     }
+  }
+
+  parse_unsupported_node() {
+    return {
+      raw: this.peek(/^.*/),
+      ...(this.try(p => p.parse_decl_node()) ||
+        this.try(p => p.parse_type_node()) ||
+        this.try(p => p.parse_stmt_node()) ||
+        this.try(p => p.parse_addressable_node()) ||
+        {}),
+      extra: this.try(/^.+/)
+    };
   }
 
   parse_addressable_node() {
@@ -721,61 +768,109 @@ class ClangAstDumpParser extends Parser {
     };
   }
 
-  parse_attr_node_base() {
+  parse_attr_node() {
     return {
       ...this.parse_stmt_node(),
       ...this.parse_flags(["Inherited", "Implicit"])
     };
   }
 
+  parse_singleton_attr() {
+    return {
+      ...this.parse_attr_node(),
+      attr: this.skip(" ").expect(/^[\w]+/)
+    };
+  }
+
+  parse_arg_ref() {
+    return { index: Number(this.skip(" ").expect(/^\d+/)) };
+  }
+
+  parse_asm_label_attr() {
+    return { ...this.parse_attr_node(), label: this.expect(/^ "(.*)"/) };
+  }
+
   parse_deprecated_attr() {
-    const result = this.parse_attr_node_base();
+    const result = this.parse_attr_node();
     // There seems to be an always-empty string after the message.
     // Unclear what result is for.
     result.message = this.expect(/^ "(?<message>.*)" ""/).message;
     return result;
   }
 
-  parse_format_attr() {
+  parse_diagnose_if_attr() {
     return {
-      ...this.parse_attr_node_base(),
-      format_attr_kind: this.skip(" ").expect(/^\w+/),
-      format_idx: Number(this.skip(" ").expect(/^\d+/)),
-      first_arg_idx: Number(this.skip(" ").expect(/^\d+/))
+      ...this.parse_attr_node(),
+      message: this.expect(/^ "(.*)"/),
+      diagnostic_type: this.expect(/^ DT_(Error|Warning)/),
+      ...this.parse_flags(["ArgDependent"]),
+      attr_parent: this.parse_decl_ref() // Probably redundant.
     };
   }
 
-  parse_ms_vtor_disp_attr() {
+  parse_enable_if_attr() {
     return {
-      ...this.parse_attr_node_base(),
-      action: Number(this.skip(" ").expect(/^\d+/))
+      ...this.parse_attr_node(),
+      message: this.try(/^ "(?:(?:<no message provided>)|(.*))"/, null)
+    };
+  }
+
+  parse_format_attr() {
+    return {
+      ...this.parse_attr_node(),
+      format_kind: this.skip(" ").expect(/^\w+/),
+      format: this.parse_arg_ref(),
+      first_arg: this.parse_arg_ref()
     };
   }
 
   parse_max_field_alignment_attr() {
     return {
-      ...this.parse_attr_node_base(),
+      ...this.parse_attr_node(),
       alignment: Number(this.skip(" ").expect(/^\d+/))
     };
   }
 
-  parse_simple_attr() {
+  parse_mode_attr() {
     return {
-      ...this.parse_attr_node_base(),
-      attr: this.skip(" ").expect(/^[\w]+/)
+      ...this.parse_attr_node(),
+      mode: this.expect(/^ __([QHSDT][IF]|word)__/)
+    };
+  }
+
+  parse_ms_vtor_disp_attr() {
+    return {
+      ...this.parse_attr_node(),
+      mode: ["Never", "ForVBaseOverride", "ForVFTable"][
+        this.skip(" ").expect(/^\d+/)
+      ]
+    };
+  }
+
+  parse_non_null_attr() {
+    return {
+      ...this.parse_attr_node(),
+      args: this.repeat(p => p.parse_arg_ref())
+    };
+  }
+
+  parse_no_sanitize_attr() {
+    return {
+      ...this.parse_attr_node(),
+      sanitizers: this.repeat(p => p.expect(/^ (\S+)/))
     };
   }
 
   parse_type_visibility_attr() {
     return {
-      ...this.parse_attr_node_base(),
+      ...this.parse_attr_node(),
       type_visibility: this.parse_visibility()
     };
   }
 
   parse_visibility_attr() {
     return {
-      ...this.parse_attr_node_base(),
+      ...this.parse_attr_node(),
       visibility: this.parse_visibility()
     };
   }
@@ -1073,10 +1168,25 @@ class ClangAstDumpParser extends Parser {
     };
   }
 
+  parse_goto_stmt() {
+    return {
+      ...this.parse_stmt_node(),
+      label_name: this.parse_single_quoted(),
+      label: this.parse_node_ref()
+    };
+  }
+
   parse_if_stmt() {
     return {
       ...this.parse_stmt_node(),
       ...this.parse_flags(["has_init", "has_var", "has_else"])
+    };
+  }
+
+  parse_label_stmt() {
+    return {
+      ...this.parse_stmt_node(),
+      label_name: this.parse_single_quoted()
     };
   }
 
@@ -1165,7 +1275,6 @@ class ClangAstDumpParser extends Parser {
       overrides: this.try_parse_leaf(p => {
         const overrides = [];
         p.expect("Overrides: [");
-        p.is_root = true;
         do {
           overrides.push({
             decl: {
@@ -1419,6 +1528,13 @@ class ClangAstDumpParser extends Parser {
       calling_convention: this.skip(" ").expect(
         /^(?:cdecl|stdcall|fastcall|thiscall|pascal|vectorcall|ms_abi|sysv_abi|regcall|aapcs|aapcs-vfp|aarch64_vector_pcs|intel_ocl_bicc|spir_function|opencl_kernel|swiftcall|preserve_most|preserve_all)\b/
       )
+    };
+  }
+
+  parse_pack_expansion_type() {
+    return {
+      ...this.parse_type_node(),
+      num_expansions: this.try(p => Number(p.expect(/^ (\d+)/)), 0)
     };
   }
 
