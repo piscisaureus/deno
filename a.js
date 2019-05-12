@@ -440,18 +440,18 @@ class ClangAstDumpParser extends Parser {
       case "DeclStmt":
       case "DefaultStmt":
       case "DoStmt":
-        return this.parse_src_range_node();
+        return this.parse_stmt_node();
       case "ArrayInitIndexExpr":
       case "ArrayInitLoopExpr":
       case "ArraySubscriptExpr":
-        return this.parse_expr_node_base();
+        return this.parse_expr_node();
       case "BinaryOperator":
         return this.parse_binary_operator();
       case "CXXBindTemporaryExpr":
         return this.parse_cxx_bind_temporary_expr();
       case "CXXDefaultArgExpr":
       case "CXXDefaultInitExpr":
-        return this.parse_expr_node_base();
+        return this.parse_expr_node();
       case "CXXNewExpr":
         return this.parse_cxx_new_expr();
       case "CXXDeleteExpr":
@@ -461,25 +461,25 @@ class ClangAstDumpParser extends Parser {
       case "CXXDependentScopeMemberExpr":
         return this.parse_cxx_dependent_scope_member_expr();
       case "CXXMemberCallExpr":
-        return this.parse_expr_node_base();
+        return this.parse_expr_node();
       case "CXXNoexceptExpr":
       case "CXXNullPtrLiteralExpr":
       case "CXXOperatorCallExpr":
       case "CXXPseudoDestructorExpr":
       case "CXXScalarValueInitExpr":
-        return this.parse_expr_node_base();
+        return this.parse_expr_node();
       case "CXXThrowExpr":
       case "CXXTypeidExpr":
-        return this.parse_expr_node_base();
+        return this.parse_expr_node();
       case "CXXUnresolvedConstructExpr":
         return this.parse_cxx_unresolved_construct_expr();
       case "CallExpr":
-        return this.parse_expr_node_base();
+        return this.parse_expr_node();
       case "CompoundAssignOperator":
         return this.parse_compound_assign_operator();
       case "ConditionalOperator":
       case "ConstantExpr":
-        return this.parse_expr_node_base();
+        return this.parse_expr_node();
       case "CXXConstructExpr":
       case "CXXTemporaryObjectExpr":
         return this.parse_construct_expr_base();
@@ -487,7 +487,7 @@ class ClangAstDumpParser extends Parser {
         return this.parse_decl_ref_expr();
       case "DependentScopeDeclRefExpr":
       case "ExprWithCleanups":
-        return this.parse_expr_node_base();
+        return this.parse_expr_node();
       case "ImplicitCastExpr":
         return this.parse_implicit_cast_expr();
       case "CStyleCastExpr":
@@ -500,11 +500,11 @@ class ClangAstDumpParser extends Parser {
       case "CXXStaticCastExpr":
         return this.parse_cxx_named_cast_expr_base();
       case "ImplicitValueInitExpr":
-        return this.parse_expr_node_base();
+        return this.parse_expr_node();
       case "InitListExpr":
         return this.parse_init_list_expr();
       case "LambdaExpr":
-        return this.parse_expr_node_base();
+        return this.parse_expr_node();
       case "CXXBoolLiteralExpr":
         return this.parse_cxx_bool_literal_expr();
       case "CharacterLiteral":
@@ -513,19 +513,19 @@ class ClangAstDumpParser extends Parser {
       case "StringLiteral":
         return this.parse_literal_node_base();
       case "MaterializeTemporaryExpr":
-        return this.parse_expr_node_base();
+        return this.parse_expr_node();
       case "MemberExpr":
         return this.parse_member_expr();
       case "OpaqueValueExpr":
       case "PackExpansionExpr":
       case "ParenExpr":
       case "ParenListExpr":
-        return this.parse_expr_node_base();
+        return this.parse_expr_node();
       case "SizeOfPackExpr":
         return this.parse_size_of_pack_expr();
       case "SubstNonTypeTemplateParmExpr":
       case "TypeTraitExpr":
-        return this.parse_expr_node_base();
+        return this.parse_expr_node();
       case "UnaryExprOrTypeTraitExpr":
         return this.parse_unary_expr_or_type_trait_expr();
       case "UnaryOperator":
@@ -533,10 +533,10 @@ class ClangAstDumpParser extends Parser {
       case "UnresolvedLookupExpr":
         return this.parse_unresolved_lookup_expr();
       case "UnresolvedMemberExpr":
-        return this.parse_expr_node_base();
+        return this.parse_expr_node();
       case "ForStmt":
       case "FullComment":
-        return this.parse_src_range_node();
+        return this.parse_stmt_node();
       case "IfStmt":
         return this.parse_if_stmt();
       case "InlineCommandComment":
@@ -544,12 +544,12 @@ class ClangAstDumpParser extends Parser {
       case "Kind":
       case "NullStmt":
       case "ParagraphComment":
-        return this.parse_src_range_node();
+        return this.parse_stmt_node();
       case "ParamCommandComment":
         return this.parse_param_command_comment();
       case "ReturnStmt":
       case "SwitchStmt":
-        return this.parse_src_range_node();
+        return this.parse_stmt_node();
       case "AccessSpecDecl":
         return this.parse_access_spec_decl();
       case "CXXConstructorDecl":
@@ -560,7 +560,7 @@ class ClangAstDumpParser extends Parser {
       case "MethodDecl":
         return this.parse_callable_decl();
       case "EmptyDecl":
-        return this.parse_decl_node_base();
+        return this.parse_decl_node();
       case "EnumDecl":
         return this.parse_enum_decl();
       case "FieldDecl":
@@ -570,13 +570,13 @@ class ClangAstDumpParser extends Parser {
       case "LinkageSpecDecl":
         return this.parse_linkage_spec_decl();
       case "EnumConstantDecl":
-        return this.parse_named_and_typed_decl_node_base();
+        return this.parse_decl_node_with_name_and_type();
       case "IndirectFieldDecl":
         return this.parse_indirect_field_decl();
       case "TypeAliasDecl":
       case "TypedefDecl":
       case "UnresolvedUsingValueDecl":
-        return this.parse_named_and_typed_decl_node_base();
+        return this.parse_decl_node_with_name_and_type();
       case "BuiltinTemplateDecl":
       case "ClassTemplateDecl":
       case "FunctionTemplateDecl":
@@ -599,15 +599,15 @@ class ClangAstDumpParser extends Parser {
       case "CXXRecordDecl":
       case "ClassTemplatePartialSpecializationDecl":
       case "ClassTemplateSpecializationDecl":
-        return this.parse_record_node_base();
+        return this.parse_record_decl();
       case "StaticAssertDecl":
-        return this.parse_decl_node_base();
+        return this.parse_decl_node();
       case "TemplateTemplateParmDecl":
         return this.parse_template_template_parm_decl();
       case "TemplateTypeParmDecl":
         return this.parse_template_type_parm_decl();
       case "TranslationUnitDecl":
-        return this.parse_decl_node_base();
+        return this.parse_decl_node();
       case "UsingDirectiveDecl":
       case "UsingShadowDecl":
         return this.parse_using_decl();
@@ -624,12 +624,12 @@ class ClangAstDumpParser extends Parser {
       case "VerbatimBlockLineComment":
         return this.parse_verbatim_block_line_comment();
       case "WhileStmt":
-        return this.parse_src_range_node();
+        return this.parse_stmt_node();
       case "AttributedType":
       case "BuiltinType":
       case "CXXRecord":
       case "ClassTemplateSpecialization":
-        return this.parse_typed_node();
+        return this.parse_type_node();
       case "ConstantArrayType":
         return this.parse_constant_array_type();
       case "DecltypeType":
@@ -638,30 +638,30 @@ class ClangAstDumpParser extends Parser {
       case "ElaboratedType":
       case "Enum":
       case "EnumType":
-        return this.parse_typed_node();
+        return this.parse_type_node();
       case "FunctionProtoType":
         return this.parse_function_proto_type();
       case "InjectedClassNameType":
       case "LValueReferenceType":
       case "ParenType":
       case "PointerType":
-        return this.parse_typed_node();
+        return this.parse_type_node();
       case "QualType":
         return this.parse_qual_type();
       case "RValueReferenceType":
       case "RecordType":
       case "SubstTemplateTypeParmType":
-        return this.parse_typed_node();
+        return this.parse_type_node();
       case "TemplateSpecializationType":
         return this.parse_template_specialization_type();
       case "TemplateTypeParm":
-        return this.parse_typed_node();
+        return this.parse_type_node();
       case "TemplateTypeParmType":
         return this.parse_template_type_parm_type();
       case "TypeAlias":
       case "Typedef":
       case "TypedefType":
-        return this.parse_typed_node();
+        return this.parse_type_node();
       case "UnaryTransformType":
         return this.parse_unary_transform_type();
       case "CXXCtorInitializer":
@@ -701,7 +701,7 @@ class ClangAstDumpParser extends Parser {
     return result;
   }
 
-  parse_src_range_node() {
+  parse_stmt_node() {
     return {
       ...this.parse_addressable_node(),
       source_range: this.skip(" ").expect(p => new SourceRange(p))
@@ -710,7 +710,7 @@ class ClangAstDumpParser extends Parser {
 
   parse_attr_node_base() {
     return {
-      ...this.parse_src_range_node(),
+      ...this.parse_stmt_node(),
       ...this.parse_flags(["Inherited", "Implicit"])
     };
   }
@@ -769,14 +769,14 @@ class ClangAstDumpParser extends Parser {
 
   parse_block_command_comment() {
     return {
-      ...this.parse_src_range_node(),
+      ...this.parse_stmt_node(),
       ...this.skip(" ").expect(/^Name="(?<command_name>.*)"/)
     };
   }
 
-  parse_expr_node_base() {
+  parse_expr_node() {
     return {
-      ...this.parse_src_range_node(),
+      ...this.parse_stmt_node(),
       type: this.parse_type(),
       value_kind: this.parse_value_kind()
     };
@@ -784,13 +784,13 @@ class ClangAstDumpParser extends Parser {
 
   parse_binary_operator() {
     return {
-      ...this.parse_expr_node_base(),
+      ...this.parse_expr_node(),
       operator: this.parse_single_quoted()
     };
   }
 
   parse_cxx_bind_temporary_expr() {
-    const result = this.parse_expr_node_base();
+    const result = this.parse_expr_node();
     this.skip(" (");
     result.temporary = {
       kind: this.parse_kind(),
@@ -802,7 +802,7 @@ class ClangAstDumpParser extends Parser {
 
   parse_cxx_dependent_scope_member_expr() {
     return {
-      ...this.parse_expr_node_base(),
+      ...this.parse_expr_node(),
       operator: this.try_skip(" ").expect(/^(\.|->)/),
       member_name: this.parse_name()
     };
@@ -825,7 +825,7 @@ class ClangAstDumpParser extends Parser {
   }
 
   parse_implicit_cast_expr() {
-    const expr = this.parse_expr_node_base();
+    const expr = this.parse_expr_node();
     let { kind_part, flag_part } =
       this.try(
         /^(?<kind_part>.*) (?<flag_part>part_of_explicit_cast)(?=[\n\r])/
@@ -836,14 +836,14 @@ class ClangAstDumpParser extends Parser {
   }
 
   parse_c_style_cast_expr() {
-    const expr = this.parse_expr_node_base();
+    const expr = this.parse_expr_node();
     const { rest, ...cast_kind } = this.parse_cast_kind();
     assert(rest === "");
     return { ...expr, ...cast_kind };
   }
 
   parse_cxx_named_cast_expr_base() {
-    const result = this.parse_expr_node_base();
+    const result = this.parse_expr_node();
     const { rest, ...cast_kind } = this.parse_cast_kind();
     assign(result, cast_kind);
     // The type inside the angle brackets (static_cast<this_type>) is redundant.
@@ -854,7 +854,7 @@ class ClangAstDumpParser extends Parser {
   }
 
   parse_cxx_functional_cast_expr() {
-    const result = this.parse_expr_node_base();
+    const result = this.parse_expr_node();
     const { rest, ...cast_kind } = this.parse_cast_kind();
     assign(result, cast_kind);
     // Further information in the rest is redundant.
@@ -864,7 +864,7 @@ class ClangAstDumpParser extends Parser {
 
   parse_cxx_new_expr() {
     return {
-      ...this.parse_expr_node_base(),
+      ...this.parse_expr_node(),
       ...this.parse_flags(["array", "global"]),
       operator_new: this.try(p => p.parse_decl_ref())
     };
@@ -872,7 +872,7 @@ class ClangAstDumpParser extends Parser {
 
   parse_cxx_delete_expr() {
     return {
-      ...this.parse_expr_node_base(),
+      ...this.parse_expr_node(),
       ...this.parse_flags(["array", "global"]),
       operator_delete: this.try(p => p.parse_decl_ref())
     };
@@ -880,14 +880,14 @@ class ClangAstDumpParser extends Parser {
 
   parse_cxx_this_expr() {
     return {
-      ...this.parse_expr_node_base(),
+      ...this.parse_expr_node(),
       implicit: Boolean(this.try(" implicit")),
       name: this.skip(" ").expect("this")
     };
   }
 
   parse_cxx_unresolved_construct_expr() {
-    const result = this.parse_expr_node_base();
+    const result = this.parse_expr_node();
 
     // This type is redundant.
     const type = this.parse_type();
@@ -898,7 +898,7 @@ class ClangAstDumpParser extends Parser {
   }
 
   parse_compound_assign_operator() {
-    const result = this.parse_expr_node_base();
+    const result = this.parse_expr_node();
     this.skip(" ");
     this.expect("'");
     result.operator = this.expect(/^[^']+/);
@@ -912,7 +912,7 @@ class ClangAstDumpParser extends Parser {
 
   parse_construct_expr_base() {
     return {
-      ...this.parse_expr_node_base(),
+      ...this.parse_expr_node(),
       constructor_type: this.parse_type(),
       ...this.parse_flags([
         "elidable",
@@ -980,13 +980,13 @@ class ClangAstDumpParser extends Parser {
 
   parse_decl_ref_expr() {
     return {
-      ...this.parse_expr_node_base(),
+      ...this.parse_expr_node(),
       ...this.parse_decl_ref()
     };
   }
 
   parse_init_list_expr() {
-    const result = this.parse_expr_node_base();
+    const result = this.parse_expr_node();
     result.array_filler = this.try_parse_leaf(p => {
       p.expect("array_filler: ");
       p.parse_node();
@@ -996,7 +996,7 @@ class ClangAstDumpParser extends Parser {
 
   parse_literal_node_base() {
     return {
-      ...this.parse_expr_node_base(),
+      ...this.parse_expr_node(),
       source: this.skip(" ").expect(/^.*\S/)
     };
   }
@@ -1009,7 +1009,7 @@ class ClangAstDumpParser extends Parser {
 
   parse_member_expr() {
     return {
-      ...this.parse_expr_node_base(),
+      ...this.parse_expr_node(),
       operator: this.try_skip(" ").expect(/^(\.|->)/),
       member_name: this.parse_name(),
       member_decl: this.parse_node_ref()
@@ -1017,7 +1017,7 @@ class ClangAstDumpParser extends Parser {
   }
 
   parse_size_of_pack_expr() {
-    const result = this.parse_expr_node_base();
+    const result = this.parse_expr_node();
     result.pack = this.parse_node_ref();
     this.parse_name(); // Name of pack; redundant.
     return result;
@@ -1025,7 +1025,7 @@ class ClangAstDumpParser extends Parser {
 
   parse_unary_expr_or_type_trait_expr() {
     return {
-      ...this.parse_expr_node_base(),
+      ...this.parse_expr_node(),
       operator: this.skip(" ").expect(/^[\w]+/),
       argument_type: this.try(p => p.parse_type())
     };
@@ -1033,7 +1033,7 @@ class ClangAstDumpParser extends Parser {
 
   parse_unary_operator() {
     return {
-      ...this.parse_expr_node_base(),
+      ...this.parse_expr_node(),
       attachment: this.skip(" ").expect(/^(?:prefix|postfix)/),
       operator: this.parse_single_quoted(),
       can_overflow: !this.try(p => p.skip(" ").expect("cannot overflow"))
@@ -1042,21 +1042,21 @@ class ClangAstDumpParser extends Parser {
 
   parse_unresolved_lookup_expr() {
     return {
-      ...this.parse_expr_node_base(),
+      ...this.parse_expr_node(),
       unknown: this.skip(" ").expect(/^.*/)
     };
   }
 
   parse_if_stmt() {
     return {
-      ...this.parse_src_range_node(),
+      ...this.parse_stmt_node(),
       ...this.parse_flags(["has_init", "has_var", "has_else"])
     };
   }
 
   parse_inline_command_comment() {
     return {
-      ...this.parse_src_range_node(),
+      ...this.parse_stmt_node(),
       command_name: this.expect(/^ Name="(.*?)"/),
       render_kind: this.expect(/^ Render(\w+)/),
       args: this.repeat(p => p.expect(/^ Arg\[\d+\]="(.*?)"/))
@@ -1064,7 +1064,7 @@ class ClangAstDumpParser extends Parser {
   }
 
   parse_param_command_comment() {
-    const result = this.parse_src_range_node();
+    const result = this.parse_stmt_node();
     this.skip(" ");
     result.direction = {
       in: "In",
@@ -1089,9 +1089,9 @@ class ClangAstDumpParser extends Parser {
     return result;
   }
 
-  parse_decl_node_base() {
+  parse_decl_node() {
     return {
-      ...this.parse_src_range_node(),
+      ...this.parse_stmt_node(),
       source_location: this.skip(" ").expect(p => new SourceLocation(p)),
       ...this.parse_flags(["implicit", "referenced", "used", "constexpr"])
     };
@@ -1099,7 +1099,7 @@ class ClangAstDumpParser extends Parser {
 
   parse_access_spec_decl() {
     return {
-      ...this.parse_decl_node_base(),
+      ...this.parse_decl_node(),
       access: this.parse_access_specifier()
     };
   }
@@ -1134,7 +1134,7 @@ class ClangAstDumpParser extends Parser {
 
   parse_callable_decl() {
     return {
-      ...this.parse_decl_node_base(),
+      ...this.parse_decl_node(),
       ...this.parse_callable_decl_info(),
       overrides: this.try_parse_leaf(p => {
         const overrides = [];
@@ -1155,7 +1155,7 @@ class ClangAstDumpParser extends Parser {
 
   parse_enum_decl() {
     return {
-      ...this.parse_decl_node_base(),
+      ...this.parse_decl_node(),
       scope: this.try(p => p.skip(" ").expect(/^(?:class|struct)/), "unscoped"),
       name: this.try(p => p.parse_name()),
       type: this.try(p => p.parse_type())
@@ -1164,7 +1164,7 @@ class ClangAstDumpParser extends Parser {
 
   parse_field_decl() {
     return {
-      ...this.parse_decl_node_base(),
+      ...this.parse_decl_node(),
       name: this.try(p => p.parse_name()),
       type: this.parse_type(),
       ...this.parse_flags(["mutable"])
@@ -1173,34 +1173,34 @@ class ClangAstDumpParser extends Parser {
 
   parse_friend_decl() {
     return {
-      ...this.parse_decl_node_base(),
+      ...this.parse_decl_node(),
       friend_type: this.try(p => p.parse_type())
     };
   }
 
   parse_linkage_spec_decl() {
     return {
-      ...this.parse_decl_node_base(),
+      ...this.parse_decl_node(),
       linkage: this.skip(" ").expect(/^C\+\+|^C/)
     };
   }
 
-  parse_named_and_typed_decl_node_base() {
+  parse_decl_node_with_name_and_type() {
     return {
-      ...this.parse_decl_node_base(),
+      ...this.parse_decl_node(),
       name: this.parse_name(),
       type: this.parse_type()
     };
   }
 
   parse_indirect_field_decl() {
-    const result = this.parse_named_and_typed_decl_node_base();
+    const result = this.parse_decl_node_with_name_and_type();
     // Todo: parse chain (list of inline DeclRefs).
     return result;
   }
 
   parse_named_decl_node_base() {
-    return { ...this.parse_decl_node_base(), name: this.parse_name() };
+    return { ...this.parse_decl_node(), name: this.parse_name() };
   }
 
   parse_namespace_decl() {
@@ -1216,7 +1216,7 @@ class ClangAstDumpParser extends Parser {
 
   parse_non_type_template_parm_decl() {
     return {
-      ...this.parse_decl_node_base(),
+      ...this.parse_decl_node(),
       type: this.parse_type(),
       position: this.parse_template_parameter_position(),
       is_parameter_pack: this.parse_parameter_pack_indicator(),
@@ -1226,14 +1226,14 @@ class ClangAstDumpParser extends Parser {
 
   parse_parm_var_decl() {
     return {
-      ...this.parse_decl_node_base(),
+      ...this.parse_decl_node(),
       name: this.try(p => p.parse_name()),
       ...this.parse_var_type_and_properties()
     };
   }
 
   parse_pragma_comment_decl() {
-    const result = this.parse_decl_node_base();
+    const result = this.parse_decl_node();
     Object.assign(
       result,
       this.skip(" ").expect(/(?<comment_kind>\w+) "(?<arg>.*)"/)
@@ -1242,7 +1242,7 @@ class ClangAstDumpParser extends Parser {
   }
 
   parse_pragma_detect_mismatch_decl() {
-    const result = this.parse_decl_node_base();
+    const result = this.parse_decl_node();
     Object.assign(
       result,
       this.skip(" ").expect(/"(?<name>.+)" "(?<value>.*)"/)
@@ -1250,8 +1250,8 @@ class ClangAstDumpParser extends Parser {
     return result;
   }
 
-  parse_record_node_base() {
-    const result = this.parse_decl_node_base();
+  parse_record_decl() {
+    const result = this.parse_decl_node();
     result.record_kind = this.skip(" ").expect(
       /^(?:class|struct|union|interface|enum)/
     );
@@ -1276,7 +1276,7 @@ class ClangAstDumpParser extends Parser {
 
   parse_template_template_parm_decl() {
     return {
-      ...this.parse_decl_node_base(),
+      ...this.parse_decl_node(),
       position: this.parse_template_parameter_position(),
       is_parameter_pack: this.parse_parameter_pack_indicator(),
       name: this.try(p => p.parse_name())
@@ -1285,7 +1285,7 @@ class ClangAstDumpParser extends Parser {
 
   parse_template_type_parm_decl() {
     return {
-      ...this.parse_decl_node_base(),
+      ...this.parse_decl_node(),
       type_kind: this.skip(" ").expect(/^(?:class|typename)/),
       position: this.parse_template_parameter_position(),
       is_parameter_pack: this.parse_parameter_pack_indicator(),
@@ -1294,7 +1294,7 @@ class ClangAstDumpParser extends Parser {
   }
 
   parse_using_decl() {
-    const result = this.parse_decl_node_base();
+    const result = this.parse_decl_node();
     this.parse_kind(); // Redundant.
     result.target = this.parse_node_ref();
     this.skip(" ").skip(/^.*/); // Redundant.
@@ -1309,11 +1309,11 @@ class ClangAstDumpParser extends Parser {
   }
 
   parse_var_decl() {
-    return { ...this.parse_decl_node_base(), ...this.parse_var_base() };
+    return { ...this.parse_decl_node(), ...this.parse_var_base() };
   }
 
   parse_var_template_partial_specialization_decl() {
-    const result = this.parse_decl_node_base();
+    const result = this.parse_decl_node();
     // This info is present here from clang 9.0.0-pre. Up to v0.8 it's usually
     // appended to the first template argument.
     result.var = this.try(p => p.parse_var_base());
@@ -1321,7 +1321,7 @@ class ClangAstDumpParser extends Parser {
   }
 
   parse_var_template_specialization_decl() {
-    const result = this.parse_decl_node_base();
+    const result = this.parse_decl_node();
     // This info is present here from clang 9.0.0-pre. Up to v0.8 it's usually
     // appended to the first template argument.
     result.var = this.try(p => p.parse_var_base());
@@ -1329,11 +1329,11 @@ class ClangAstDumpParser extends Parser {
   }
 
   parse_text_comment() {
-    return { ...this.parse_src_range_node(), text: this.parse_comment_text() };
+    return { ...this.parse_stmt_node(), text: this.parse_comment_text() };
   }
 
   parse_verbatim_block_comment() {
-    const result = this.parse_src_range_node();
+    const result = this.parse_stmt_node();
     Object.assign(
       this.skip(" ").expect(
         /^Name="(?<command_name>.*)" CloseName="(?<close_command_name>.*)"/
@@ -1343,10 +1343,10 @@ class ClangAstDumpParser extends Parser {
   }
 
   parse_verbatim_block_line_comment() {
-    return { ...this.parse_src_range_node(), text: this.parse_comment_text() };
+    return { ...this.parse_stmt_node(), text: this.parse_comment_text() };
   }
 
-  parse_typed_node() {
+  parse_type_node() {
     return {
       ...this.parse_addressable_node(),
       type: this.skip(" ").expect(p => new Type(p)),
@@ -1362,7 +1362,7 @@ class ClangAstDumpParser extends Parser {
   }
 
   parse_constant_array_type() {
-    const result = this.parse_typed_node();
+    const result = this.parse_type_node();
     result.size = Number(this.skip(" ").expect(/^\d+/));
     result.array_type = this.parse_array_type();
     this.try(/^[ ]+(?= )/); // Skip extra spaces.
@@ -1373,7 +1373,7 @@ class ClangAstDumpParser extends Parser {
 
   parse_function_proto_type() {
     return {
-      ...this.parse_typed_node(),
+      ...this.parse_type_node(),
       ...this.parse_flags(["trailing_return"]),
       ...this.parse_type_qualifiers(),
       ...this.parse_flags(["variadic"]),
@@ -1388,12 +1388,12 @@ class ClangAstDumpParser extends Parser {
   }
 
   parse_qual_type() {
-    return { ...this.parse_typed_node(), ...this.parse_type_qualifiers() };
+    return { ...this.parse_type_node(), ...this.parse_type_qualifiers() };
   }
 
   parse_template_specialization_type() {
     return {
-      ...this.parse_typed_node(),
+      ...this.parse_type_node(),
       ...this.parse_flags(["alias"]),
       template_name: this.parse_name()
     };
@@ -1401,14 +1401,14 @@ class ClangAstDumpParser extends Parser {
 
   parse_template_type_parm_type() {
     return {
-      ...this.parse_typed_node(),
+      ...this.parse_type_node(),
       position: this.parse_template_parameter_position()
     };
   }
 
   parse_unary_transform_type() {
     return {
-      ...this.parse_typed_node(),
+      ...this.parse_type_node(),
       unary_transform_type_kind: this.skip(" ").expect("underlying_type")
     };
   }
