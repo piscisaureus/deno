@@ -394,30 +394,6 @@ class ClangAstDumpParser extends Parser {
     return result;
   }
 
-  parse_cast(is_implicit_cast = false) {
-    this.try_skip(" ");
-    let line = this.expect(/^.*/);
-    let part_of_explicit_cast;
-    if (is_implicit_cast) {
-      const m = line.match(/^(?<line>.*) (?<flag>part_of_explicit_cast)$/);
-      part_of_explicit_cast = !!m;
-      line = m ? m.groups.line : line;
-    }
-    let {
-      groups: { description, cast_kind, base_path }
-    } =
-      line.match(
-        /^((?<description>.*) )?<(?<cast_kind>(Unchecked)?(BaseToDerived|DerivedToBase)) \((?<base_path>.+)\)>$/
-      ) || line.match(/^((?<description>.*) )?<(?<cast_kind>[a-zA-Z]+)>$/);
-    if (description === undefined) {
-      description = "";
-    }
-    if (base_path !== undefined) {
-      base_path = base_path.split(" -> ");
-    }
-    return { description, cast_kind, base_path, part_of_explicit_cast };
-  }
-
   ////////////////////////////////////////////////////////////////////////////
 
   parse_node_specific(kind) {
@@ -478,15 +454,8 @@ class ClangAstDumpParser extends Parser {
         return this.parse_cxx_delete_expr();
       case "CXXDependentScopeMemberExpr":
         return this.parse_cxx_dependent_scope_member_expr();
-      case "CXXFunctionalCastExpr":
-        return this.parse_cxx_functional_cast_expr();
       case "CXXMemberCallExpr":
         return this.parse_expr_node_base();
-      case "CXXConstCastExpr":
-      case "CXXDynamicCastExpr":
-      case "CXXReinterpretCastExpr":
-      case "CXXStaticCastExpr":
-        return this.parse_cxx_named_cast_expr_base();
       case "CXXNewExpr":
         return this.parse_cxx_new_expr();
       case "CXXNoexceptExpr":
@@ -517,9 +486,17 @@ class ClangAstDumpParser extends Parser {
       case "DependentScopeDeclRefExpr":
       case "ExprWithCleanups":
         return this.parse_expr_node_base();
-      case "CStyleCastExpr":
       case "ImplicitCastExpr":
-        return this.parse_implicit_cast_expr_base();
+        return this.parse_implicit_cast_expr();
+      case "CStyleCastExpr":
+        return this.parse_c_style_cast_expr();
+      case "CXXFunctionalCastExpr":
+        return this.parse_cxx_functional_cast_expr();
+      case "CXXConstCastExpr":
+      case "CXXDynamicCastExpr":
+      case "CXXReinterpretCastExpr":
+      case "CXXStaticCastExpr":
+        return this.parse_cxx_named_cast_expr_base();
       case "ImplicitValueInitExpr":
         return this.parse_expr_node_base();
       case "InitListExpr":
@@ -829,27 +806,57 @@ class ClangAstDumpParser extends Parser {
     };
   }
 
-  parse_cxx_functional_cast_expr() {
-    const result = this.parse_expr_node_base();
-    const { description, ...cast_info } = this.parse_cast(false);
-    assign(result, cast_info);
-    // Further information in the description is redundant.
-    assert(/^functional cast to .*\S$/.test(description));
-    return result;
+  parse_cast_kind(line = this.expect(/^.*/)) {
+    let {
+      groups: { rest, cast_kind, base_path }
+    } =
+      line.match(
+        /^(\s*(?<rest>.*) )?<(?<cast_kind>(Unchecked)?(BaseToDerived|DerivedToBase)) \((?<base_path>.+)\)>$/
+      ) || line.match(/^(\s*(?<rest>.*) )?<(?<cast_kind>[a-zA-Z]+)>$/);
+    if (rest === undefined) {
+      rest = "";
+    }
+    if (base_path !== undefined) {
+      base_path = base_path.split(" -> ");
+    }
+    return { rest, cast_kind, base_path };
+  }
+
+  parse_implicit_cast_expr() {
+    const expr = this.parse_expr_node_base();
+    let { kind_part, flag_part } =
+      this.try(
+        /^(?<kind_part>.*) (?<flag_part>part_of_explicit_cast)(?=[\n\r])/
+      ) || this.expect(/^(?<kind_part>.*)/);
+    const { rest, ...cast_kind } = this.parse_cast_kind(kind_part);
+    assert(rest === "");
+    return { ...expr, ...cast_kind, part_of_explicit_cast: !!flag_part };
+  }
+
+  parse_c_style_cast_expr() {
+    const expr = this.parse_expr_node_base();
+    const { rest, ...cast_kind } = this.parse_cast_kind();
+    assert(rest === "");
+    return { ...expr, ...cast_kind };
   }
 
   parse_cxx_named_cast_expr_base() {
     const result = this.parse_expr_node_base();
-    const {
-      description,
-      part_of_explicit_cast,
-      ...cast_info
-    } = this.parse_cast(false);
-    assign(result, cast_info);
+    const { rest, ...cast_kind } = this.parse_cast_kind();
+    assign(result, cast_kind);
     // The type inside the angle brackets (static_cast<this_type>) is redundant.
     // It's the same as the result type of result expression (which is parsed by
     // our base class).
-    result.cast_name = /^[a-z_]+_cast(?=<.+>$)/.exec(description)[0];
+    result.cast_name = /^[a-z_]+_cast(?=<.+>$)/.exec(rest)[0];
+    return result;
+  }
+
+  parse_cxx_functional_cast_expr() {
+    const result = this.parse_expr_node_base();
+    const { rest, ...cast_kind } = this.parse_cast_kind();
+    assign(result, cast_kind);
+    // Further information in the rest is redundant.
+    assert(/^functional cast to .*\S$/.test(rest));
     return result;
   }
 
@@ -904,14 +911,6 @@ class ClangAstDumpParser extends Parser {
     this.parse_kind(); // Redundant info.
     result.decl = this.parse_node_ref();
     this.skip(/^.*/); // The rest of the line is also redundant.
-    return result;
-  }
-
-  parse_implicit_cast_expr_base() {
-    const result = this.parse_expr_node_base();
-    const { description, ...cast_info } = this.parse_cast(true);
-    assign(result, cast_info);
-    assert(description === "");
     return result;
   }
 
