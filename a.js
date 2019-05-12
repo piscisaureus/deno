@@ -281,7 +281,7 @@ class ClangAstDumpParser extends Parser {
 
   parse_name() {
     let name = this.try_skip(" ").expect(
-      /^(?:operator(?:[ \t]*[^\s\d][^\s]*)+|::|~|\w)+<?/
+      /^(?:operator(?:[ \t]*[^\s\d][^\s]*)+|::|~|[a-zA-Z_](?:\w*))+<?/
     );
     if (!/</.test(name) || /operator/.test(name)) return name;
 
@@ -300,7 +300,17 @@ class ClangAstDumpParser extends Parser {
   }
 
   parse_value_kind() {
-    return this.try(p => p.skip(" ").expect(/^(?:lvalue|xvalue)/), "rvalue");
+    return this.try(p => p.skip(" ").expect(/^(?:lvalue|xvalue)\b/), "rvalue");
+  }
+
+  parse_object_kind() {
+    return this.try(
+      p =>
+        p
+          .skip(" ")
+          .expect(/^(?:bitfield|objcproperty|objcsubscript|vectorcomponent)\b/),
+      "ordinary"
+    );
   }
 
   parse_node_ref() {
@@ -312,7 +322,8 @@ class ClangAstDumpParser extends Parser {
   }
 
   parse_parameter_pack_indicator() {
-    return Boolean(this.try(" ..."));
+    // Three dots (...) are used by older versions of clang.
+    return Boolean(this.try(/^( ?[\.]{3}| pack\b)/));
   }
 
   parse_type_qualifiers() {
@@ -392,6 +403,8 @@ class ClangAstDumpParser extends Parser {
   }
 
   parse_node_kind_specific(kind) {
+    this.is_root = true;
+    //console.log(kind, this.try_peek(/^.*/));
     switch (kind) {
       case "<<<NULL>>>":
         return {};
@@ -460,11 +473,8 @@ class ClangAstDumpParser extends Parser {
         return this.parse_cxx_this_expr();
       case "CXXDependentScopeMemberExpr":
         return this.parse_cxx_dependent_scope_member_expr();
-      case "CXXMemberCallExpr":
-        return this.parse_expr_node();
       case "CXXNoexceptExpr":
       case "CXXNullPtrLiteralExpr":
-      case "CXXOperatorCallExpr":
       case "CXXPseudoDestructorExpr":
       case "CXXScalarValueInitExpr":
         return this.parse_expr_node();
@@ -474,7 +484,9 @@ class ClangAstDumpParser extends Parser {
       case "CXXUnresolvedConstructExpr":
         return this.parse_cxx_unresolved_construct_expr();
       case "CallExpr":
-        return this.parse_expr_node();
+      case "CXXMemberCallExpr":
+      case "CXXOperatorCallExpr":
+        return this.parse_call_expr();
       case "CompoundAssignOperator":
         return this.parse_compound_assign_operator();
       case "ConditionalOperator":
@@ -669,6 +681,7 @@ class ClangAstDumpParser extends Parser {
       case "TemplateArgument":
         return this.parse_template_argument();
       default:
+        return { raw: this.expect(/^.*/) };
         fatal(`Unsupported AST node kind: ${kind}`);
     }
   }
@@ -778,7 +791,15 @@ class ClangAstDumpParser extends Parser {
     return {
       ...this.parse_stmt_node(),
       type: this.parse_type(),
-      value_kind: this.parse_value_kind()
+      value_kind: this.parse_value_kind(),
+      object_kind: this.parse_object_kind()
+    };
+  }
+
+  parse_call_expr() {
+    return {
+      ...this.parse_expr_node(),
+      ...this.parse_flags(["adl"]) // Argument-dependent lookup.
     };
   }
 
@@ -986,12 +1007,17 @@ class ClangAstDumpParser extends Parser {
   }
 
   parse_init_list_expr() {
-    const result = this.parse_expr_node();
-    result.array_filler = this.try_parse_leaf(p => {
-      p.expect("array_filler: ");
-      p.parse_node();
-    });
-    return result;
+    return {
+      ...this.parse_expr_node(),
+      field: this.try(p => {
+        p.expect(" field");
+        return p.parse_decl_ref();
+      }),
+      array_filler: this.try_parse_leaf(p => {
+        p.expect("array_filler: ");
+        return p.parse_node();
+      })
+    };
   }
 
   parse_literal_node_base() {
@@ -1011,7 +1037,7 @@ class ClangAstDumpParser extends Parser {
     return {
       ...this.parse_expr_node(),
       operator: this.try_skip(" ").expect(/^(\.|->)/),
-      member_name: this.parse_name(),
+      member_name: this.try(p => p.parse_name()),
       member_decl: this.parse_node_ref()
     };
   }
@@ -1205,7 +1231,8 @@ class ClangAstDumpParser extends Parser {
 
   parse_namespace_decl() {
     return {
-      ...this.parse_named_decl_node_base(),
+      ...this.parse_decl_node(),
+      name: this.try(p => p.parse_name()),
       ...this.parse_flags(["inline"]),
       original: this.try_parse_leaf(p => {
         p.expect("original ");
@@ -1290,6 +1317,14 @@ class ClangAstDumpParser extends Parser {
       position: this.parse_template_parameter_position(),
       is_parameter_pack: this.parse_parameter_pack_indicator(),
       name: this.try(p => p.parse_name())
+    };
+  }
+
+  parse_template_type_parm_type() {
+    return {
+      ...this.parse_type_node(),
+      position: this.parse_template_parameter_position(),
+      is_parameter_pack: this.parse_parameter_pack_indicator()
     };
   }
 
@@ -1399,13 +1434,6 @@ class ClangAstDumpParser extends Parser {
     };
   }
 
-  parse_template_type_parm_type() {
-    return {
-      ...this.parse_type_node(),
-      position: this.parse_template_parameter_position()
-    };
-  }
-
   parse_unary_transform_type() {
     return {
       ...this.parse_type_node(),
@@ -1444,7 +1472,7 @@ class ClangAstDumpParser extends Parser {
         break;
 
       case "integral":
-        result.integral = this.skip(" ").expect(/^\d+/);
+        result.integral = this.skip(" ").expect(/^[+-]?\d+/);
         break;
 
       case "template":
@@ -1547,13 +1575,17 @@ class SourceLocation {
   }
 
   parse(parser) {
-    if (parser.try("<invalid sloc>")) {
-      return { valid: false };
+    let invalid_fields = parser.try(
+      /^\<(?<error>invalid sloc|scratch space|built-in)\>(:(?<line>\d+):(?<col>\d+))?/
+    );
+    if (invalid_fields) {
+      return { valid: false, ...invalid_fields };
     }
     let valid_fields =
       parser.try(/^col:(?<col>\d+)/) ||
       parser.try(/^line:(?<line>\d+):(?<col>\d+)/) ||
-      parser.try(/^(?<file>.+?):(?<line>\d+):(?<col>\d+)/);
+      parser.try(/^line:(?<line>\d+):(?<col>\d+)/) ||
+      parser.try(/^(?<file>[^>'\n]+?):(?<line>\d+):(?<col>\d+)/);
     if (valid_fields) {
       return { valid: true, ...valid_fields };
     }
