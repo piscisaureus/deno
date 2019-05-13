@@ -84,6 +84,7 @@ class Parser {
 
   fail_fast(enable = true) {
     this.fail_fast_ = enable;
+    return this;
   }
 
   _fork() {
@@ -1393,23 +1394,34 @@ class ClangAstDumpParser extends Parser {
     return result;
   }
 
+  parse_cxx_base_specifier() {
+    return {
+      // CXXBaseSpecifier isn't really an AST node in clang, but it's often
+      // treated as such, e.g. in libclang. So we mimick that and give it a
+      // `kind` property.
+      kind: "CXXBaseSpecifier",
+      virtual: Boolean(this.try("virtual")),
+      access: this.parse_access_specifier(),
+      type: this.parse_type(),
+      pack_expansion: this.parse_parameter_pack_indicator()
+    };
+  }
+
   parse_record_decl() {
     const result = this.parse_decl_node();
     result.record_kind = this.skip(" ").expect(
       /^(?:class|struct|union|interface|enum)/
     );
-
-    // Umbiguity is unavoidable here - just never call your class 'definition'.
+    // Ambiguity is unavoidable here - just never call your class 'definition'.
     // TODO: disambiguate using color output?
     if (!this.try_peek(/^ definition(?=\r?\n)/)) {
       result.name = this.parse_name();
     }
-
     if (this.try(p => p.skip(" ").expect("definition"))) {
       result.is_definition = true;
       result.definition = this.parse_leaf(p => new RecordDefinition(p, result));
       result.bases = this.repeat(p =>
-        p.parse_leaf(p => new CXXBaseSpecifier(p))
+        p.parse_leaf(p => p.parse_cxx_base_specifier())
       );
     } else {
       result.is_definition = false;
@@ -1618,11 +1630,17 @@ class ClangAstDumpParser extends Parser {
     return (
       this.try_parse_leaf(p => ({
         status: "inherited",
-        template: p.skip("inherited from").parse_decl_ref()
+        template: p
+          .skip("inherited from")
+          .fail_fast()
+          .parse_decl_ref()
       })) ||
       this.try_parse_leaf(p => ({
         status: "overridden",
-        template: p.skip("previous").parse_decl_ref()
+        template: p
+          .skip("previous")
+          .fail_fast()
+          .parse_decl_ref()
       })) || { status: "none" }
     );
   }
@@ -1882,19 +1900,6 @@ class RecordDefinition {
       }))
     );
     return result;
-  }
-}
-
-class CXXBaseSpecifier {
-  constructor(parser) {
-    this.parse(parser);
-  }
-
-  parse(parser) {
-    this.virtual = Boolean(parser.try("virtual"));
-    this.access = parser.parse_access_specifier();
-    this.type = parser.parse_type();
-    this.pack_expansion = parser.parse_parameter_pack_indicator();
   }
 }
 
