@@ -10,8 +10,8 @@ function main() {
   let parser = new ClangAstDumpParser(ast_dump);
   let result = parser.parse_node();
   parser.skip(/^\s*$/);
-  console.log(result);
-  Type.dumpIndex();
+  console.log(JSON.stringify(result, null, 2));
+  //Type.dumpIndex();
 }
 
 class DebugHistory {
@@ -286,7 +286,7 @@ class ClangAstDumpParser extends Parser {
   }
 
   parse_address() {
-    return this.try_skip(" ").expect(/^0x[\da-f]+/);
+    return this.skip(" ").expect(/^0x[\da-f]+/);
   }
 
   parse_name() {
@@ -323,12 +323,15 @@ class ClangAstDumpParser extends Parser {
     );
   }
 
-  parse_node_ref() {
-    return this.skip(" ").expect(p => new NodeRef(p));
+  parse_bare_ref() {
+    return { address: this.parse_address() };
   }
 
   parse_template_parameter_position() {
-    return this.skip(" ").expect(p => new TemplateParameterPosition(p));
+    return {
+      depth: Number(this.skip(" depth ").expect(/^\d+/)),
+      index: Number(this.skip(" index ").expect(/^\d+/))
+    };
   }
 
   parse_parameter_pack_indicator() {
@@ -737,9 +740,9 @@ class ClangAstDumpParser extends Parser {
     return {
       address: this.parse_address(),
       semantic_parent: this.try(p =>
-        p.skip(" parent").expect(p => p.parse_node_ref())
+        p.skip(" parent").expect(p => p.parse_bare_ref())
       ),
-      prev: this.try(p => p.skip(" prev").expect(p => p.parse_node_ref()))
+      prev: this.try(p => p.skip(" prev").expect(p => p.parse_bare_ref()))
     };
   }
 
@@ -1069,7 +1072,9 @@ class ClangAstDumpParser extends Parser {
   parse_decl_ref_kind_specific(kind) {
     switch (kind) {
       case "Namespace":
+      case "TemplateTypeParm":
         return { decl: this.parse_decl_ref_with_name() };
+
       case "CXXMethod":
       case "EnumConstant":
       case "Field":
@@ -1079,10 +1084,12 @@ class ClangAstDumpParser extends Parser {
           decl: this.parse_decl_ref_with_name_and_type(),
           template: this.parse_decl_ref_template()
         };
+
       case "NonTypeTemplateParm":
       case "ParmVar":
       case "VarTemplateSpecialization":
         return { decl: this.parse_decl_ref_with_name_and_type() };
+
       default:
         throw new Error(`Unsupported DeclRef kind: ${kind}`);
     }
@@ -1133,13 +1140,13 @@ class ClangAstDumpParser extends Parser {
       ...this.parse_expr_node(),
       operator: this.try_skip(" ").expect(/^(\.|->)/),
       member_name: this.try(p => p.parse_name()),
-      member_decl: this.parse_node_ref()
+      member_decl: this.parse_bare_ref()
     };
   }
 
   parse_size_of_pack_expr() {
     const result = this.parse_expr_node();
-    result.pack = this.parse_node_ref();
+    result.pack = this.parse_bare_ref();
     this.parse_name(); // Name of pack; redundant.
     return result;
   }
@@ -1172,7 +1179,7 @@ class ClangAstDumpParser extends Parser {
     return {
       ...this.parse_stmt_node(),
       label_name: this.parse_single_quoted(),
-      label: this.parse_node_ref()
+      label: this.parse_bare_ref()
     };
   }
 
@@ -1260,7 +1267,7 @@ class ClangAstDumpParser extends Parser {
           p.skip(" ").expect("noexcept-");
           return {
             noexcept_spec: p.expect(/^\w+/),
-            noexcept_source: p.parse_node_ref()
+            noexcept_source: p.parse_bare_ref()
           };
         },
         { noexcept_spec: undefined, noexcept_source: undefined }
@@ -1440,7 +1447,7 @@ class ClangAstDumpParser extends Parser {
   parse_using_decl() {
     const result = this.parse_decl_node();
     this.parse_kind(); // Redundant.
-    result.target = this.parse_node_ref();
+    result.target = this.parse_bare_ref();
     this.skip(" ").skip(/^.*/); // Redundant.
     return result;
   }
@@ -1573,54 +1580,60 @@ class ClangAstDumpParser extends Parser {
     );
   }
 
-  parse_template_argument() {
-    const result = {};
-    result.template_argument_kind = this.skip(" ")
-      .expect(
-        /^(?:decl|expr|integral|null|nullptr|pack|template(?: expansion)?|type)/
-      )
-      .replace(" ", "_");
+  parse_template_argument_kind() {
+    return this.expect(
+      /^ (decl|expr|integral|null|nullptr|pack|template(?: expansion)?|type)/
+    ).replace(" ", "_");
+  }
 
-    switch (result.template_argument_kind) {
+  parse_template_argument_kind_specific(template_argument_kind) {
+    this.fail_fast();
+    switch (template_argument_kind) {
       case "decl":
-        // Expct decl ref here.
-        fatal("Not implemented");
-        break;
-
+        return { decl: this.parse_decl_ref() };
       case "integral":
-        result.integral = this.skip(" ").expect(/^[+-]?\d+/);
-        break;
-
+        return { integral: this.skip(" ").expect(/^[+-]?\d+/) };
       case "template":
       case "template_expansion":
-        result.template_name = this.parse_name();
-        break;
-
-      case "type": {
-        result.type = this.parse_type();
-        // This info is sometimes present up to clang 8.x, starting with
+        return { template_name: this.parse_name() };
+      case "type":
+        // Variable info is sometimes present up to clang 8.x, starting with
         // clang 9 it's moved to the VarTemplateSpecializationDecl node.
         // So we'll eventually move the 'var' field to the parent node.
-        result.var = this.try(p => p.parse_var_base());
-        break;
-      }
-
+        return {
+          type: this.parse_type(),
+          var: this.try(p => p.parse_var_base())
+        };
       case "expr":
       case "null":
       case "nullptr":
       case "pack":
-        // No further info expected.
-        break;
-
+        return {};
       default:
         fatal("Unexpected template argument kind.");
     }
+  }
 
-    result.inherited_default = new TemplateArgumentInheritedDefault(
-      this,
-      result
+  parse_template_argument_inherited_default() {
+    return (
+      this.try_parse_leaf(p => ({
+        status: "inherited",
+        template: p.skip("inherited from").parse_decl_ref()
+      })) ||
+      this.try_parse_leaf(p => ({
+        status: "overridden",
+        template: p.skip("previous").parse_decl_ref()
+      })) || { status: "none" }
     );
-    return result;
+  }
+
+  parse_template_argument() {
+    const template_argument_kind = this.parse_template_argument_kind();
+    return {
+      template_argument_kind,
+      ...this.parse_template_argument_kind_specific(template_argument_kind),
+      inherited_default: this.parse_template_argument_inherited_default()
+    };
   }
 }
 
@@ -1659,16 +1672,6 @@ class Type {
 }
 Type.index = [];
 
-class NodeRef {
-  constructor(parser) {
-    this.parse(parser);
-  }
-
-  parse(parser) {
-    this.address = parser.parse_address();
-  }
-}
-
 class SourceRange {
   constructor(parser) {
     Object.assign(this, this.parse(parser));
@@ -1705,19 +1708,6 @@ class SourceLocation {
     if (valid_fields) {
       return { valid: true, ...valid_fields };
     }
-  }
-}
-
-class TemplateParameterPosition {
-  constructor(parser) {
-    this.parse(parser);
-  }
-
-  parse(parser) {
-    parser.skip("depth ");
-    this.depth = Number(parser.expect(/^\d+/));
-    parser.skip(" index ");
-    this.index = Number(parser.expect(/^\d+/));
   }
 }
 
@@ -1905,43 +1895,6 @@ class CXXBaseSpecifier {
     this.access = parser.parse_access_specifier();
     this.type = parser.parse_type();
     this.pack_expansion = parser.parse_parameter_pack_indicator();
-  }
-}
-
-class TemplateArgumentInheritedDefault {
-  constructor(parser) {
-    this.parse(parser);
-  }
-
-  parse(parser) {
-    assign(
-      this,
-      parser.try_parse_leaf(p => this.parse_reference(p)) || {
-        status: "none",
-        origin: undefined
-      }
-    );
-  }
-
-  parse_reference(parser) {
-    let status;
-    switch (parser.expect(/^(?:inherited from|previous)/)) {
-      case "inherited from":
-        status = "active";
-        break;
-      case "previous":
-        status = "overridden";
-        break;
-      default:
-        return;
-    }
-
-    parser.skip(" ");
-    parser.parse_kind(); // Redundant.
-    const origin = parser.parse_node_ref();
-    parser.skip(/^.*/); // Redundant.
-
-    return { status, origin };
   }
 }
 
