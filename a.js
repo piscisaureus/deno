@@ -99,9 +99,9 @@ class Parser {
     throw err;
   }
 
-  _match(matcher) {   
+  _dump_progress() {
     const now = Date.now();
-    if (!Parser.last_log_time) { 
+    if (!Parser.last_log_time) {
       Parser.last_log_time = now;
       Parser.last_log_size = this.str.length;
     } else if (now - Parser.last_log_time > 1000) {
@@ -114,6 +114,10 @@ class Parser {
       Parser.last_log_time = now;
       Parser.last_log_size = size;
     }
+  }
+
+  _match(matcher) {
+    this._dump_progress();
 
     switch (typeof matcher) {
       case "string": {
