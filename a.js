@@ -304,7 +304,9 @@ class ClangAstDumpParser extends Parser {
   }
 
   parse_type() {
-    return this.try_skip(" ").match(p => new Type(p));
+    return this.try_skip(" ").match(
+      /^'(?<name>[^']*)'(?::'(?<desugared>[^']*)')?/
+    );
   }
 
   parse_value_kind() {
@@ -1500,7 +1502,7 @@ class ClangAstDumpParser extends Parser {
   parse_type_node() {
     return {
       ...this.parse_addressable_node(),
-      type: this.skip(" ").match(p => new Type(p)),
+      type: this.parse_type(),
       ...this.parse_flags([
         "sugar",
         "dependent",
@@ -1637,41 +1639,6 @@ class ClangAstDumpParser extends Parser {
     };
   }
 }
-
-class Type {
-  constructor(parser) {
-    Object.assign(this, this.parse(parser));
-    Type.add(this);
-  }
-
-  static construct(props = {}) {
-    // TODO: clean this up.
-    const type = Object.assign(Object.create(Type.prototype), props);
-    Type.add(type);
-    return type;
-  }
-
-  parse(parser) {
-    const name = parser.skip("'").match(/^[^']*/);
-    parser.skip("'");
-    const desugared = parser.try(p => {
-      return p.skip(":").match(p => new Type(p));
-    });
-    return { name, desugared };
-  }
-
-  static add(type) {
-    Type.index.push(type);
-  }
-
-  static dumpIndex() {
-    let s = Type.index
-      .map(({ name, desugared }) => `${name} ${desugared ? "@" : " "}\n`)
-      .join("");
-    process.stdout.write(s);
-  }
-}
-Type.index = [];
 
 class SourceRange {
   constructor(parser) {
