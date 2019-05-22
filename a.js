@@ -78,31 +78,7 @@ class Parser {
   constructor(str) {
     this.str = str === undefined ? "" : `${str}`;
     this.orig = str;
-    this.is_root = true;
-    this.is_forked = false;
-  }
-
-  _fork() {
-    const fork = Object.create(this.constructor.prototype);
-    Object.assign(fork, {
-      str: this.str,
-      orig: this.orig,
-      is_root: false,
-      is_forked: false
-    });
-    this.is_forked = true;
-    return fork;
-  }
-
-  _unfork(fork) {
-    this.str = fork.str;
-    this.is_forked = false;
-
-    const now = Date.now();
-    if (!Parser.last_log || now - Parser.last_log > 1000) {
-      Parser.last_log = now;
-      console.error(this.str.length);
-    }
+    this.try_depth = 0;
   }
 
   _fail(pattern) {
@@ -113,7 +89,6 @@ class Parser {
     if (err instanceof NoMatch) {
       switch (mode) {
         case "try":
-          this.is_forked = false;
           return;
         case "expect":
           err.throw();
@@ -124,8 +99,21 @@ class Parser {
     throw err;
   }
 
-  _match(matcher) {
-    assert(!this.is_forked, "parser is forked");
+  _match(matcher) {   
+    const now = Date.now();
+    if (!Parser.last_log_time) { 
+      Parser.last_log_time = now;
+      Parser.last_log_size = this.str.length;
+    } else if (now - Parser.last_log_time > 1000) {
+      const size = this.str.length;
+      if (size !== Parser.last_log_size) {
+        console.error(this.str.length);
+      } else {
+        throw new Error("No progress");
+      }
+      Parser.last_log_time = now;
+      Parser.last_log_size = size;
+    }
 
     switch (typeof matcher) {
       case "string": {
@@ -182,19 +170,21 @@ class Parser {
   }
 
   try(matcher, or_else) {
-    const fork = this._fork(true);
+    const prev = this.str;
+    this.try_depth++;
     try {
-      const result = fork.match(matcher);
-      this._unfork(fork);
-      return result;
+      return this.match(matcher);
     } catch (err) {
+      this.str = prev;
       this._handle_no_match(err, "try");
       return or_else;
+    } finally {
+      this.try_depth--;
     }
   }
 
   match(matcher) {
-    if (this.is_root) {
+    if (this.try_depth === 0) {
       return this.expect(matcher);
     } else {
       return this._match(matcher);
@@ -212,26 +202,25 @@ class Parser {
   }
 
   peek(matcher) {
-    return this._fork().match(matcher);
+    const prev = this.str;
+    try {
+      return this.match(matcher);
+    } finally {
+      this.str = prev;
+    }
   }
 
   try_peek(matcher, or_else) {
-    return this._fork().try(matcher);
+    return this.try(p => p.peek(matcher));
   }
 
   repeat(matcher) {
-    let results = [];
-    for (;;) {
-      const fork = this._fork(true);
-      try {
-        const result = fork.match(matcher);
-        this._unfork(fork);
-        results.push(result);
-      } catch (err) {
-        this._handle_no_match(err, "try");
-        return results;
-      }
+    const results = [];
+    let r;
+    while ((r = this.try(matcher))) {
+      results.push(r);
     }
+    return results;
   }
 }
 
@@ -241,12 +230,6 @@ class ClangAstDumpParser extends Parser {
     this.prefix = "";
   }
 
-  _fork() {
-    const fork = super._fork();
-    fork.prefix = this.prefix;
-    return fork;
-  }
-
   parse_single_quoted() {
     let value = this.skip(" '").match(/^[^']*/);
     this.skip("'");
@@ -254,11 +237,13 @@ class ClangAstDumpParser extends Parser {
   }
 
   parse_leaf(matcher) {
-    const fork = this._fork();
-    fork.prefix = fork.parse_prefix(this.prefix);
-    const result = fork.match(matcher);
-    this._unfork(fork);
-    return result;
+    const prev_prefix = this.prefix;
+    this.prefix = this.parse_prefix(prev_prefix);
+    try {
+      return this.match(matcher);
+    } finally {
+      this.prefix = prev_prefix;
+    }
   }
 
   try_parse_leaf(matcher) {
