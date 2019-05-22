@@ -4,6 +4,9 @@ require("util").inspect.defaultOptions.maxArrayLength = null;
 Error.stackTraceLimit = Infinity;
 
 const assign = Object.assign;
+const hasOwnProperty = Object.prototype.hasOwnProperty.call.bind(
+  Object.prototype.hasOwnProperty
+);
 
 function main() {
   let ast_dump = readFileSync(process.argv[2] || "o3", "utf8");
@@ -228,6 +231,9 @@ class Parser {
   }
 }
 
+const as_is = Symbol("as_is");
+const neither = Symbol("neither");
+
 class ClangAstDumpParser extends Parser {
   constructor(str) {
     super(str);
@@ -310,7 +316,11 @@ class ClangAstDumpParser extends Parser {
   }
 
   parse_value_kind() {
-    return this.try(p => p.skip(" ").match(/^(?:lvalue|xvalue)\b/), "rvalue");
+    return this.parse_simple_enum({
+      lvalue: as_is,
+      xvalue: as_is,
+      rvalue: neither
+    });
   }
 
   parse_object_kind() {
@@ -413,6 +423,35 @@ class ClangAstDumpParser extends Parser {
       break;
     }
     return result;
+  }
+
+  parse_simple_enum(mappings) {
+    let default_mapping;
+    for (const key in mappings) {
+      //if (!hasOwnProperty(mappings, key)) continue;
+      let matcher = mappings[key];
+      if (matcher === as_is) {
+        matcher = key;
+      } else if (matcher === neither) {
+        assert(default_mapping === undefined);
+        default_mapping = key;
+        continue;
+      }
+      if (
+        this.try(p => {
+          p.skip(" ");
+          p.match(matcher);
+          p.peek(/^\s|$/);
+          return true;
+        })
+      ) {
+        return key;
+      }
+    }
+    if (default_mapping !== undefined) {
+      return default_mapping;
+    }
+    this._fail(mappings);
   }
 
   parse_node_kind_specific(kind) {
@@ -1292,7 +1331,12 @@ class ClangAstDumpParser extends Parser {
   parse_enum_decl() {
     return {
       ...this.parse_decl_node(),
-      scope: this.try(p => p.skip(" ").match(/^(?:class|struct)/), "unscoped"),
+      scope: this.parse_simple_enum({
+        class: as_is,
+        struct: as_is,
+        union: as_is,
+        unscoped: neither
+      }),
       name: this.try(p => p.parse_name()),
       type: this.try(p => p.parse_type())
     };
