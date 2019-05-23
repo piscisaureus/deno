@@ -14,7 +14,6 @@ function main() {
   let result = parser.parse_node();
   parser.skip(/^\s*$/);
   console.log(JSON.stringify(result, null, 2));
-  //Type.dumpIndex();
 }
 
 class DebugHistory {
@@ -324,13 +323,13 @@ class ClangAstDumpParser extends Parser {
   }
 
   parse_object_kind() {
-    return this.try(
-      p =>
-        p
-          .skip(" ")
-          .match(/^(?:bitfield|objcproperty|objcsubscript|vectorcomponent)\b/),
-      "ordinary"
-    );
+    return this.parse_simple_enum({
+      bitfield: as_is,
+      objcproperty: as_is,
+      objcsubscript: as_is,
+      vectorcomponent: as_is,
+      ordinary: neither
+    });
   }
 
   parse_bare_ref() {
@@ -354,24 +353,41 @@ class ClangAstDumpParser extends Parser {
   }
 
   parse_array_type() {
-    if (this.try(" static")) return "static";
-    if (this.try(" *")) return "star";
-    return "normal";
+    return this.parse_simple_enum({
+      static: as_is,
+      start: "*",
+      normal: neither
+    });
   }
 
   parse_visibility() {
-    return this.skip(" ").match(/^Default|Hidden|Protected/);
+    return this.parse_simple_enum({
+      default: "Default",
+      hidden: "Hidden",
+      protected: "Protected"
+    });
   }
 
   parse_storage_class() {
-    return this.try(
-      p => p.skip(" ").match(/^(?:auto|extern|static|register)/),
-      "none"
-    );
+    return this.parse_simple_enum({
+      auto: as_is,
+      extern: as_is,
+      static: as_is,
+      register: as_is,
+      none: neither
+    });
   }
 
   parse_tls_kind() {
-    return this.try(p => p.skip(" ").match(/^(?:tls|tls_dynamic)\b/), "none");
+    return this.parse_simple_enum({
+      static: "tls",
+      dynamic: "tls_dynamic",
+      none: neither
+    });
+  }
+
+  parse_var_flags() {
+    return this.parse_flags(["nrvo", "inline", "constexpr"]);
   }
 
   parse_var_type_and_properties() {
@@ -379,23 +395,27 @@ class ClangAstDumpParser extends Parser {
       type: this.parse_type(),
       storage_class: this.parse_storage_class(),
       tls_kind: this.parse_tls_kind(),
-      ...this.parse_flags(["nrvo", "inline", "constexpr"]),
+      ...this.parse_var_flags(),
       init_style: this.parse_init_style()
     };
   }
 
   parse_init_style() {
-    return this.try(
-      p => p.skip(" ").match(/^(?:cinit|callinit|listinit)\b/),
-      "none"
-    );
+    return this.parse_simple_enum({
+      c: "cinit",
+      call: "callinit",
+      list: "listinit",
+      none: neither
+    });
   }
 
   parse_access_specifier() {
-    return this.try(
-      p => p.try_skip(" ").match(/^(?:private|protected|public)/),
-      "none"
-    );
+    return this.parse_simple_enum({
+      private: as_is,
+      protected: as_is,
+      public: as_is,
+      none: neither
+    });
   }
 
   parse_comment_text() {
@@ -428,7 +448,7 @@ class ClangAstDumpParser extends Parser {
   parse_simple_enum(mappings) {
     let default_mapping;
     for (const key in mappings) {
-      //if (!hasOwnProperty(mappings, key)) continue;
+      if (!hasOwnProperty(mappings, key)) continue;
       let matcher = mappings[key];
       if (matcher === as_is) {
         matcher = key;
@@ -439,7 +459,7 @@ class ClangAstDumpParser extends Parser {
       }
       if (
         this.try(p => {
-          p.skip(" ");
+          p.try_skip(" ");
           p.match(matcher);
           p.peek(/^\s|$/);
           return true;
@@ -506,7 +526,6 @@ class ClangAstDumpParser extends Parser {
         case "NoSanitizeAttr":
           return p.parse_no_sanitize_attr();
         case "TypeVisibilityAttr":
-          return p.parse_type_visibility_attr();
         case "VisibilityAttr":
           return p.parse_visibility_attr();
         case "BlockCommandComment":
@@ -794,10 +813,11 @@ class ClangAstDumpParser extends Parser {
   }
 
   parse_function() {
-    const result = this.parse_addressable_node();
-    result.name = this.parse_single_quoted();
-    result.type = this.parse_type();
-    return result;
+    return {
+      ...this.parse_addressable_node(),
+      name: this.parse_single_quoted(),
+      type: this.parse_type()
+    };
   }
 
   parse_stmt_node() {
@@ -841,7 +861,10 @@ class ClangAstDumpParser extends Parser {
     return {
       ...this.parse_attr_node(),
       message: this.match(/^ "(.*)"/),
-      diagnostic_type: this.match(/^ DT_(Error|Warning)/),
+      diagnostic_type: this.parse_simple_enum({
+        error: "DT_Error",
+        warning: "DT_Warning"
+      }),
       ...this.parse_flags(["ArgDependent"]),
       attr_parent: this.parse_decl_ref() // Probably redundant.
     };
@@ -880,9 +903,11 @@ class ClangAstDumpParser extends Parser {
   parse_ms_vtor_disp_attr() {
     return {
       ...this.parse_attr_node(),
-      mode: ["Never", "ForVBaseOverride", "ForVFTable"][
-        this.skip(" ").match(/^\d+/)
-      ]
+      mode: this.parse_simple_enum({
+        never: "0",
+        for_virtual_base_override: "1",
+        for_virtual_function_table: "2"
+      })
     };
   }
 
@@ -897,13 +922,6 @@ class ClangAstDumpParser extends Parser {
     return {
       ...this.parse_attr_node(),
       sanitizers: this.repeat(p => p.match(/^ (\S+)/))
-    };
-  }
-
-  parse_type_visibility_attr() {
-    return {
-      ...this.parse_attr_node(),
-      type_visibility: this.parse_visibility()
     };
   }
 
@@ -1042,14 +1060,16 @@ class ClangAstDumpParser extends Parser {
   }
 
   parse_cxx_unresolved_construct_expr() {
-    const result = this.parse_expr_node();
+    const expr = this.parse_expr_node();
 
     // This type is redundant.
     const type = this.parse_type();
-    assert(type.name === result.type.name);
+    assert(type.name === expr.type.name);
 
-    assign(result, this.parse_flags(["list"]));
-    return result;
+    return {
+      ...expr,
+      ...this.parse_flags(["list"])
+    };
   }
 
   parse_compound_assign_operator() {
@@ -1164,7 +1184,7 @@ class ClangAstDumpParser extends Parser {
 
   parse_cxx_bool_literal_expr() {
     const result = this.parse_literal_node_base();
-    result.value = JSON.parse(result.source);
+    result.bool_value = JSON.parse(result.source);
     return result;
   }
 
@@ -1192,10 +1212,17 @@ class ClangAstDumpParser extends Parser {
     };
   }
 
+  parse_unary_operator_attachment() {
+    return this.parse_simple_enum({
+      prefix: as_is,
+      postfix: as_is
+    });
+  }
+
   parse_unary_operator() {
     return {
       ...this.parse_expr_node(),
-      attachment: this.skip(" ").match(/^(?:prefix|postfix)/),
+      attachment: this.parse_unary_operator_attachment(),
       operator: this.parse_single_quoted(),
       can_overflow: !this.try(p => p.skip(" ").match("cannot overflow"))
     };
@@ -1239,16 +1266,19 @@ class ClangAstDumpParser extends Parser {
     };
   }
 
+  parse_param_direction() {
+    return this.parse_simple_enum({
+      in: as_is,
+      out: as_is,
+      in_out: "in,out"
+    });
+  }
+
   parse_param_command_comment() {
     const result = this.parse_stmt_node();
+    result.direction = this.parse_param_direction();
     this.skip(" ");
-    result.direction = {
-      in: "In",
-      out: "Out",
-      "in,out": "InOut"
-    }[this.match(/^\[(in|out|in,out)\]/)];
-    this.skip(" ");
-    result.direction_is_explicit =
+    result.has_explicit_direction =
       this.try("explicitly") || !this.match("implicitly");
     result.param_name = this.try(p => {
       p.skip(" ");
@@ -1441,11 +1471,19 @@ class ClangAstDumpParser extends Parser {
     };
   }
 
+  parse_record_kind() {
+    return this.parse_simple_enum({
+      class: as_is,
+      struct: as_is,
+      union: as_is,
+      interface: as_is,
+      enum: as_is
+    });
+  }
+
   parse_record_decl() {
     const result = this.parse_decl_node();
-    result.record_kind = this.skip(" ").match(
-      /^(?:class|struct|union|interface|enum)/
-    );
+    result.record_kind = this.parse_record_kind();
     // Ambiguity is unavoidable here - just never call your class 'definition'.
     // TODO: disambiguate using color output?
     if (!this.try_peek(/^ definition(?=\r?\n)/)) {
@@ -1472,10 +1510,17 @@ class ClangAstDumpParser extends Parser {
     };
   }
 
+  parse_template_type_parm_type_kind() {
+    return this.parse_simple_enum({
+      class: as_is,
+      typename: as_is
+    });
+  }
+
   parse_template_type_parm_decl() {
     return {
       ...this.parse_decl_node(),
-      type_kind: this.skip(" ").match(/^(?:class|typename)/),
+      type_kind: this.parse_template_type_parm_type_kind(),
       position: this.parse_template_parameter_position(),
       is_parameter_pack: this.parse_parameter_pack_indicator(),
       name: this.try(p => p.parse_name())
@@ -1568,19 +1613,46 @@ class ClangAstDumpParser extends Parser {
     return result;
   }
 
+  parse_function_ref_qualifier() {
+    return this.parse_simple_enum({
+      lvalue: "&",
+      rvalue: "&&",
+      none: neither
+    });
+  }
+
+  parse_function_calling_convention() {
+    return this.parse_simple_enum({
+      cdecl: as_is,
+      stdcall: as_is,
+      fastcall: as_is,
+      thiscall: as_is,
+      pascal: as_is,
+      vectorcall: as_is,
+      ms_abi: as_is,
+      sysv_abi: as_is,
+      regcall: as_is,
+      aapcs: as_is,
+      aapcs_vfp: "aapcs-vfp",
+      aarch64_vector_pcs: as_is,
+      intel_ocl_bicc: as_is,
+      spir_function: as_is,
+      opencl_kernel: as_is,
+      swiftcall: as_is,
+      preserve_most: as_is,
+      preserve_all: as_is
+    });
+  }
+
   parse_function_proto_type() {
     return {
       ...this.parse_type_node(),
       ...this.parse_flags(["trailing_return"]),
       ...this.parse_type_qualifiers(),
       ...this.parse_flags(["variadic"]),
-      ref_qualifier: { "": "none", "&": "lvalue", "&&": "rvalue" }[
-        this.try(p => p.skip(" ").match(/^&+/), "")
-      ],
+      ref_qualifier: this.parse_function_ref_qualifier(),
       ...this.parse_flags(["noreturn", "produces_result", "regparm"]),
-      calling_convention: this.skip(" ").match(
-        /^(?:cdecl|stdcall|fastcall|thiscall|pascal|vectorcall|ms_abi|sysv_abi|regcall|aapcs|aapcs-vfp|aarch64_vector_pcs|intel_ocl_bicc|spir_function|opencl_kernel|swiftcall|preserve_most|preserve_all)\b/
-      )
+      calling_convention: this.parse_function_calling_convention()
     };
   }
 
@@ -1603,10 +1675,16 @@ class ClangAstDumpParser extends Parser {
     };
   }
 
+  parse_unary_transform_type_utt_kind() {
+    return this.parse_simple_enum({
+      enum_underlying_type: "underlying_type"
+    });
+  }
+
   parse_unary_transform_type() {
     return {
       ...this.parse_type_node(),
-      unary_transform_type_kind: this.skip(" ").match("underlying_type")
+      utt_kind: this.parse_unary_transform_type_utt_kind()
     };
   }
 
@@ -1627,9 +1705,17 @@ class ClangAstDumpParser extends Parser {
   }
 
   parse_template_argument_kind() {
-    return this.match(
-      /^ (decl|expr|integral|null|nullptr|pack|template(?: expansion)?|type)/
-    ).replace(" ", "_");
+    return this.parse_simple_enum({
+      decl: as_is,
+      expr: as_is,
+      integral: as_is,
+      null: as_is,
+      nullptr: as_is,
+      pack: as_is,
+      template: /^template(?! expansion)/,
+      template_expansion: "template expansion",
+      type: as_is
+    });
   }
 
   parse_template_argument_kind_specific(template_argument_kind) {
