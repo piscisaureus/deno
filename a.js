@@ -823,7 +823,7 @@ class ClangAstDumpParser extends Parser {
   parse_stmt_node() {
     return {
       ...this.parse_addressable_node(),
-      source_range: this.skip(" ").match(p => new SourceRange(p))
+      source_range: this.skip(" ").parse_source_range()
     };
   }
 
@@ -1268,9 +1268,9 @@ class ClangAstDumpParser extends Parser {
 
   parse_param_direction() {
     return this.parse_simple_enum({
-      in: as_is,
-      out: as_is,
-      in_out: "in,out"
+      in: "[in]",
+      out: "[out]",
+      in_out: "[in,out]"
     });
   }
 
@@ -1298,7 +1298,7 @@ class ClangAstDumpParser extends Parser {
   parse_decl_node() {
     return {
       ...this.parse_stmt_node(),
-      source_location: this.skip(" ").match(p => new SourceLocation(p)),
+      source_location: this.skip(" ").parse_source_location(),
       ...this.parse_flags(["implicit", "referenced", "used", "constexpr"])
     };
   }
@@ -1768,41 +1768,30 @@ class ClangAstDumpParser extends Parser {
       inherited_default: this.parse_template_argument_inherited_default()
     };
   }
-}
 
-class SourceRange {
-  constructor(parser) {
-    Object.assign(this, this.parse(parser));
-  }
-
-  parse(parser) {
-    const start = parser.skip("<").match(p => new SourceLocation(p));
-    const end = parser.try(
-      p => p.skip(", ").match(p => new SourceLocation(p)),
-      start
-    );
-    parser.skip(">");
+  parse_source_range() {
+    this.match("<");
+    const start = this.parse_source_location();
+    const end = this.try(() => {
+      this.match(", ");
+      return this.parse_source_location();
+    });
+    this.match(">");
     return { start, end };
   }
-}
 
-class SourceLocation {
-  constructor(parser) {
-    Object.assign(this, this.parse(parser));
-  }
-
-  parse(parser) {
-    let invalid_fields = parser.try(
+  parse_source_location() {
+    let invalid_fields = this.try(
       /^\<(?<error>invalid sloc|scratch space|built-in)\>(:(?<line>\d+):(?<col>\d+))?/
     );
     if (invalid_fields) {
       return { valid: false, ...invalid_fields };
     }
     let valid_fields =
-      parser.try(/^col:(?<col>\d+)/) ||
-      parser.try(/^line:(?<line>\d+):(?<col>\d+)/) ||
-      parser.try(/^line:(?<line>\d+):(?<col>\d+)/) ||
-      parser.try(/^(?<file>[^>'\n]+?):(?<line>\d+):(?<col>\d+)/);
+      this.try(/^col:(?<col>\d+)/) ||
+      this.try(/^line:(?<line>\d+):(?<col>\d+)/) ||
+      this.try(/^line:(?<line>\d+):(?<col>\d+)/) ||
+      this.try(/^(?<file>[^>'\n]+?):(?<line>\d+):(?<col>\d+)/);
     if (valid_fields) {
       return { valid: true, ...valid_fields };
     }
