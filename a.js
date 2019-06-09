@@ -1,7 +1,7 @@
-let { readFileSync } = require("fs");
+let { readFileSync, writeFileSync } = require("fs");
 require("util").inspect.defaultOptions.depth = null;
 require("util").inspect.defaultOptions.maxArrayLength = null;
-Error.stackTraceLimit = Infinity;
+Error.stackTraceLimit = 3; //Infinity;
 
 const assign = Object.assign;
 const hasOwnProperty = Object.prototype.hasOwnProperty.call.bind(
@@ -9,11 +9,104 @@ const hasOwnProperty = Object.prototype.hasOwnProperty.call.bind(
 );
 
 function main() {
-  let ast_dump = readFileSync(process.argv[2] || "o3", "utf8");
-  let parser = new ClangAstDumpParser(ast_dump);
-  let result = parser.parse_node();
-  parser.skip(/^\s*$/);
-  console.log(JSON.stringify(result, null, 2));
+  let top_level_node;
+  if (true) {
+    let ast_dump = readFileSync(process.argv[2] || "o3", "utf8");
+    let parser = new ClangAstDumpParser(ast_dump);
+    top_level_node = parser.parse_node();
+    let json = JSON.stringify(top_level_node, null, 2);
+    writeFileSync("dump.json", json);
+  } else {
+    top_level_node = require("./dump.json");
+  }
+
+  const index = Object.create(null);
+  walk(top_level_node, null, node => {
+    if (!node.address) return;
+    if (!node.kind) return;
+    if (!hasOwnProperty(index, node.address)) {
+      index[node.address] = Object.create(null);
+      index[node.address]._first = node.kind;
+      index[node.address]._cld = 0;
+      index[node.address]._kc = 0;
+    }
+    if (node.children.length) index[node.address]._cld++;
+    if (!hasOwnProperty(index[node.address], node.kind)) {
+      index[node.address][node.kind] = 0;
+      index[node.address]._kc++;
+    }
+    index[node.address][node.kind]++;
+  });
+  //console.log(index);
+
+  for (const address in index) {
+    const counts = index[address];
+    let total = 0;
+    const kinds = [];
+    for (const kind in counts) {
+      if (/^_/.test(kind)) continue;
+      total += counts[kind];
+      kinds.push(kind);
+    }
+    kinds.sort();
+    if (kinds.length > 1) {
+      //console.log(kinds.join('\t'));
+    }
+  }
+  //parser.skip(/^\s*$/);
+  //let result = filter_v8(top_level_node);
+  //console.log(JSON.stringify(result, null, 2));
+}
+
+function walk(obj, parent, cb) {
+  let recurse;
+  let new_parent = parent;
+  if (obj.children) {
+    recurse = cb(obj, parent);
+    new_parent = obj;
+  }
+  if (recurse === undefined) {
+    recurse = true;
+  }
+  if (recurse) {
+    for (const key in obj) {
+      if (!hasOwnProperty(obj, key)) continue;
+      const val = obj[key];
+      if (val === null) continue;
+      if (typeof val !== "object") continue;
+      walk(val, new_parent, cb);
+    }
+  }
+}
+
+function filter_v8(node) {
+  function visit_children(nodes, ns) {
+    return nodes.map(node => visit(node, ns)).filter(Boolean);
+  }
+
+  function recurse(node, ns) {
+    let r = { ...node, children: visit_children(node.children, ns) };
+    delete r.source_range;
+    delete r.source_location;
+    return r;
+  }
+
+  function visit(node, ns = null) {
+    switch (node.kind) {
+      case "TranslationUnitDecl":
+        return recurse(node, ns);
+
+      case "NamespaceDecl":
+        ns = (ns ? "::" : "") + node.name;
+        return ns === "v8" ? recurse(node, ns) : null;
+
+      default:
+        if (/(Expr|Stmt|Comment|FriendDecl)$/.test(node.kind)) return null;
+        return ns === "v8" ? recurse(node, ns) : null;
+    }
+  }
+
+  return visit(node);
 }
 
 class DebugHistory {
@@ -480,10 +573,134 @@ class ClangAstDumpParser extends Parser {
       switch (kind) {
         case "<<<NULL>>>":
           return {};
-        case "Field":
-          return p.parse_field();
-        case "Function":
-          return p.parse_function();
+
+        // Comment
+        case "FullComment":
+          return p.parse_stmt_node();
+        case "ParagraphComment":
+          return p.parse_stmt_node();
+        case "InlineCommandComment":
+          return p.parse_inline_command_comment();
+        case "ParamCommandComment":
+          return p.parse_param_command_comment();
+        case "BlockCommandComment":
+          return p.parse_block_command_comment();
+        case "TextComment":
+          return p.parse_text_comment();
+        case "VerbatimBlockComment":
+          return p.parse_verbatim_block_comment();
+        case "VerbatimBlockLineComment":
+          return p.parse_verbatim_block_line_comment();
+
+        // Decl
+        // Decl: basic (no properties)
+        case "EmptyDecl":
+        case "FileScopeAsmDecl":
+        case "StaticAssertDecl":
+        case "TranslationUnitDecl":
+          return p.parse_decl_node();
+        // Decl: named
+        case "BuiltinTemplateDecl":
+        case "ClassTemplateDecl":
+        case "FunctionTemplateDecl":
+        case "TypeAliasTemplateDecl":
+        case "UnresolvedUsingTypenameDecl":
+        case "UsingDecl":
+        case "VarTemplateDecl":
+          return p.parse_named_decl_node_base();
+        // Decl: named and typed
+        case "EnumConstantDecl":
+        case "TypeAliasDecl":
+        case "TypedefDecl":
+        case "UnresolvedUsingValueDecl":
+          return p.parse_decl_node_with_name_and_type();
+        // Decl: functions and other "callable" things.
+        case "CXXConstructorDecl":
+        case "CXXConversionDecl":
+        case "CXXDestructorDecl":
+        case "CXXMethodDecl":
+        case "FunctionDecl":
+        case "MethodDecl":
+          return p.parse_callable_decl();
+        // Decl: other
+        case "AccessSpecDecl":
+          return p.parse_access_spec_decl();
+        case "EnumDecl":
+          return p.parse_enum_decl();
+        case "FieldDecl":
+          return p.parse_field_decl();
+        case "FriendDecl":
+          return p.parse_friend_decl();
+        case "LinkageSpecDecl":
+          return p.parse_linkage_spec_decl();
+        case "IndirectFieldDecl":
+          return p.parse_indirect_field_decl();
+        case "NamespaceDecl":
+          return p.parse_namespace_decl();
+        case "NonTypeTemplateParmDecl":
+          return p.parse_non_type_template_parm_decl();
+        case "ParmVarDecl":
+          return p.parse_parm_var_decl();
+        case "PragmaCommentDecl":
+          return p.parse_pragma_comment_decl();
+        case "PragmaDetectMismatchDecl":
+          return p.parse_pragma_detect_mismatch_decl();
+        case "CXXRecordDecl":
+        case "ClassTemplatePartialSpecializationDecl":
+        case "ClassTemplateSpecializationDecl":
+          return p.parse_record_decl();
+        case "TemplateTemplateParmDecl":
+          return p.parse_template_template_parm_decl();
+        case "TemplateTypeParmDecl":
+          return p.parse_template_type_parm_decl();
+        case "UsingDirectiveDecl":
+        case "UsingShadowDecl":
+          return p.parse_using_decl();
+        case "VarDecl":
+          return p.parse_var_decl();
+        case "VarTemplatePartialSpecializationDecl":
+          return p.parse_var_template_partial_specialization_decl();
+        case "VarTemplateSpecializationDecl":
+          return p.parse_var_template_specialization_decl();
+
+        // Template argument.
+        case "TemplateArgument":
+          return p.parse_template_argument();
+
+        // Type
+        case "AttributedType":
+        case "BuiltinType":
+        case "DecltypeType":
+        case "DependentNameType":
+        case "DependentTemplateSpecializationType":
+        case "ElaboratedType":
+        case "EnumType":
+        case "InjectedClassNameType":
+        case "LValueReferenceType":
+        case "ParenType":
+        case "PointerType":
+        case "RValueReferenceType":
+        case "RecordType":
+        case "SubstTemplateTypeParmType":
+        case "TypedefType":
+          return p.parse_type_node();
+        case "ConstantArrayType":
+          return p.parse_constant_array_type();
+        case "FunctionProtoType":
+          return p.parse_function_proto_type();
+        case "PackExpansionType":
+          return p.parse_pack_expansion_type();
+        case "QualType":
+          return p.parse_qual_type();
+        case "TemplateSpecializationType":
+          return p.parse_template_specialization_type();
+        case "TemplateTypeParmType":
+          return p.parse_template_type_parm_type();
+        case "UnaryTransformType":
+          return p.parse_unary_transform_type();
+
+        // Attr
+        // Attr: basic (no properties)
         case "CXX11NoReturnAttr":
         case "ConstAttr":
         case "ExcludeFromExplicitInstantiationAttr":
@@ -499,12 +716,18 @@ class ClangAstDumpParser extends Parser {
         case "ReturnsTwiceAttr":
         case "WeakAttr":
           return p.parse_attr_node();
+        // Attr: singleton (e.g. `AlignedAttr aligned`)
         case "AlignedAttr":
         case "AlwaysInlineAttr":
         case "FinalAttr":
         case "RestrictAttr":
         case "WarnUnusedResultAttr":
           return p.parse_singleton_attr();
+        // Attr: visibility (private/public etc)
+        case "TypeVisibilityAttr":
+        case "VisibilityAttr":
+          return p.parse_visibility_attr();
+        // Attr: other
         case "AsmLabelAttr":
           return p.parse_asm_label_attr();
         case "DeprecatedAttr":
@@ -525,11 +748,13 @@ class ClangAstDumpParser extends Parser {
           return p.parse_non_null_attr();
         case "NoSanitizeAttr":
           return p.parse_no_sanitize_attr();
-        case "TypeVisibilityAttr":
-        case "VisibilityAttr":
-          return p.parse_visibility_attr();
-        case "BlockCommandComment":
-          return p.parse_block_command_comment();
+
+        // Ctor initializer.
+        case "CXXCtorInitializer":
+          return p.parse_cxx_ctor_initializer();
+
+        // Stmt
+        // Stmt: basic (no properties)
         case "AttributedStmt":
         case "BreakStmt":
         case "CXXCatchStmt":
@@ -543,19 +768,71 @@ class ClangAstDumpParser extends Parser {
         case "DoStmt":
         case "ForStmt":
         case "WhileStmt":
+        case "NullStmt":
+        case "ReturnStmt":
+        case "SwitchStmt":
           return p.parse_stmt_node();
+
+        // Stmt: other non-expression statements.
+        case "GotoStmt":
+          return p.parse_goto_stmt();
+        case "IfStmt":
+          return p.parse_if_stmt();
+        case "LabelStmt":
+          return p.parse_label_stmt();
+
+        // Stmt:Expr
+        // Stmt:Expr: basic (no properties)
         case "ArrayInitIndexExpr":
         case "ArrayInitLoopExpr":
         case "ArraySubscriptExpr":
         case "AtomicExpr":
-          return p.parse_expr_node();
-        case "BinaryOperator":
-          return p.parse_binary_operator();
-        case "CXXBindTemporaryExpr":
-          return p.parse_cxx_bind_temporary_expr();
         case "CXXDefaultArgExpr":
         case "CXXDefaultInitExpr":
+        case "CXXNoexceptExpr":
+        case "CXXNullPtrLiteralExpr":
+        case "CXXPseudoDestructorExpr":
+        case "CXXScalarValueInitExpr":
+        case "GNUNullExpr":
+        case "CXXThrowExpr":
+        case "CXXTypeidExpr":
+        case "ConstantExpr":
+        case "DependentScopeDeclRefExpr":
+        case "ExprWithCleanups":
+        case "ImplicitValueInitExpr":
+        case "LambdaExpr":
+        case "MaterializeTemporaryExpr":
+        case "OpaqueValueExpr":
+        case "PackExpansionExpr":
+        case "ParenExpr":
+        case "ParenListExpr":
+        case "UnresolvedMemberExpr":
+        case "SubstNonTypeTemplateParmExpr":
+        case "TypeTraitExpr":
           return p.parse_expr_node();
+        // StmtExpr: casts
+        case "CXXConstCastExpr":
+        case "CXXDynamicCastExpr":
+        case "CXXReinterpretCastExpr":
+        case "CXXStaticCastExpr":
+          return p.parse_cxx_named_cast_expr_base();
+        case "CStyleCastExpr":
+          return p.parse_c_style_cast_expr();
+        case "CXXFunctionalCastExpr":
+          return p.parse_cxx_functional_cast_expr();
+        case "ImplicitCastExpr":
+          return p.parse_implicit_cast_expr();
+        // Stmt:Expr: call and construct
+        case "CallExpr":
+        case "CXXMemberCallExpr":
+        case "CXXOperatorCallExpr":
+          return p.parse_call_expr();
+        case "CXXConstructExpr":
+        case "CXXTemporaryObjectExpr":
+          return p.parse_construct_expr_base();
+        // Stmt:Expr: other non-literal and non-operator
+        case "CXXBindTemporaryExpr":
+          return p.parse_cxx_bind_temporary_expr();
         case "CXXNewExpr":
           return p.parse_cxx_new_expr();
         case "CXXDeleteExpr":
@@ -564,217 +841,47 @@ class ClangAstDumpParser extends Parser {
           return p.parse_cxx_this_expr();
         case "CXXDependentScopeMemberExpr":
           return p.parse_cxx_dependent_scope_member_expr();
-        case "CXXNoexceptExpr":
-        case "CXXNullPtrLiteralExpr":
-        case "CXXPseudoDestructorExpr":
-        case "CXXScalarValueInitExpr":
-        case "GNUNullExpr":
-          return p.parse_expr_node();
-        case "CXXThrowExpr":
-        case "CXXTypeidExpr":
-          return p.parse_expr_node();
         case "CXXUnresolvedConstructExpr":
           return p.parse_cxx_unresolved_construct_expr();
-        case "CallExpr":
-        case "CXXMemberCallExpr":
-        case "CXXOperatorCallExpr":
-          return p.parse_call_expr();
-        case "CompoundAssignOperator":
-          return p.parse_compound_assign_operator();
-        case "ConditionalOperator":
-        case "ConstantExpr":
-          return p.parse_expr_node();
-        case "CXXConstructExpr":
-        case "CXXTemporaryObjectExpr":
-          return p.parse_construct_expr_base();
         case "DeclRefExpr":
           return p.parse_decl_ref_expr();
-        case "DependentScopeDeclRefExpr":
-        case "ExprWithCleanups":
-          return p.parse_expr_node();
-        case "ImplicitCastExpr":
-          return p.parse_implicit_cast_expr();
-        case "CStyleCastExpr":
-          return p.parse_c_style_cast_expr();
-        case "CXXFunctionalCastExpr":
-          return p.parse_cxx_functional_cast_expr();
-        case "CXXConstCastExpr":
-        case "CXXDynamicCastExpr":
-        case "CXXReinterpretCastExpr":
-        case "CXXStaticCastExpr":
-          return p.parse_cxx_named_cast_expr_base();
-        case "ImplicitValueInitExpr":
-          return p.parse_expr_node();
         case "InitListExpr":
           return p.parse_init_list_expr();
-        case "LambdaExpr":
-          return p.parse_expr_node();
         case "CXXBoolLiteralExpr":
           return p.parse_cxx_bool_literal_expr();
+        case "MemberExpr":
+          return p.parse_member_expr();
+        case "SizeOfPackExpr":
+          return p.parse_size_of_pack_expr();
+        case "UnaryExprOrTypeTraitExpr":
+          return p.parse_unary_expr_or_type_trait_expr();
+        case "UnresolvedLookupExpr":
+          return p.parse_unresolved_lookup_expr();
+
+        // Stmt:Expr:Literal
         case "CharacterLiteral":
         case "FloatingLiteral":
         case "IntegerLiteral":
         case "StringLiteral":
           return p.parse_literal_node_base();
-        case "MaterializeTemporaryExpr":
-          return p.parse_expr_node();
-        case "MemberExpr":
-          return p.parse_member_expr();
-        case "OpaqueValueExpr":
-        case "PackExpansionExpr":
-        case "ParenExpr":
-        case "ParenListExpr":
-          return p.parse_expr_node();
-        case "SizeOfPackExpr":
-          return p.parse_size_of_pack_expr();
-        case "SubstNonTypeTemplateParmExpr":
-        case "TypeTraitExpr":
-          return p.parse_expr_node();
-        case "UnaryExprOrTypeTraitExpr":
-          return p.parse_unary_expr_or_type_trait_expr();
+
+        // Stmt:Expr:Operator
+        case "BinaryOperator":
+          return p.parse_binary_operator();
         case "UnaryOperator":
           return p.parse_unary_operator();
-        case "UnresolvedLookupExpr":
-          return p.parse_unresolved_lookup_expr();
-        case "UnresolvedMemberExpr":
+        case "CompoundAssignOperator":
+          return p.parse_compound_assign_operator();
+        case "ConditionalOperator":
           return p.parse_expr_node();
-        case "FullComment":
-          return p.parse_stmt_node();
-        case "GotoStmt":
-          return p.parse_goto_stmt();
-        case "IfStmt":
-          return p.parse_if_stmt();
-        case "LabelStmt":
-          return p.parse_label_stmt();
-        case "Kind":
-        case "NullStmt":
-        case "ParagraphComment":
-          return p.parse_stmt_node();
-        case "InlineCommandComment":
-          return p.parse_inline_command_comment();
-        case "ParamCommandComment":
-          return p.parse_param_command_comment();
-        case "ReturnStmt":
-        case "SwitchStmt":
-          return p.parse_stmt_node();
-        case "FileScopeAsmDecl":
-        case "EmptyDecl":
-          return p.parse_decl_node();
-        case "AccessSpecDecl":
-          return p.parse_access_spec_decl();
-        case "CXXConstructorDecl":
-        case "CXXConversionDecl":
-        case "CXXDestructorDecl":
-        case "CXXMethodDecl":
-        case "FunctionDecl":
-        case "MethodDecl":
-          return p.parse_callable_decl();
-        case "EnumDecl":
-          return p.parse_enum_decl();
-        case "FieldDecl":
-          return p.parse_field_decl();
-        case "FriendDecl":
-          return p.parse_friend_decl();
-        case "LinkageSpecDecl":
-          return p.parse_linkage_spec_decl();
-        case "EnumConstantDecl":
-          return p.parse_decl_node_with_name_and_type();
-        case "IndirectFieldDecl":
-          return p.parse_indirect_field_decl();
-        case "TypeAliasDecl":
-        case "TypedefDecl":
-        case "UnresolvedUsingValueDecl":
-          return p.parse_decl_node_with_name_and_type();
-        case "BuiltinTemplateDecl":
-        case "ClassTemplateDecl":
-        case "FunctionTemplateDecl":
-          return p.parse_named_decl_node_base();
-        case "NamespaceDecl":
-          return p.parse_namespace_decl();
-        case "TypeAliasTemplateDecl":
-        case "UnresolvedUsingTypenameDecl":
-        case "UsingDecl":
-        case "VarTemplateDecl":
-          return p.parse_named_decl_node_base();
-        case "NonTypeTemplateParmDecl":
-          return p.parse_non_type_template_parm_decl();
-        case "ParmVarDecl":
-          return p.parse_parm_var_decl();
-        case "PragmaCommentDecl":
-          return p.parse_pragma_comment_decl();
-        case "PragmaDetectMismatchDecl":
-          return p.parse_pragma_detect_mismatch_decl();
-        case "CXXRecordDecl":
-        case "ClassTemplatePartialSpecializationDecl":
-        case "ClassTemplateSpecializationDecl":
-          return p.parse_record_decl();
-        case "StaticAssertDecl":
-          return p.parse_decl_node();
-        case "TemplateTemplateParmDecl":
-          return p.parse_template_template_parm_decl();
-        case "TemplateTypeParmDecl":
-          return p.parse_template_type_parm_decl();
-        case "TranslationUnitDecl":
-          return p.parse_decl_node();
-        case "UsingDirectiveDecl":
-        case "UsingShadowDecl":
-          return p.parse_using_decl();
-        case "VarDecl":
-          return p.parse_var_decl();
-        case "VarTemplatePartialSpecializationDecl":
-          return p.parse_var_template_partial_specialization_decl();
-        case "VarTemplateSpecializationDecl":
-          return p.parse_var_template_specialization_decl();
-        case "TextComment":
-          return p.parse_text_comment();
-        case "VerbatimBlockComment":
-          return p.parse_verbatim_block_comment();
-        case "VerbatimBlockLineComment":
-          return p.parse_verbatim_block_line_comment();
-        case "AttributedType":
-        case "BuiltinType":
-        case "CXXRecord":
-        case "ClassTemplateSpecialization":
-        case "ClassTemplatePartialSpecialization":
-        case "DecltypeType":
-        case "DependentNameType":
-        case "DependentTemplateSpecializationType":
-        case "ElaboratedType":
-        case "Enum":
-        case "EnumType":
-        case "InjectedClassNameType":
-        case "LValueReferenceType":
-        case "ParenType":
-        case "PointerType":
-        case "RValueReferenceType":
-        case "RecordType":
-        case "SubstTemplateTypeParmType":
-          return p.parse_type_node();
-        case "ConstantArrayType":
-          return p.parse_constant_array_type();
-        case "FunctionProtoType":
-          return p.parse_function_proto_type();
-        case "PackExpansionType":
-          return p.parse_pack_expansion_type();
-        case "QualType":
-          return p.parse_qual_type();
-        case "TemplateSpecializationType":
-          return p.parse_template_specialization_type();
-        case "TemplateTypeParm":
-          return p.parse_type_node();
-        case "TemplateTypeParmType":
-          return p.parse_template_type_parm_type();
-        case "TypeAlias":
-        case "Typedef":
-        case "TypedefType":
-          return p.parse_type_node();
-        case "UnaryTransformType":
-          return p.parse_unary_transform_type();
-        case "CXXCtorInitializer":
-          return p.parse_cxx_ctor_initializer();
-        case "TemplateArgument":
-          return p.parse_template_argument();
+
         default:
+          // DeclRef
+          const decl_ref = this.parse_decl_ref_kind_specific(kind);
+          if (decl_ref) {
+            return decl_ref;
+          }
+
           console.error(
             `Warning: unsupported AST node: ${kind}${p.try_peek(/.*/)}`
           );
@@ -802,21 +909,6 @@ class ClangAstDumpParser extends Parser {
         p.skip(" parent").match(p => p.parse_bare_ref())
       ),
       prev: this.try(p => p.skip(" prev").match(p => p.parse_bare_ref()))
-    };
-  }
-
-  parse_field() {
-    const result = this.parse_addressable_node();
-    result.name = this.parse_single_quoted();
-    result.type = this.parse_type();
-    return result;
-  }
-
-  parse_function() {
-    return {
-      ...this.parse_addressable_node(),
-      name: this.parse_single_quoted(),
-      type: this.parse_type()
     };
   }
 
@@ -1109,39 +1201,28 @@ class ClangAstDumpParser extends Parser {
     };
   }
 
-  parse_decl_ref_template() {
-    return this.try(p => {
-      p.match(" (");
-      const template = {
-        kind: p.parse_kind(),
-        ...p.parse_addressable_node(),
-        name: p.parse_single_quoted()
-      };
-      p.match(")");
-      return template;
-    });
-  }
-
   parse_decl_ref_kind_specific(kind) {
     switch (kind) {
       case "Namespace":
       case "TemplateTypeParm":
-        return { decl: this.parse_decl_ref_with_name() };
+      case "ClassTemplatePartialSpecialization":
+      case "ClassTemplateSpecialization":
+      case "CXXRecord":
+      case "Enum":
+      case "TypeAlias":
+      case "Typedef":
+        return this.parse_decl_ref_with_name();
 
       case "CXXMethod":
       case "EnumConstant":
       case "Field":
       case "Function":
       case "Var":
-        return {
-          decl: this.parse_decl_ref_with_name_and_type(),
-          template: this.parse_decl_ref_template()
-        };
-
+      case "TemplateTypeParm":
       case "NonTypeTemplateParm":
       case "ParmVar":
       case "VarTemplateSpecialization":
-        return { decl: this.parse_decl_ref_with_name_and_type() };
+        return this.parse_decl_ref_with_name_and_type();
 
       default:
         throw new Error(`Unsupported DeclRef kind: ${kind}`);
@@ -1150,14 +1231,29 @@ class ClangAstDumpParser extends Parser {
 
   parse_decl_ref() {
     const kind = this.parse_kind();
-    const { decl, template } = this.parse_decl_ref_kind_specific(kind);
-    return { decl: { kind, ...decl }, template };
+    const specific = this.parse_decl_ref_kind_specific(kind);
+    if (!specific) {
+      throw new Error(`Unsupported DeclRef kind: ${kind}`);
+    }
+    return { kind, ...specific };
+  }
+
+  parse_decl_ref_expr_template_ref() {
+    this.match(" (");
+    const template = this.expect(() => ({
+      kind: this.parse_kind(),
+      ...this.parse_addressable_node(),
+      name: this.parse_single_quoted()
+    }));
+    this.expect(")");
+    return template;
   }
 
   parse_decl_ref_expr() {
     return {
       ...this.parse_expr_node(),
-      ...this.parse_decl_ref()
+      decl: this.parse_decl_ref(),
+      template: this.try(() => this.parse_decl_ref_expr_template_ref())
     };
   }
 
