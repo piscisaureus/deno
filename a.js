@@ -1,7 +1,7 @@
 let { readFileSync, writeFileSync } = require("fs");
 require("util").inspect.defaultOptions.depth = null;
 require("util").inspect.defaultOptions.maxArrayLength = null;
-Error.stackTraceLimit = 3; //Infinity;
+Error.stackTraceLimit = Infinity;
 
 const assign = Object.assign;
 const hasOwnProperty = Object.prototype.hasOwnProperty.call.bind(
@@ -387,7 +387,7 @@ class ClangAstDumpParser extends Parser {
 
   parse_name() {
     let name = this.try_skip(" ").match(
-      /^(?:operator(?:[ \t]*[^\s\d][^\s]*)+|::|~|[a-zA-Z_](?:\w*))+<?/
+      /^(?:operator(?:[ \t]*[^\s\d'][^\s']*)+|::|~|[a-zA-Z_](?:\w*))+<?/
     );
     if (!/</.test(name) || /operator/.test(name)) return name;
 
@@ -576,15 +576,14 @@ class ClangAstDumpParser extends Parser {
 
         // Comment
         case "FullComment":
-          return p.parse_stmt_node();
         case "ParagraphComment":
-          return p.parse_stmt_node();
+          return p.parse_comment_node();
+        case "BlockCommandComment":
+          return p.parse_block_command_comment();
         case "InlineCommandComment":
           return p.parse_inline_command_comment();
         case "ParamCommandComment":
           return p.parse_param_command_comment();
-        case "BlockCommandComment":
-          return p.parse_block_command_comment();
         case "TextComment":
           return p.parse_text_comment();
         case "VerbatimBlockComment":
@@ -614,14 +613,21 @@ class ClangAstDumpParser extends Parser {
         case "TypedefDecl":
         case "UnresolvedUsingValueDecl":
           return p.parse_decl_node_with_name_and_type();
-        // Decl: functions and other "callable" things.
+        // Decl: records (struct, class, union).
+        case "CXXRecordDecl":
+        case "ClassTemplatePartialSpecializationDecl":
+        case "ClassTemplateSpecializationDecl":
+          return p.parse_record_decl();
+        // Decl: functions, methods and other "callable" things.
+        case "FunctionDecl":
+        case "MethodDecl":
+          return this.parse_function_decl();
         case "CXXConstructorDecl":
+          return this.parse_cxx_constructor_decl();
         case "CXXConversionDecl":
         case "CXXDestructorDecl":
         case "CXXMethodDecl":
-        case "FunctionDecl":
-        case "MethodDecl":
-          return p.parse_callable_decl();
+          return this.parse_cxx_method_decl();
         // Decl: other
         case "AccessSpecDecl":
           return p.parse_access_spec_decl();
@@ -645,10 +651,6 @@ class ClangAstDumpParser extends Parser {
           return p.parse_pragma_comment_decl();
         case "PragmaDetectMismatchDecl":
           return p.parse_pragma_detect_mismatch_decl();
-        case "CXXRecordDecl":
-        case "ClassTemplatePartialSpecializationDecl":
-        case "ClassTemplateSpecializationDecl":
-          return p.parse_record_decl();
         case "TemplateTemplateParmDecl":
           return p.parse_template_template_parm_decl();
         case "TemplateTypeParmDecl":
@@ -767,10 +769,10 @@ class ClangAstDumpParser extends Parser {
         case "DefaultStmt":
         case "DoStmt":
         case "ForStmt":
-        case "WhileStmt":
         case "NullStmt":
         case "ReturnStmt":
         case "SwitchStmt":
+        case "WhileStmt":
           return p.parse_stmt_node();
 
         // Stmt: other non-expression statements.
@@ -810,18 +812,19 @@ class ClangAstDumpParser extends Parser {
         case "SubstNonTypeTemplateParmExpr":
         case "TypeTraitExpr":
           return p.parse_expr_node();
-        // StmtExpr: casts
+        // Stmt:Expr: casts
+        case "ImplicitCastExpr":
+          return p.parse_implicit_cast_expr();
+        case "CStyleCastExpr":
+          return p.parse_c_style_cast_expr();
+        case "CXXFunctionalCastExpr":
+          return p.parse_cxx_functional_cast_expr();
         case "CXXConstCastExpr":
         case "CXXDynamicCastExpr":
         case "CXXReinterpretCastExpr":
         case "CXXStaticCastExpr":
           return p.parse_cxx_named_cast_expr_base();
-        case "CStyleCastExpr":
-          return p.parse_c_style_cast_expr();
-        case "CXXFunctionalCastExpr":
-          return p.parse_cxx_functional_cast_expr();
-        case "ImplicitCastExpr":
-          return p.parse_implicit_cast_expr();
+
         // Stmt:Expr: call and construct
         case "CallExpr":
         case "CXXMemberCallExpr":
@@ -833,22 +836,22 @@ class ClangAstDumpParser extends Parser {
         // Stmt:Expr: other non-literal and non-operator
         case "CXXBindTemporaryExpr":
           return p.parse_cxx_bind_temporary_expr();
-        case "CXXNewExpr":
-          return p.parse_cxx_new_expr();
+        case "CXXBoolLiteralExpr":
+          return p.parse_cxx_bool_literal_expr();
         case "CXXDeleteExpr":
           return p.parse_cxx_delete_expr();
-        case "CXXThisExpr":
-          return p.parse_cxx_this_expr();
         case "CXXDependentScopeMemberExpr":
           return p.parse_cxx_dependent_scope_member_expr();
+        case "CXXNewExpr":
+          return p.parse_cxx_new_expr();
+        case "CXXThisExpr":
+          return p.parse_cxx_this_expr();
         case "CXXUnresolvedConstructExpr":
           return p.parse_cxx_unresolved_construct_expr();
         case "DeclRefExpr":
           return p.parse_decl_ref_expr();
         case "InitListExpr":
           return p.parse_init_list_expr();
-        case "CXXBoolLiteralExpr":
-          return p.parse_cxx_bool_literal_expr();
         case "MemberExpr":
           return p.parse_member_expr();
         case "SizeOfPackExpr":
@@ -868,12 +871,12 @@ class ClangAstDumpParser extends Parser {
         // Stmt:Expr:Operator
         case "BinaryOperator":
           return p.parse_binary_operator();
-        case "UnaryOperator":
-          return p.parse_unary_operator();
         case "CompoundAssignOperator":
           return p.parse_compound_assign_operator();
         case "ConditionalOperator":
           return p.parse_expr_node();
+        case "UnaryOperator":
+          return p.parse_unary_operator();
 
         default:
           // DeclRef
@@ -894,34 +897,24 @@ class ClangAstDumpParser extends Parser {
     return {
       raw: this.peek(/^.*/),
       ...(this.try(p => p.parse_decl_node()) ||
-        this.try(p => p.parse_type_node()) ||
         this.try(p => p.parse_stmt_node()) ||
-        this.try(p => p.parse_addressable_node()) ||
+        this.try(p => p.parse_type_node()) ||
         {}),
       extra: this.try(/^.+/)
     };
   }
 
-  parse_addressable_node() {
-    return {
-      address: this.parse_address(),
-      semantic_parent: this.try(p =>
-        p.skip(" parent").match(p => p.parse_bare_ref())
-      ),
-      prev: this.try(p => p.skip(" prev").match(p => p.parse_bare_ref()))
-    };
-  }
-
   parse_stmt_node() {
     return {
-      ...this.parse_addressable_node(),
+      address: this.parse_address(),
       source_range: this.skip(" ").parse_source_range()
     };
   }
 
   parse_attr_node() {
     return {
-      ...this.parse_stmt_node(),
+      address: this.parse_address(),
+      source_range: this.skip(" ").parse_source_range(),
       ...this.parse_flags(["Inherited", "Implicit"])
     };
   }
@@ -1026,7 +1019,7 @@ class ClangAstDumpParser extends Parser {
 
   parse_block_command_comment() {
     return {
-      ...this.parse_stmt_node(),
+      ...this.parse_comment_node(),
       ...this.skip(" ").match(/^Name="(?<command_name>.*)"/)
     };
   }
@@ -1189,7 +1182,7 @@ class ClangAstDumpParser extends Parser {
 
   parse_decl_ref_with_name() {
     return {
-      ...this.parse_addressable_node(),
+      address: this.parse_address(),
       name: this.parse_single_quoted()
     };
   }
@@ -1242,7 +1235,7 @@ class ClangAstDumpParser extends Parser {
     this.match(" (");
     const template = this.expect(() => ({
       kind: this.parse_kind(),
-      ...this.parse_addressable_node(),
+      address: this.parse_address(),
       name: this.parse_single_quoted()
     }));
     this.expect(")");
@@ -1355,7 +1348,7 @@ class ClangAstDumpParser extends Parser {
 
   parse_inline_command_comment() {
     return {
-      ...this.parse_stmt_node(),
+      ...this.parse_comment_node(),
       command_name: this.match(/^ Name="(.*?)"/),
       render_kind: this.match(/^ Render(\w+)/),
       args: this.repeat(p => p.match(/^ Arg\[\d+\]="(.*?)"/))
@@ -1371,7 +1364,7 @@ class ClangAstDumpParser extends Parser {
   }
 
   parse_param_command_comment() {
-    const result = this.parse_stmt_node();
+    const result = this.parse_comment_node();
     result.direction = this.parse_param_direction();
     this.skip(" ");
     result.has_explicit_direction =
@@ -1393,7 +1386,16 @@ class ClangAstDumpParser extends Parser {
 
   parse_decl_node() {
     return {
-      ...this.parse_stmt_node(),
+      address: this.parse_address(),
+      semantic_parent: this.try(() => {
+        this.match(" parent");
+        return this.parse_bare_ref();
+      }),
+      prev: this.try(() => {
+        this.match(" prev");
+        return this.parse_bare_ref();
+      }),
+      source_range: this.skip(" ").parse_source_range(),
       source_location: this.skip(" ").parse_source_location(),
       ...this.parse_flags(["implicit", "referenced", "used", "constexpr"])
     };
@@ -1406,31 +1408,90 @@ class ClangAstDumpParser extends Parser {
     };
   }
 
+  parse_function_flags() {
+    return this.parse_flags([
+      "default",
+      "default_delete",
+      "delete",
+      "inline",
+      "pure",
+      "trivial",
+      "virtual"
+    ]);
+  }
+
+  parse_function_exception_spec_info() {
+    if (this.try(" noexcept-unevaluated")) {
+      return { noexcept: "unevaluated", source_decl: this.parse_bare_ref() };
+    } else if (this.try(" noexcept-uninstantiated")) {
+      return {
+        noexcept: "uninstantiated",
+        source_template: this.parse_bare_ref()
+      };
+    } else {
+      return { noexcept: "other" };
+    }
+  }
+
+  parse_function_qualifiers() {
+    return {
+      storage_class: this.parse_storage_class(),
+      ...this.parse_function_flags(),
+      exception_spec_info: this.parse_function_exception_spec_info()
+    };
+  }
+
+  parse_function_decl() {
+    return {
+      ...this.parse_decl_node_with_name_and_type(),
+      ...this.parse_function_qualifiers()
+    };
+  }
+
+  parse_cxx_constructor_decl() {
+    // Clang doesn't always output a name for constructors,
+    // but sometimes it does. If there is no name we'll find
+    // two spaces before the type.
+    return {
+      ...this.parse_decl_node(),
+      name: this.try(/^ (?= )/) ? null : this.parse_name(),
+      type: this.parse_type(),
+      ...this.parse_function_qualifiers()
+    };
+  }
+
+  parse_cxx_method_overridden_methods() {
+    let overridden_methods = [];
+    if (this.try_parse_leaf("Overrides: [")) {
+      do {
+        this.expect(() => {
+          overridden_methods.push({
+            address: this.parse_address(),
+            name: this.parse_name(),
+            type: this.parse_type()
+          });
+        });
+      } while (this.try(","));
+      this.expect(" ]");
+    }
+    return overridden_methods;
+  }
+
+  parse_cxx_method_decl() {
+    return {
+      ...this.parse_function_decl(),
+      overridden_methods: this.parse_cxx_method_overridden_methods()
+    };
+  }
+  /*
   parse_callable_decl_info() {
     return {
       // TODO: constructors have no name.
       name: this.try_skip(" ").match(/^[^']*?(?=\s+')/),
       type: this.parse_type(),
       storage_class: this.parse_storage_class(),
-      ...this.parse_flags([
-        "default",
-        "default_delete",
-        "delete",
-        "inline",
-        "pure",
-        "trivial",
-        "virtual"
-      ]),
-      ...this.try(
-        p => {
-          p.skip(" ").match("noexcept-");
-          return {
-            noexcept_spec: p.match(/^\w+/),
-            noexcept_source: p.parse_bare_ref()
-          };
-        },
-        { noexcept_spec: undefined, noexcept_source: undefined }
-      )
+      ...this.parse_function_flags(),
+      exception_spec_info: this.parse_function_exception_spec_info()
     };
   }
 
@@ -1438,21 +1499,19 @@ class ClangAstDumpParser extends Parser {
     return {
       ...this.parse_decl_node(),
       ...this.parse_callable_decl_info(),
-      overrides: this.try_parse_leaf(p => {
+      overrides: this.try_parse_leaf(() => {
         const overrides = [];
-        p.match("Overrides: [");
+        this.match("Overrides: [");
         do {
-          overrides.push({
-            decl: {
-              ...p.parse_addressable_node(),
-              ...p.parse_callable_decl_info()
-            }
-          });
-        } while (p.try(","));
-        p.match(" ]");
+          overrides.push(this.expect(() => ({
+              address: this.parse_address(),
+              ...this.parse_callable_decl_info()
+          })));
+        } while (this.try(","));
+        this.expect(" ]");
       })
     };
-  }
+  }*/
 
   parse_enum_decl() {
     return {
@@ -1666,12 +1725,19 @@ class ClangAstDumpParser extends Parser {
     return result;
   }
 
+  parse_comment_node() {
+    return {
+      address: this.parse_address(),
+      source_range: this.skip(" ").parse_source_range()
+    };
+  }
+
   parse_text_comment() {
-    return { ...this.parse_stmt_node(), text: this.parse_comment_text() };
+    return { ...this.parse_comment_node(), text: this.parse_comment_text() };
   }
 
   parse_verbatim_block_comment() {
-    const result = this.parse_stmt_node();
+    const result = this.parse_comment_node();
     Object.assign(
       this.skip(" ").match(
         /^Name="(?<command_name>.*)" CloseName="(?<close_command_name>.*)"/
@@ -1681,12 +1747,12 @@ class ClangAstDumpParser extends Parser {
   }
 
   parse_verbatim_block_line_comment() {
-    return { ...this.parse_stmt_node(), text: this.parse_comment_text() };
+    return { ...this.parse_comment_node(), text: this.parse_comment_text() };
   }
 
   parse_type_node() {
     return {
-      ...this.parse_addressable_node(),
+      address: this.parse_address(),
       type: this.parse_type(),
       ...this.parse_flags([
         "sugar",
