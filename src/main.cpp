@@ -31,6 +31,33 @@ public:
   }
 };
 
+class FunctionAction : public MatchFinder::MatchCallback {
+  std::unordered_set<const FunctionDecl*> seen;
+
+public:
+  void run(const MatchFinder::MatchResult& result) override {
+    auto node = result.Nodes.getNodeAs<FunctionDecl>("fn")->getCanonicalDecl();
+    if (seen.count(node) > 0) {
+      return;
+    }
+    seen.insert(node);
+    FunctionProtoType
+    std::cout << node->getNameAsString() << std::endl;
+
+    auto ret = node->getReturnType();
+    std::cout << "  " << ret.getAsString();
+
+    auto ret2 = ret.split();
+    for (;;) {
+      std::cout << "=> ";
+      ret2.Ty->dump();
+      auto ret3 = ret2.getSingleStepDesugaredType();
+      if (ret2 == ret3) break;
+      ret2 = ret3;
+    }
+  }
+};
+
 class RecordAction : public MatchFinder::MatchCallback {
 public:
   void run(const MatchFinder::MatchResult& result) override {
@@ -56,7 +83,7 @@ public:
       auto offset = layout.getFieldOffset(n++);
       auto acc = field->getAccess();
       std::cout << "  " << n << " " << field->getNameAsString() << " +"
-                << offset;
+        << offset;
       switch (acc) {
       case AS_public:
         std::cout << " PUBLIC <===";
@@ -81,15 +108,16 @@ class ASTConsumerImpl : public ASTConsumer {
     // Run the matchers when we have the whole TU parsed.
     NamedDeclAction named_decl_action;
     RecordAction record_action;
+    FunctionAction function_action;
     MatchFinder finder;
     // finder.addMatcher(
     //    namedDecl(hasAncestor(namespaceDecl(hasName("::v8")))).bind("decl"),
     //    &named_decl_action);
-    finder.addMatcher(
-        recordDecl(recordDecl(hasAncestor(namespaceDecl(hasName("::v8"))))
-                       .bind("record"),
-                   unless(hasAncestor(namespaceDecl(hasName("internal"))))),
-        &record_action);
+    auto v8api = decl(hasAncestor(namespaceDecl(hasName("::v8"))),
+      unless(hasAncestor(namespaceDecl(hasName("internal")))));
+    //finder.addMatcher(namedDecl(v8api).bind("decl"), &named_decl_action);
+    //finder.addMatcher(recordDecl(v8api).bind("record", &record_action);
+    finder.addMatcher(functionDecl(v8api).bind("fn"), &function_action);
     finder.matchAST(ast);
   }
 };
