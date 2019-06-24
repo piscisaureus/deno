@@ -10,7 +10,7 @@ const hasOwnProperty = Object.prototype.hasOwnProperty.call.bind(
 
 function main() {
   let top_level_node;
-  if (true) {
+  if (false) {
     let ast_dump = readFileSync(process.argv[2] || "o3", "utf8");
     let parser = new ClangAstDumpParser(ast_dump);
     top_level_node = parser.parse_node();
@@ -21,41 +21,13 @@ function main() {
   }
 
   const index = Object.create(null);
-  walk(top_level_node, null, node => {
-    if (!node.address) return;
-    if (!node.kind) return;
-    if (!hasOwnProperty(index, node.address)) {
-      index[node.address] = Object.create(null);
-      index[node.address]._first = node.kind;
-      index[node.address]._cld = 0;
-      index[node.address]._kc = 0;
+  walk(top_level_node, null, (node, parent) => {
+    //if (node.kind === "TemplateArgument") {
+    if (parent && /Type$/.test(node.kind)) {
+      index[parent.kind] = true;
     }
-    if (node.children.length) index[node.address]._cld++;
-    if (!hasOwnProperty(index[node.address], node.kind)) {
-      index[node.address][node.kind] = 0;
-      index[node.address]._kc++;
-    }
-    index[node.address][node.kind]++;
   });
-  //console.log(index);
-
-  for (const address in index) {
-    const counts = index[address];
-    let total = 0;
-    const kinds = [];
-    for (const kind in counts) {
-      if (/^_/.test(kind)) continue;
-      total += counts[kind];
-      kinds.push(kind);
-    }
-    kinds.sort();
-    if (kinds.length > 1) {
-      //console.log(kinds.join('\t'));
-    }
-  }
-  //parser.skip(/^\s*$/);
-  //let result = filter_v8(top_level_node);
-  //console.log(JSON.stringify(result, null, 2));
+  console.log(Object.keys(index));
 }
 
 function walk(obj, parent, cb) {
