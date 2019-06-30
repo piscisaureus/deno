@@ -44,7 +44,7 @@ pub fn new(kind: ErrorKind, msg: String) -> DenoError {
 }
 
 impl DenoError {
-  fn url_error_kind(err: &url::ParseError) -> ErrorKind {
+  fn url_error_kind(err: url::ParseError) -> ErrorKind {
     use url::ParseError::*;
     match err {
       EmptyHost => ErrorKind::EmptyHost,
@@ -90,7 +90,7 @@ impl DenoError {
           _ => unreachable!(),
         }
       }
-      Repr::UrlErr(ref err) => Self::url_error_kind(err),
+      Repr::UrlErr(err) => Self::url_error_kind(err),
       Repr::HyperErr(ref err) => {
         // For some reason hyper::errors::Kind is private.
         if err.is_parse() {
@@ -106,11 +106,11 @@ impl DenoError {
         }
       }
       Repr::ImportMapErr(ref _err) => ErrorKind::ImportMapError,
-      Repr::ResolveModuleErr(ref err) => {
+      Repr::ResolveModuleErr(err) => {
         use ResolveError::*;
         match err {
-          InvalidUrl(ref err) => Self::url_error_kind(err),
-          InvalidBaseUrl(ref err) => Self::url_error_kind(err),
+          InvalidUrl(err) => Self::url_error_kind(err),
+          InvalidBaseUrl(err) => Self::url_error_kind(err),
           InvalidRelativePath => ErrorKind::InvalidInput,
         }
       }
