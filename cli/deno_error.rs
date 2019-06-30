@@ -7,7 +7,7 @@ use crate::resolve_addr::ResolveAddrError;
 use crate::source_maps::apply_source_map;
 use crate::source_maps::SourceMapGetter;
 use deno::JSError;
-use deno::ModuleResolutionError;
+use deno::ResolveError;
 use hyper;
 #[cfg(unix)]
 use nix::{errno::Errno, Error as UnixError};
@@ -31,7 +31,7 @@ enum Repr {
   UrlErr(url::ParseError),
   HyperErr(hyper::Error),
   ImportMapErr(import_map::ImportMapError),
-  ModuleResolutionErr(ModuleResolutionError),
+  ResolveModuleErr(ResolveError),
   Diagnostic(diagnostics::Diagnostic),
   JSError(JSError),
 }
@@ -106,8 +106,8 @@ impl DenoError {
         }
       }
       Repr::ImportMapErr(ref _err) => ErrorKind::ImportMapError,
-      Repr::ModuleResolutionErr(ref err) => {
-        use ModuleResolutionError::*;
+      Repr::ResolveModuleErr(ref err) => {
+        use ResolveError::*;
         match err {
           InvalidUrl(ref err) => Self::url_error_kind(err),
           InvalidBaseUrl(ref err) => Self::url_error_kind(err),
@@ -138,7 +138,7 @@ impl fmt::Display for DenoError {
       Repr::UrlErr(ref err) => err.fmt(f),
       Repr::HyperErr(ref err) => err.fmt(f),
       Repr::ImportMapErr(ref err) => f.pad(&err.msg),
-      Repr::ModuleResolutionErr(ref err) => err.fmt(f),
+      Repr::ResolveModuleErr(ref err) => err.fmt(f),
       Repr::Diagnostic(ref err) => err.fmt(f),
       Repr::JSError(ref err) => JSErrorColor(err).fmt(f),
     }
@@ -153,7 +153,7 @@ impl std::error::Error for DenoError {
       Repr::UrlErr(ref err) => err.description(),
       Repr::HyperErr(ref err) => err.description(),
       Repr::ImportMapErr(ref err) => &err.msg,
-      Repr::ModuleResolutionErr(ref err) => err.description(),
+      Repr::ResolveModuleErr(ref err) => err.description(),
       Repr::Diagnostic(ref err) => &err.items[0].message,
       Repr::JSError(ref err) => &err.description(),
     }
@@ -166,7 +166,7 @@ impl std::error::Error for DenoError {
       Repr::UrlErr(ref err) => Some(err),
       Repr::HyperErr(ref err) => Some(err),
       Repr::ImportMapErr(ref _err) => None,
-      Repr::ModuleResolutionErr(ref err) => err.source(),
+      Repr::ResolveModuleErr(ref err) => err.source(),
       Repr::Diagnostic(ref _err) => None,
       Repr::JSError(ref err) => Some(err),
     }
@@ -256,10 +256,10 @@ impl From<import_map::ImportMapError> for DenoError {
   }
 }
 
-impl From<ModuleResolutionError> for DenoError {
-  fn from(err: ModuleResolutionError) -> Self {
+impl From<ResolveError> for DenoError {
+  fn from(err: ResolveError) -> Self {
     Self {
-      repr: Repr::ModuleResolutionErr(err),
+      repr: Repr::ResolveModuleErr(err),
     }
   }
 }

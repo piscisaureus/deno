@@ -5,14 +5,14 @@ use url::Url;
 
 /// Error indicating the reason resolving a module specifier failed.
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
-pub enum ModuleResolutionError {
+pub enum ResolveError {
   InvalidUrl(ParseError),
   InvalidBaseUrl(ParseError),
   InvalidRelativePath,
 }
-use ModuleResolutionError::*;
+use ResolveError::*;
 
-impl Error for ModuleResolutionError {
+impl Error for ResolveError {
   fn source(&self) -> Option<&(dyn Error + 'static)> {
     match self {
       InvalidUrl(ref err) | InvalidBaseUrl(ref err) => Some(err),
@@ -21,9 +21,9 @@ impl Error for ModuleResolutionError {
   }
 }
 
-impl fmt::Display for ModuleResolutionError {
+impl fmt::Display for ResolveError {
   fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-    use ModuleResolutionError::*;
+    use ResolveError::*;
     match self {
       InvalidUrl(err) => write!(f, "invalid module URL: {}", err),
       InvalidBaseUrl(err) => {
@@ -50,7 +50,7 @@ impl ModuleSpecifier {
   pub fn resolve(
     specifier: &str,
     base: &str,
-  ) -> Result<ModuleSpecifier, ModuleResolutionError> {
+  ) -> Result<ModuleSpecifier, ResolveError> {
     let url = match Url::parse(specifier) {
       // 1. Apply the URL parser to specifier.
       //    If the result is not failure, return he result.
@@ -93,7 +93,7 @@ impl ModuleSpecifier {
   /// directory and returns an absolute URL.
   pub fn resolve_root(
     root_specifier: &str,
-  ) -> Result<ModuleSpecifier, ModuleResolutionError> {
+  ) -> Result<ModuleSpecifier, ResolveError> {
     let url = match Url::parse(root_specifier) {
       Ok(url) => url,
       Err(..) => {
