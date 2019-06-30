@@ -17,6 +17,7 @@ use crate::worker::Worker;
 use deno::Buf;
 use deno::CoreOp;
 use deno::Loader;
+use deno::ResolveError;
 use deno::ModuleSpecifier;
 use deno::PinnedBuf;
 use futures::future::Either;
@@ -153,14 +154,12 @@ pub fn fetch_module_meta_data_and_maybe_compile_async(
 }
 
 impl Loader for ThreadSafeState {
-  type Error = DenoError;
-
   fn resolve(
     &self,
     specifier: &str,
     referrer: &str,
     is_root: bool,
-  ) -> Result<ModuleSpecifier, Self::Error> {
+  ) -> Result<ModuleSpecifier, ResolveError> {
     if !is_root {
       if let Some(import_map) = &self.import_map {
         let result = import_map.resolve(specifier, referrer)?;
@@ -170,14 +169,14 @@ impl Loader for ThreadSafeState {
       }
     }
 
-    ModuleSpecifier::resolve(specifier, referrer).map_err(DenoError::from)
+    ModuleSpecifier::resolve(specifier, referrer)
   }
 
   /// Given an absolute url, load its source code.
   fn load(
     &self,
     module_specifier: &ModuleSpecifier,
-  ) -> Box<deno::SourceCodeInfoFuture<Self::Error>> {
+  ) -> Box<deno::SourceCodeInfoFuture> {
     self.metrics.resolve_count.fetch_add(1, Ordering::SeqCst);
     Box::new(
       fetch_module_meta_data_and_maybe_compile_async(self, module_specifier)
@@ -186,7 +185,7 @@ impl Loader for ThreadSafeState {
           // due to redirections.
           code: module_meta_data.js_source(),
           module_name: module_meta_data.module_name,
-        }),
+        }).map_err(|err| err.into()),
     )
   }
 }

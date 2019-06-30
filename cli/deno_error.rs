@@ -27,10 +27,10 @@ pub struct DenoError {
 #[derive(Debug)]
 enum Repr {
   Simple(ErrorKind, String),
+  Boxed(ErrorKind, Box<dyn std::error::Error + Send + Sync + 'static>),
   IoErr(io::Error),
   UrlErr(url::ParseError),
   HyperErr(hyper::Error),
-  ImportMapErr(import_map::ImportMapError),
   ResolveModuleErr(ResolveError),
   Diagnostic(diagnostics::Diagnostic),
   JSError(JSError),
@@ -111,7 +111,8 @@ impl DenoError {
         match err {
           InvalidUrl(err) => Self::url_error_kind(err),
           InvalidBaseUrl(err) => Self::url_error_kind(err),
-          InvalidRelativePath => ErrorKind::InvalidInput,
+          UnqualifiedRelativePath => ErrorKind::ImportMapError,
+          MapError(err) => ErrorKind::ImportMapError
         }
       }
       Repr::Diagnostic(ref _err) => ErrorKind::Diagnostic,

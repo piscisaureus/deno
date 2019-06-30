@@ -3,6 +3,7 @@ use crate::deno_error::DenoError;
 use crate::state::ThreadSafeState;
 use crate::tokio_util;
 use deno;
+use deno::LoadError;
 use deno::ModuleSpecifier;
 use deno::StartupData;
 use futures::Async;
@@ -63,6 +64,7 @@ impl Worker {
     let worker = self.clone();
     let worker_ = worker.clone();
     let loader = self.state.clone();
+    let loader_ = self.state.clone();
     let isolate = self.isolate.clone();
     let modules = self.state.modules.clone();
     let recursive_load = deno::RecursiveLoad::new(
@@ -72,27 +74,23 @@ impl Worker {
       modules,
     );
     recursive_load
-      .and_then(move |id| -> Result<(), deno::JSErrorOr<DenoError>> {
-        worker.state.progress.done();
+      .inspect(|_| loader_.progress.done())
+      .and_then(move |id| -> Result<(), deno::LoadError> {
         if is_prefetch {
           Ok(())
         } else {
           let mut isolate = worker.isolate.lock().unwrap();
-          let result = isolate.mod_evaluate(id);
-          if let Err(err) = result {
-            Err(deno::JSErrorOr::JSError(err))
-          } else {
-            Ok(())
-          }
+          isolate.mod_evaluate(id).map_err(LoadError::JSError)
         }
       }).map_err(move |err| {
-        worker_.state.progress.done();
         // Convert to DenoError AND apply_source_map.
+        use LoadError::*;
         match err {
-          deno::JSErrorOr::JSError(err) => {
+          JSError(err) => {
             worker_.apply_source_map(DenoError::from(err))
           }
-          deno::JSErrorOr::Other(err) => err,
+          FetchError(err) => *(err.downcast::<DenoError>().unwrap()),
+          ResolveError(err) => DenoError::from(err),
         }
       })
   }

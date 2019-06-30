@@ -1,10 +1,13 @@
 use deno::ModuleSpecifier;
+use deno::ResolveError;
 use indexmap::IndexMap;
 use serde_json::Map;
 use serde_json::Value;
 use std::cmp::Ordering;
 use std::fs;
 use url::Url;
+use std::io;
+use std::io::ErrorKind::InvalidData;
 
 #[derive(Debug)]
 pub struct ImportMapError {
@@ -34,7 +37,7 @@ pub struct ImportMap {
 }
 
 impl ImportMap {
-  pub fn load(base_url: &str, file_name: &str) -> Result<Self, ImportMapError> {
+  pub fn load(base_url: &str, file_name: &str) -> io::Result<Self> {
     let cwd = std::env::current_dir().unwrap();
     let resolved_path = cwd.join(file_name);
     debug!(
@@ -43,38 +46,33 @@ impl ImportMap {
     );
 
     // Load the contents of import map
-    match fs::read_to_string(&resolved_path) {
-      Ok(json_string) => ImportMap::from_json(base_url, &json_string),
-      _ => panic!(
-        "Error retrieving import map file at \"{}\"",
-        resolved_path.to_str().unwrap()
-      ),
-    }
+    fs::read_to_string(&resolved_path)
+      .and_then(|json_string| ImportMap::from_json(base_url, &json_string))
   }
 
   pub fn from_json(
     base_url: &str,
     json_string: &str,
-  ) -> Result<Self, ImportMapError> {
+  ) -> io::Result<Self> {
     let v: Value = match serde_json::from_str(json_string) {
       Ok(v) => v,
       Err(_) => {
-        return Err(ImportMapError::new("Unable to parse import map JSON"));
+        return Err(io::Error::new(InvalidData, "Unable to parse import map JSON"));
       }
     };
 
     match v {
       Value::Object(_) => {}
       _ => {
-        return Err(ImportMapError::new("Import map JSON must be an object"));
+        return Err(io::Error::new(InvalidData, "Import map JSON must be an object"));
       }
     }
 
     let normalized_imports = match &v.get("imports") {
       Some(imports_map) => {
         if !imports_map.is_object() {
-          return Err(ImportMapError::new(
-            "Import map's 'imports' must be an object",
+          return Err(io::Error::new(InvalidData, 
+            "Import map's 'imports' must be an object"
           ));
         }
 
@@ -87,7 +85,7 @@ impl ImportMap {
     let normalized_scopes = match &v.get("scopes") {
       Some(scope_map) => {
         if !scope_map.is_object() {
-          return Err(ImportMapError::new(
+          return Err(io::Error::new(InvalidData, 
             "Import map's 'scopes' must be an object",
           ));
         }
@@ -260,13 +258,13 @@ impl ImportMap {
   fn parse_scope_map(
     scope_map: &Map<String, Value>,
     base_url: &str,
-  ) -> Result<ScopesMap, ImportMapError> {
+  ) -> io::Result<ScopesMap> {
     let mut normalized_map: ScopesMap = ScopesMap::new();
 
     // Order is preserved because of "preserve_order" feature of "serde_json".
     for (scope_prefix, potential_specifier_map) in scope_map.iter() {
       if !potential_specifier_map.is_object() {
-        return Err(ImportMapError::new(&format!(
+        return Err(io::Error::new(InvalidData, format!(
           "The value for the {:?} scope prefix must be an object",
           scope_prefix
         )));
@@ -314,7 +312,7 @@ impl ImportMap {
     scopes: &ScopesMap,
     normalized_specifier: &str,
     referrer: &str,
-  ) -> Result<Option<ModuleSpecifier>, ImportMapError> {
+  ) -> Result<Option<ModuleSpecifier>, ResolveError> {
     // exact-match
     if let Some(scope_imports) = scopes.get(referrer) {
       if let Ok(scope_match) =
@@ -350,25 +348,23 @@ impl ImportMap {
   pub fn resolve_imports_match(
     imports: &SpecifierMap,
     normalized_specifier: &str,
-  ) -> Result<Option<ModuleSpecifier>, ImportMapError> {
+  ) -> Result<Option<ModuleSpecifier>, ResolveError> {
     // exact-match
     if let Some(address_vec) = imports.get(normalized_specifier) {
       if address_vec.is_empty() {
-        return Err(ImportMapError::new(&format!(
+        return Err(ResolveError::MapError(format!(
           "Specifier {:?} was mapped to no addresses.",
           normalized_specifier
-        )));
+        ).into()))
       } else if address_vec.len() == 1 {
         let address = address_vec.first().unwrap();
         debug!(
           "Specifier {:?} was mapped to {:?}.",
           normalized_specifier, address
         );
-        return Ok(Some(address.clone()));
+        return Ok(Some(address.clone()))
       } else {
-        return Err(ImportMapError::new(
-          "Multi-address mappings are not yet supported",
-        ));
+        return Err(ResolveError::MapError("Multi-address mappings are not yet supported".into()))
       }
     }
 
@@ -381,7 +377,7 @@ impl ImportMap {
         && normalized_specifier.starts_with(specifier_key)
       {
         if address_vec.is_empty() {
-          return Err(ImportMapError::new(&format!("Specifier {:?} was mapped to no addresses (via prefix specifier key {:?}).", normalized_specifier, specifier_key)));
+          return Err(ResolveError::MapError(format!("Specifier {:?} was mapped to no addresses (via prefix specifier key {:?}).", normalized_specifier, specifier_key).into()));
         } else if address_vec.len() == 1 {
           let address = address_vec.first().unwrap();
           let after_prefix = &normalized_specifier[specifier_key.len()..];
@@ -394,8 +390,8 @@ impl ImportMap {
 
           unreachable!();
         } else {
-          return Err(ImportMapError::new(
-            "Multi-address mappings are not yet supported",
+          return Err(ResolveError::MapError(
+            "Multi-address mappings are not yet supported".into()
           ));
         }
       }
@@ -421,7 +417,7 @@ impl ImportMap {
     &self,
     specifier: &str,
     referrer: &str,
-  ) -> Result<Option<ModuleSpecifier>, ImportMapError> {
+  ) -> Result<Option<ModuleSpecifier>, ResolveError> {
     let resolved_url: Option<Url> =
       ImportMap::try_url_like_specifier(specifier, referrer);
     let normalized_specifier = match &resolved_url {
@@ -453,10 +449,10 @@ impl ImportMap {
       return Ok(Some(ModuleSpecifier::from(resolved_url)));
     }
 
-    Err(ImportMapError::new(&format!(
+    Err(ResolveError::MapError(format!(
       "Unmapped bare specifier {:?}",
       normalized_specifier
-    )))
+    ).into()))
   }
 }
 
@@ -1252,7 +1248,7 @@ mod tests {
   }
 
   fn assert_resolve(
-    result: Result<Option<ModuleSpecifier>, ImportMapError>,
+    result: Result<Option<ModuleSpecifier>, ResolveError>,
     expected_url: &str,
   ) {
     let maybe_url = result

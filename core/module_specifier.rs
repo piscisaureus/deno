@@ -4,18 +4,21 @@ use url::ParseError;
 use url::Url;
 
 /// Error indicating the reason resolving a module specifier failed.
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+#[derive(Debug)]
 pub enum ResolveError {
   InvalidUrl(ParseError),
   InvalidBaseUrl(ParseError),
-  InvalidRelativePath,
+  MapError(Box<dyn Error + Send + Sync + 'static>),
+  UnqualifiedRelativePath
 }
-use ResolveError::*;
 
 impl Error for ResolveError {
   fn source(&self) -> Option<&(dyn Error + 'static)> {
+    use ResolveError::*;
     match self {
-      InvalidUrl(ref err) | InvalidBaseUrl(ref err) => Some(err),
+      InvalidUrl(ref err) => Some(err),
+      InvalidBaseUrl(ref err) => Some(err),
+      MapError(ref err) => Some(err.as_ref()),
       _ => None,
     }
   }
@@ -25,13 +28,10 @@ impl fmt::Display for ResolveError {
   fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
     use ResolveError::*;
     match self {
-      InvalidUrl(err) => write!(f, "invalid module URL: {}", err),
-      InvalidBaseUrl(err) => {
-        write!(f, "invalid base URL for module resolution: {}", err)
-      }
-      InvalidRelativePath => {
-        write!(f, "relative module path should start with / or ./ or ../")
-      }
+      InvalidUrl(ref err) => write!(f, "invalid URL: {}", err),
+      InvalidBaseUrl(ref err) => write!(f, "invalid base URL for relative import: {}", err),
+      MapError(ref err) => write!(f, "error applying import map: {}", err),
+      UnqualifiedRelativePath => write!(f, "relative import path must start with / or ./ or ../")
     }
   }
 }
@@ -51,6 +51,8 @@ impl ModuleSpecifier {
     specifier: &str,
     base: &str,
   ) -> Result<ModuleSpecifier, ResolveError> {
+    use ResolveError::*;
+
     let url = match Url::parse(specifier) {
       // 1. Apply the URL parser to specifier.
       //    If the result is not failure, return he result.
@@ -65,7 +67,7 @@ impl ModuleSpecifier {
           || specifier.starts_with("./")
           || specifier.starts_with("../")) =>
       {
-        Err(InvalidRelativePath)?
+        Err(UnqualifiedRelativePath)?
       }
 
       // 3. Return the result of applying the URL parser to specifier with base
@@ -99,7 +101,7 @@ impl ModuleSpecifier {
       Err(..) => {
         let cwd = std::env::current_dir().unwrap();
         let base = Url::from_directory_path(cwd).unwrap();
-        base.join(&root_specifier).map_err(InvalidUrl)?
+        base.join(&root_specifier).map_err(ResolveError::InvalidUrl)?
       }
     };
 

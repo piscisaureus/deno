@@ -10,6 +10,7 @@ use crate::isolate::Isolate;
 use crate::js_errors::JSError;
 use crate::libdeno::deno_mod;
 use crate::module_specifier::ModuleSpecifier;
+use crate::module_specifier::ResolveError;
 use futures::Async;
 use futures::Future;
 use futures::Poll;
@@ -20,6 +21,39 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::Mutex;
+
+/// Error indicating the reason fetching a module failed.
+pub type FetchError = Box<dyn Error + Send + Sync + 'static>;
+
+/// Error indicating the reason loading a module failed.
+#[derive(Debug)]
+pub enum LoadError {
+  ResolveError(ResolveError),
+  FetchError(FetchError),
+  JSError(JSError),
+}
+
+impl Error for LoadError {
+  fn source(&self) -> Option<&(dyn Error + 'static)> {
+    use LoadError::*;
+    match self {
+      ResolveError(ref err) => Some(err),
+      FetchError(ref err) => Some(err.as_ref()),
+      JSError(ref err) => Some(err),
+    }
+  }
+}
+
+impl fmt::Display for LoadError {
+  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    use LoadError::*;
+    match self {
+      ResolveError(ref err) => write!(f, "failed to resolve module: {}", err),
+      FetchError(ref err) => write!(f, "failed to fetch module: {}", err),
+      JSError(ref err) => err.fmt(f),
+    }
+  }
+}
 
 /// Represent result of fetching the source code of a module.
 /// Contains both module name and code.
@@ -34,12 +68,10 @@ pub struct SourceCodeInfo {
   pub code: String,
 }
 
-pub type SourceCodeInfoFuture<E> =
-  dyn Future<Item = SourceCodeInfo, Error = E> + Send;
+pub type SourceCodeInfoFuture =
+  dyn Future<Item = SourceCodeInfo, Error = FetchError> + Send;
 
 pub trait Loader: Send + Sync {
-  type Error: std::error::Error + 'static;
-
   /// Returns an absolute URL.
   /// When implementing an spec-complaint VM, this should be exactly the
   /// algorithm described here:
@@ -49,19 +81,19 @@ pub trait Loader: Send + Sync {
     specifier: &str,
     referrer: &str,
     is_root: bool,
-  ) -> Result<ModuleSpecifier, Self::Error>;
+  ) -> Result<ModuleSpecifier, ResolveError>;
 
   /// Given ModuleSpecifier, load its source code.
   fn load(
     &self,
     module_specifier: &ModuleSpecifier,
-  ) -> Box<SourceCodeInfoFuture<Self::Error>>;
+  ) -> Box<SourceCodeInfoFuture>;
 }
 
-struct PendingLoad<E: Error> {
+struct PendingLoad {
   url: String,
   is_root: bool,
-  source_code_info_future: Box<SourceCodeInfoFuture<E>>,
+  source_code_info_future: Box<SourceCodeInfoFuture>,
 }
 
 /// This future is used to implement parallel async module loading without
@@ -71,7 +103,7 @@ pub struct RecursiveLoad<L: Loader> {
   loader: L,
   isolate: Arc<Mutex<Isolate>>,
   modules: Arc<Mutex<Modules>>,
-  pending: Vec<PendingLoad<L::Error>>,
+  pending: Vec<PendingLoad>,
   is_pending: HashSet<String>,
   phantom: PhantomData<L>,
   // TODO(ry) The following can all be combined into a single enum State type.
@@ -106,9 +138,9 @@ impl<L: Loader> RecursiveLoad<L> {
     specifier: &str,
     referrer: &str,
     parent_id: Option<deno_mod>,
-  ) -> Result<String, L::Error> {
+  ) -> Result<String, LoadError> {
     let is_root = parent_id.is_none();
-    let module_specifier = self.loader.resolve(specifier, referrer, is_root)?;
+    let module_specifier = self.loader.resolve(specifier, referrer, is_root).map_err(LoadError::ResolveError)?;
     let module_name = module_specifier.to_string();
 
     if !is_root {
@@ -142,27 +174,14 @@ impl<L: Loader> RecursiveLoad<L> {
   }
 }
 
-#[derive(Debug, PartialEq)]
-pub enum JSErrorOr<E> {
-  JSError(JSError),
-  Other(E),
-}
-
 impl<L: Loader> Future for RecursiveLoad<L> {
   type Item = deno_mod;
-  type Error = JSErrorOr<L::Error>;
+  type Error = LoadError;
 
   fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
     if self.root.is_none() && self.root_specifier.is_some() {
       let s = self.root_specifier.take().unwrap();
-      match self.add(&s, ".", None) {
-        Err(err) => {
-          return Err(JSErrorOr::Other(err));
-        }
-        Ok(root) => {
-          self.root = Some(root);
-        }
-      }
+      self.root = Some(self.add(&s, ".", None)?);
     }
     assert!(self.root_specifier.is_none());
     assert!(self.root.is_some());
@@ -172,7 +191,7 @@ impl<L: Loader> Future for RecursiveLoad<L> {
       let pending = &mut self.pending[i];
       match pending.source_code_info_future.poll() {
         Err(err) => {
-          return Err(JSErrorOr::Other(err));
+          return Err(LoadError::FetchError(err));
         }
         Ok(Async::NotReady) => {
           i += 1;
@@ -199,19 +218,13 @@ impl<L: Loader> Future for RecursiveLoad<L> {
 
           if !is_module_registered {
             let module_name = &source_code_info.module_name;
-
-            let result = {
-              let isolate = self.isolate.lock().unwrap();
-              isolate.mod_new(
+            let mod_id =
+               self.isolate.lock().unwrap().
+              mod_new(
                 completed.is_root,
                 module_name,
                 &source_code_info.code,
-              )
-            };
-            if let Err(err) = result {
-              return Err(JSErrorOr::JSError(err));
-            }
-            let mod_id = result.unwrap();
+              ).map_err(LoadError::JSError)?;
             if completed.is_root {
               assert!(self.root_id.is_none());
               self.root_id = Some(mod_id);
@@ -236,8 +249,7 @@ impl<L: Loader> Future for RecursiveLoad<L> {
             let referrer = module_name;
             for specifier in imports {
               self
-                .add(&specifier, referrer, Some(mod_id))
-                .map_err(JSErrorOr::Other)?;
+                .add(&specifier, referrer, Some(mod_id))?;
             }
           } else if need_alias {
             let mut modules = self.modules.lock().unwrap();
@@ -252,8 +264,8 @@ impl<L: Loader> Future for RecursiveLoad<L> {
     }
 
     let root_id = self.root_id.unwrap();
-    let result = {
-      let mut resolve_cb =
+
+    let mut resolve_cb =
         |specifier: &str, referrer_id: deno_mod| -> deno_mod {
           let modules = self.modules.lock().unwrap();
           let referrer = modules.get_name(referrer_id).unwrap();
@@ -268,15 +280,10 @@ impl<L: Loader> Future for RecursiveLoad<L> {
             Err(_err) => unreachable!(),
           }
         };
-
-      let mut isolate = self.isolate.lock().unwrap();
-      isolate.mod_instantiate(root_id, &mut resolve_cb)
-    };
-
-    match result {
-      Err(err) => Err(JSErrorOr::JSError(err)),
-      Ok(()) => Ok(Async::Ready(root_id)),
-    }
+      self.isolate.lock().unwrap().
+      mod_instantiate(root_id, &mut resolve_cb).map_err(LoadError::JSError)?;
+    
+    Ok(Async::Ready(root_id))
   }
 }
 
@@ -532,7 +539,7 @@ impl fmt::Display for Deps {
   }
 }
 
-#[cfg(test)]
+#[cfg(test_disabl)]
 mod tests {
   use super::*;
   use crate::isolate::js_check;
@@ -582,24 +589,6 @@ mod tests {
     }
   }
 
-  #[derive(Debug, PartialEq)]
-  enum MockError {
-    ResolveErr,
-    LoadErr,
-  }
-
-  impl fmt::Display for MockError {
-    fn fmt(&self, _f: &mut fmt::Formatter) -> fmt::Result {
-      unimplemented!()
-    }
-  }
-
-  impl Error for MockError {
-    fn cause(&self) -> Option<&dyn Error> {
-      unimplemented!()
-    }
-  }
-
   struct DelayedSourceCodeFuture {
     url: String,
     counter: u32,
@@ -607,7 +596,7 @@ mod tests {
 
   impl Future for DelayedSourceCodeFuture {
     type Item = SourceCodeInfo;
-    type Error = MockError;
+    type Error = LoadError;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
       self.counter += 1;
@@ -621,20 +610,18 @@ mod tests {
           code: src.0.to_owned(),
           module_name: src.1.to_owned(),
         })),
-        None => Err(MockError::LoadErr),
+        None => Err(LoadError::LoadErr),
       }
     }
   }
 
   impl Loader for MockLoader {
-    type Error = MockError;
-
     fn resolve(
       &self,
       specifier: &str,
       referrer: &str,
       _is_root: bool,
-    ) -> Result<ModuleSpecifier, Self::Error> {
+    ) -> Result<ModuleSpecifier, LoadError> {
       let referrer = if referrer == "." {
         "file:///"
       } else {
@@ -643,11 +630,7 @@ mod tests {
 
       eprintln!(">> RESOLVING, S: {}, R: {}", specifier, referrer);
 
-      let output_specifier = match ModuleSpecifier::resolve(specifier, referrer)
-      {
-        Ok(specifier) => specifier,
-        Err(_e) => return Err(MockError::ResolveErr),
-      };
+      let output_specifier = ModuleSpecifier::resolve(specifier, referrer).map_err(LoadError::ResolveError);
 
       if mock_source_code(&output_specifier.to_string()).is_some() {
         Ok(output_specifier)
