@@ -24,10 +24,91 @@ using namespace clang::ast_matchers;
 using namespace llvm;
 
 class NamedDeclAction : public MatchFinder::MatchCallback {
+private:
+  std::unordered_set<const Decl*> seen;
+
+  void handleDeclPathComponent(const clang::Decl* decl) {    
+    if (isa<TranslationUnitDecl>(decl))
+      return;
+    
+    auto ctx = decl->getDeclContext();
+    auto ctx_decl = dyn_cast<Decl>(ctx);
+    handleDeclPathComponent(ctx_decl);
+    std::cout << "::";
+  
+    std::cout << "<" << decl->getDeclKindName() << ">";
+
+    auto named_decl = dyn_cast<NamedDecl>(decl);
+    if (!named_decl) {
+      std::cout << "[[unnamed]]";
+    } else {
+      auto name_info = named_decl->getDeclName();
+      std::string name;
+      switch (name_info.getNameKind()) {
+      case DeclarationName::NameKind::Identifier:
+        name = !name_info.isEmpty() ? name_info.getAsString() : "[[anon]]";
+        break;
+      case DeclarationName::NameKind::CXXConstructorName:
+        name = "constructor";
+        break;      
+      case DeclarationName::NameKind::CXXDestructorName:
+        name = "destructor";
+        break;
+      case DeclarationName::NameKind::CXXConversionFunctionName:
+        name = "convert_to";
+        break;
+      case DeclarationName::NameKind::CXXOperatorName:
+        switch (name_info.getCXXOverloadedOperator()) {
+        case OverloadedOperatorKind::OO_New:
+          name = "op_new";
+          break;
+        case OverloadedOperatorKind::OO_Delete:
+          name = "op_delete";
+          break;
+        case OverloadedOperatorKind::OO_Array_New:
+          name = "op_new_array";
+          break;
+        case OverloadedOperatorKind::OO_Array_Delete:
+          name = "op_delete_array";
+          break;
+        case OverloadedOperatorKind::OO_Subscript:
+          name = "op_subscript";
+          break;
+        case OverloadedOperatorKind::OO_Equal:
+          name = "op_assign";
+          break;
+        case OverloadedOperatorKind::OO_EqualEqual:
+          name = "op_equal";
+          break;
+        case OverloadedOperatorKind::OO_ExclaimEqual:
+          name = "op_not_equal";
+          break;
+        case OverloadedOperatorKind::OO_Star:
+          name = "op_deref";
+          break;
+        case OverloadedOperatorKind::OO_Arrow:
+          name = "op_deref_recursive";
+          break;
+        default:
+          name = "[[unsupported operator]]";
+          break;
+        }
+        break;
+      default:
+        name = "[[unsupported]]";
+        break;
+        }
+      std::cout << name;
+     }
+   }
+
 public:
   void run(const MatchFinder::MatchResult& result) override {
-    auto node = result.Nodes.getNodeAs<NamedDecl>("decl");
-    std::cout << node->getNameAsString() << std::endl;
+    auto decl = result.Nodes.getNodeAs<Decl>("decl")->getCanonicalDecl();
+    if (seen.count(decl) > 0) return;
+    seen.insert(decl);
+    handleDeclPathComponent(decl);
+    std::cout << std::endl;
   }
 };
 
@@ -41,7 +122,6 @@ public:
       return;
     }
     seen.insert(node);
-    FunctionProtoType
     std::cout << node->getNameAsString() << std::endl;
 
     auto ret = node->getReturnType();
@@ -55,6 +135,7 @@ public:
       if (ret2 == ret3) break;
       ret2 = ret3;
     }
+    std::cout << std::endl;
   }
 };
 
@@ -114,10 +195,11 @@ class ASTConsumerImpl : public ASTConsumer {
     //    namedDecl(hasAncestor(namespaceDecl(hasName("::v8")))).bind("decl"),
     //    &named_decl_action);
     auto v8api = decl(hasAncestor(namespaceDecl(hasName("::v8"))),
-      unless(hasAncestor(namespaceDecl(hasName("internal")))));
-    //finder.addMatcher(namedDecl(v8api).bind("decl"), &named_decl_action);
+      unless(hasAncestor(namespaceDecl(hasName("internal")))),
+      unless(hasAncestor(functionDecl())));
+    finder.addMatcher(namedDecl(v8api).bind("decl"), &named_decl_action);
     //finder.addMatcher(recordDecl(v8api).bind("record", &record_action);
-    finder.addMatcher(functionDecl(v8api).bind("fn"), &function_action);
+    //finder.addMatcher(functionDecl(v8api).bind("fn"), &function_action);
     finder.matchAST(ast);
   }
 };

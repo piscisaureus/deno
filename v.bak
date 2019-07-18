@@ -1,0 +1,142 @@
+
+#include "v8/include/v8.h"
+#include <assert.h>
+#include <iostream>
+#include <typeinfo>
+
+namespace v8 {
+namespace c_wrapper {
+
+struct v8__local_int32 {
+  using cxx_type = v8::Local<v8::Int32>;
+  void* ptr;
+};
+
+struct v8__local_value {
+  using cxx_type = v8::Local<v8::Value>;
+  void* ptr;
+};
+
+class Mappings {
+  template <typename C, typename P>
+  struct mapping {
+    using cxx_type = C;
+    using pod_type = P;
+  };
+
+  template <typename S>
+  struct map_from;
+
+  template <typename T>
+  struct map_to {
+    using to_type = T;
+  };
+
+  template <>
+  struct map_from<v8__local_int32> : map_to<v8__local_int32::cxx_type> {};
+  template <>
+  struct map_from<v8__local_int32::cxx_type> : map_to<v8__local_int32> {};
+
+  template <>
+  struct map_from<v8__local_value> : map_to<v8__local_value::cxx_type> {};
+  template <>
+  struct map_from<v8__local_value::cxx_type> : map_to<v8__local_value> {};
+
+  template <typename I, typename O>
+  inline static void assert_valid() {
+    static_assert(sizeof(I) == sizeof(O), "size mismatch");
+    static_assert(alignof(I) == alignof(O), "alignment mismatch");
+  }
+
+ public:
+  template <typename I, typename O = typename map_from<I>::to_type>
+  static O&& convert(I&& value) {
+     assert_valid<I, O>();
+    return reinterpret_cast<O&&>(value);
+  }
+
+  template <typename I, typename O = typename map_from<I>::to_type>
+  static const O&& convert(const I&& value) {
+    assert_valid<I, O>();
+    return reinterpret_cast<const O&&>(value);
+  }
+};
+
+using Pod = Mappings;
+
+/*
+namespace pod {
+template <typename PodTy, typename CxxTy = typename cxx_t<PodTy>::ty>
+CxxTy* from(PodTy* ptr) {
+  return reinterpret_cast<CxxTy*>(ptr);
+}
+template <typename PodTy, typename CxxTy = typename cxx_t<PodTy>::ty>
+const CxxTy* from(const PodTy* ptr) {
+  return reinterpret_cast<const CxxTy*>(ptr);
+}
+template <typename PodTy, typename CxxTy = typename cxx_t<PodTy>::ty>
+CxxTy&& from(PodTy&& value) {
+  static_assert(sizeof(PodTy) == sizeof(CxxTy), "size mismatch");
+  return std::move(*from(&value));
+}
+template <typename PodTy, typename CxxTy = typename cxx_t<PodTy>::ty>
+const CxxTy&& from(const PodTy&& value) {
+  static_assert(sizeof(PodTy) == sizeof(CxxTy), "size mismatch");
+  return std::move(*from(&value));
+}
+
+template <typename CxxTy, typename PodTy = typename pod_t<CxxTy>::ty>
+PodTy* into(CxxTy* ptr) {
+  static_assert(sizeof(PodTy) == sizeof(CxxTy), "size mismatch");
+  return reinterpret_cast<PodTy*>(ptr);
+}
+template <typename CxxTy, typename PodTy = typename pod_t<CxxTy>::ty>
+const PodTy* into(const CxxTy* ptr) {
+  static_assert(sizeof(PodTy) == sizeof(CxxTy), "size mismatch");
+  return reinterpret_cast<const PodTy*>(ptr);
+}
+template <typename CxxTy, typename PodTy = typename pod_t<CxxTy>::ty>
+PodTy&& into(CxxTy&& value) {
+  static_assert(sizeof(PodTy) == sizeof(CxxTy), "size mismatch");
+  return std::move(*into(&value));
+}
+template <typename CxxTy, typename PodTy = typename pod_t<CxxTy>::ty>
+const PodTy&& into(const CxxTy&& value) {
+  static_assert(sizeof(PodTy) == sizeof(CxxTy), "size mismatch");
+  return std::move(*into(&value));
+}
+} // namespace pod
+*/
+
+// extern "C" {
+// bool v8__value__is_null(const v8__value* self) {
+//  return false;
+//}
+
+v8__local_value v8__local_value__cast_int32(v8__local_int32 that) {
+  auto that2 = Pod::convert(std::move(that));
+  auto r = v8::Local<v8::Value>::Cast(that2);
+  return Pod::convert(std::move(r));
+}
+
+// v8__local_int32 v8__local_value__as_int32(const v8__local_int32* self) {
+//  return pod::into(pod::from(self)->As<v8::Int32>());
+//}
+// v8__local_int32 v8__local_value__as_int32(const v8__local_int32* self) {
+//  return pod::into(pod::from(self)->As<v8::Int32>());
+//}
+
+// v8__value* v8__local_value__deref(const v8__local_value* self) {
+//  return pod::into(pod::from(self)->operator->());
+//}
+} // namespace c_wrapper
+} // namespace v8
+
+using namespace v8::c_wrapper;
+int main() {
+  v8::Local<v8::Int32> v;
+  auto c1 = Pod::convert(std::move(v));
+  std::cout << typeid(c1).name() << std::endl;
+  auto c2 = Pod::convert(std::move(c1));
+  std::cout << typeid(c2).name() << std::endl;
+}

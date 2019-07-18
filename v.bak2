@@ -1,0 +1,119 @@
+
+#include "v8/include/v8.h"
+#include <assert.h>
+#include <iostream>
+#include <typeinfo>
+
+namespace v8 {
+namespace c_wrapper {
+
+struct v8__local_int32 {
+  using cxx_type = v8::Local<v8::Int32>;
+  void* ptr;
+};
+
+struct v8__local_value {
+  using cxx_type = v8::Local<v8::Value>;
+  void* ptr;
+};
+
+class Mappings {
+  template <typename S, typename T>
+  struct assert_valid {
+    static_assert(sizeof(S) == sizeof(T), "size mismatch");
+    static_assert(alignof(S) == alignof(T), "alignment mismatch");
+  };
+
+public:
+  template <typename P>
+  struct pod_to_cxx {
+    using from_type = P;
+    using to_type = typename P::cxx_type;
+    assert_valid<from_type, to_type> _;
+  };
+
+  template <typename P>
+  struct cxx_to_pod {
+    using from_type = typename P::cxx_type;
+    using to_type = P;
+    assert_valid<from_type, to_type> _;
+  };
+
+private:
+  template <typename S>
+  struct mapping;
+
+  template <>
+  struct mapping<pod_to_cxx<v8__local_int32>::from_type>
+      : pod_to_cxx<v8__local_int32> {};
+  template <>
+  struct mapping<cxx_to_pod<v8__local_int32>::from_type>
+      : cxx_to_pod<v8__local_int32> {};
+
+  template <>
+  struct mapping<pod_to_cxx<v8__local_value>::from_type>
+      : pod_to_cxx<v8__local_value> {};
+  template <>
+  struct mapping<cxx_to_pod<v8__local_value>::from_type>
+      : cxx_to_pod<v8__local_value> {};
+
+public:
+  template <typename I>
+  using target_type = typename mapping<I>::to_type;
+
+  template <typename I>
+  static target_type<I>&& convert(I&& value) {
+    return reinterpret_cast<target_type<I>&&>(value);
+  }
+
+  template <typename I>
+  static const target_type<I>&& convert(const I&& value) {
+    return reinterpret_cast<const target_type<I>&&>(value);
+  }
+
+  template <typename I>
+  target_type<I>&& operator()(I&& value) const {
+    return reinterpret_cast<target_type<I>&&>(value);
+  };
+
+  template <typename I>
+  const target_type<I>&& operator()(const I&& value) const {
+    return reinterpret_cast<const target_type<I>&&>(value);
+  }
+};
+
+using Pod = Mappings;
+static const Mappings Pod1;
+
+// extern "C" {
+// bool v8__value__is_null(const v8__value* self) {
+//  return false;
+//}
+
+v8__local_value v8__local_value__cast_int32(v8__local_int32 that) {
+  auto that2 = Pod1(std::move(that));
+  auto r = v8::Local<v8::Value>::Cast(that2);
+  return Pod::convert(std::move(r));
+}
+
+// v8__local_int32 v8__local_value__as_int32(const v8__local_int32* self) {
+//  return pod::into(pod::from(self)->As<v8::Int32>());
+//}
+// v8__local_int32 v8__local_value__as_int32(const v8__local_int32* self) {
+//  return pod::into(pod::from(self)->As<v8::Int32>());
+//}
+
+// v8__value* v8__local_value__deref(const v8__local_value* self) {
+//  return pod::into(pod::from(self)->operator->());
+//}
+} // namespace c_wrapper
+} // namespace v8
+
+using namespace v8::c_wrapper;
+int main() {
+  v8::Local<v8::Int32> v;
+  auto c1 = Pod::convert(std::move(v));
+  std::cout << typeid(c1).name() << std::endl;
+  auto c2 = Pod::convert(std::move(c1));
+  std::cout << typeid(c2).name() << std::endl;
+}

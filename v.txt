@@ -1,0 +1,3816 @@
+Local
+  void=> 
+Local
+  void=> 
+Local
+  void=> 
+IsEmpty
+  _Bool=> 
+Clear
+  void=> 
+operator->
+  class v8::Primitive *=> 
+operator*
+  class v8::Primitive *=> 
+operator==
+  _Bool=> 
+operator==
+  _Bool=> 
+operator!=
+  _Bool=> 
+operator!=
+  _Bool=> 
+Cast
+  Local<class v8::Primitive>=> => 
+As
+  Local<S>=> 
+New
+  Local<class v8::Primitive>=> => 
+New
+  Local<class v8::Primitive>=> => 
+New
+  Local<class v8::Primitive>=> => 
+Undefined
+  Local<class v8::Primitive>=> => 
+Null
+  Local<class v8::Primitive>=> => 
+True
+  Local<class v8::Boolean>=> => 
+False
+  Local<class v8::Boolean>=> => 
+Local
+  void=> 
+New
+  Local<class v8::Primitive>=> => 
+Local
+  void=> 
+Local
+  void=> 
+~Local
+  void=> 
+Local
+  void=> 
+Local
+  void=> 
+Local
+  void=> 
+IsEmpty
+  _Bool=> 
+Clear
+  void=> 
+operator->
+  class v8::Boolean *=> 
+operator*
+  class v8::Boolean *=> 
+operator==
+  _Bool=> 
+operator==
+  _Bool=> 
+operator!=
+  _Bool=> 
+operator!=
+  _Bool=> 
+Cast
+  Local<class v8::Boolean>=> => 
+As
+  Local<S>=> 
+New
+  Local<class v8::Boolean>=> => 
+New
+  Local<class v8::Boolean>=> => 
+New
+  Local<class v8::Boolean>=> => 
+Local
+  void=> 
+New
+  Local<class v8::Boolean>=> => 
+Local
+  void=> 
+Local
+  void=> 
+~Local
+  void=> 
+Local
+  void=> 
+Local
+  void=> 
+Local
+  void=> 
+IsEmpty
+  _Bool=> 
+Clear
+  void=> 
+operator->
+  class v8::Value *=> 
+operator*
+  class v8::Value *=> 
+operator==
+  _Bool=> 
+operator==
+  _Bool=> 
+operator!=
+  _Bool=> 
+operator!=
+  _Bool=> 
+Cast
+  Local<class v8::Value>=> => 
+Cast
+  Local<class v8::Value>=> => 
+As
+  Local<S>=> 
+New
+  Local<class v8::Value>=> => 
+New
+  Local<class v8::Value>=> => 
+New
+  Local<class v8::Value>=> => 
+Local
+  void=> 
+New
+  Local<class v8::Value>=> => 
+Local
+  void=> 
+Local
+  void=> 
+~Local
+  void=> 
+operator=
+  class v8::Local<class v8::Value> &=> 
+operator=
+  class v8::Local<class v8::Value> &=> 
+Local
+  void=> 
+Local
+  void=> 
+Local
+  void=> 
+IsEmpty
+  _Bool=> 
+Clear
+  void=> 
+operator->
+  class v8::PrimitiveArray *=> 
+operator*
+  class v8::PrimitiveArray *=> 
+operator==
+  _Bool=> 
+operator==
+  _Bool=> 
+operator!=
+  _Bool=> 
+operator!=
+  _Bool=> 
+Cast
+  Local<class v8::PrimitiveArray>=> => 
+As
+  Local<S>=> 
+New
+  Local<class v8::PrimitiveArray>=> => 
+New
+  Local<class v8::PrimitiveArray>=> => 
+New
+  Local<class v8::PrimitiveArray>=> => 
+Local
+  void=> 
+New
+  Local<class v8::PrimitiveArray>=> => 
+Local
+  void=> 
+Local
+  void=> 
+~Local
+  void=> 
+operator=
+  class v8::Local<class v8::PrimitiveArray> &=> 
+operator=
+  class v8::Local<class v8::PrimitiveArray> &=> 
+Local
+  void=> 
+Local
+  void=> 
+Local
+  void=> 
+IsEmpty
+  _Bool=> 
+Clear
+  void=> 
+operator->
+  class v8::Integer *=> 
+operator*
+  class v8::Integer *=> 
+operator==
+  _Bool=> 
+operator==
+  _Bool=> 
+operator!=
+  _Bool=> 
+operator!=
+  _Bool=> 
+Cast
+  Local<class v8::Integer>=> => 
+Cast
+  Local<class v8::Integer>=> => 
+As
+  Local<S>=> 
+New
+  Local<class v8::Integer>=> => 
+New
+  Local<class v8::Integer>=> => 
+New
+  Local<class v8::Integer>=> => 
+Local
+  void=> 
+New
+  Local<class v8::Integer>=> => 
+Local
+  void=> 
+Local
+  void=> 
+~Local
+  void=> 
+operator=
+  class v8::Local<class v8::Integer> &=> 
+operator=
+  class v8::Local<class v8::Integer> &=> 
+Local
+  void=> 
+Local
+  void=> 
+Local
+  void=> 
+IsEmpty
+  _Bool=> 
+Clear
+  void=> 
+operator->
+  class v8::String *=> 
+operator*
+  class v8::String *=> 
+operator==
+  _Bool=> 
+operator==
+  _Bool=> 
+operator!=
+  _Bool=> 
+operator!=
+  _Bool=> 
+Cast
+  Local<class v8::String>=> => 
+As
+  Local<S>=> 
+New
+  Local<class v8::String>=> => 
+New
+  Local<class v8::String>=> => 
+New
+  Local<class v8::String>=> => 
+Local
+  void=> 
+New
+  Local<class v8::String>=> => 
+Local
+  void=> 
+Local
+  void=> 
+operator=
+  class v8::Local<class v8::String> &=> 
+operator=
+  class v8::Local<class v8::String> &=> 
+~Local
+  void=> 
+Local
+  void=> 
+Local
+  void=> 
+Local
+  void=> 
+IsEmpty
+  _Bool=> 
+Clear
+  void=> 
+operator->
+  class v8::Context *=> 
+operator*
+  class v8::Context *=> 
+operator==
+  _Bool=> 
+operator==
+  _Bool=> 
+operator!=
+  _Bool=> 
+operator!=
+  _Bool=> 
+Cast
+  Local<class v8::Context>=> => 
+As
+  Local<S>=> 
+New
+  Local<class v8::Context>=> => 
+New
+  Local<class v8::Context>=> => 
+New
+  Local<class v8::Context>=> => 
+Local
+  void=> 
+New
+  Local<class v8::Context>=> => 
+~Local
+  void=> 
+Local
+  void=> 
+Local
+  void=> 
+Local
+  void=> 
+Local
+  void=> 
+IsEmpty
+  _Bool=> 
+Clear
+  void=> 
+operator->
+  class v8::UnboundScript *=> 
+operator*
+  class v8::UnboundScript *=> 
+operator==
+  _Bool=> 
+operator==
+  _Bool=> 
+operator!=
+  _Bool=> 
+operator!=
+  _Bool=> 
+Cast
+  Local<class v8::UnboundScript>=> => 
+As
+  Local<S>=> 
+New
+  Local<class v8::UnboundScript>=> => 
+New
+  Local<class v8::UnboundScript>=> => 
+New
+  Local<class v8::UnboundScript>=> => 
+Local
+  void=> 
+New
+  Local<class v8::UnboundScript>=> => 
+Local
+  void=> 
+Local
+  void=> 
+Local
+  void=> 
+IsEmpty
+  _Bool=> 
+Clear
+  void=> 
+operator->
+  class v8::Object *=> 
+operator*
+  class v8::Object *=> 
+operator==
+  _Bool=> 
+operator==
+  _Bool=> 
+operator!=
+  _Bool=> 
+operator!=
+  _Bool=> 
+Cast
+  Local<class v8::Object>=> => 
+Cast
+  Local<class v8::Object>=> => 
+As
+  Local<S>=> 
+New
+  Local<class v8::Object>=> => 
+New
+  Local<class v8::Object>=> => 
+New
+  Local<class v8::Object>=> => 
+Local
+  void=> 
+New
+  Local<class v8::Object>=> => 
+~Local
+  void=> 
+Local
+  void=> 
+Local
+  void=> 
+Local
+  void=> 
+Local
+  void=> 
+Local
+  void=> 
+IsEmpty
+  _Bool=> 
+Clear
+  void=> 
+operator->
+  class v8::Function *=> 
+operator*
+  class v8::Function *=> 
+operator==
+  _Bool=> 
+operator==
+  _Bool=> 
+operator!=
+  _Bool=> 
+operator!=
+  _Bool=> 
+Cast
+  Local<class v8::Function>=> => 
+As
+  Local<S>=> 
+New
+  Local<class v8::Function>=> => 
+New
+  Local<class v8::Function>=> => 
+New
+  Local<class v8::Function>=> => 
+Local
+  void=> 
+New
+  Local<class v8::Function>=> => 
+Local
+  void=> 
+Local
+  void=> 
+~Local
+  void=> 
+Local
+  void=> 
+Local
+  void=> 
+Local
+  void=> 
+IsEmpty
+  _Bool=> 
+Clear
+  void=> 
+operator->
+  class v8::Number *=> 
+operator*
+  class v8::Number *=> 
+operator==
+  _Bool=> 
+operator==
+  _Bool=> 
+operator!=
+  _Bool=> 
+operator!=
+  _Bool=> 
+Cast
+  Local<class v8::Number>=> => 
+As
+  Local<S>=> 
+New
+  Local<class v8::Number>=> => 
+New
+  Local<class v8::Number>=> => 
+New
+  Local<class v8::Number>=> => 
+Local
+  void=> 
+New
+  Local<class v8::Number>=> => 
+Local
+  void=> 
+Local
+  void=> 
+~Local
+  void=> 
+Local
+  void=> 
+Local
+  void=> 
+Local
+  void=> 
+Local
+  void=> 
+IsEmpty
+  _Bool=> 
+Clear
+  void=> 
+operator->
+  class v8::Name *=> 
+operator*
+  class v8::Name *=> 
+operator==
+  _Bool=> 
+operator==
+  _Bool=> 
+operator!=
+  _Bool=> 
+operator!=
+  _Bool=> 
+Cast
+  Local<class v8::Name>=> => 
+As
+  Local<S>=> 
+New
+  Local<class v8::Name>=> => 
+New
+  Local<class v8::Name>=> => 
+New
+  Local<class v8::Name>=> => 
+Local
+  void=> 
+New
+  Local<class v8::Name>=> => 
+Local
+  void=> 
+Local
+  void=> 
+~Local
+  void=> 
+Local
+  void=> 
+Local
+  void=> 
+Local
+  void=> 
+IsEmpty
+  _Bool=> 
+Clear
+  void=> 
+operator->
+  class v8::FunctionTemplate *=> 
+operator*
+  class v8::FunctionTemplate *=> 
+operator==
+  _Bool=> 
+operator==
+  _Bool=> 
+operator!=
+  _Bool=> 
+operator!=
+  _Bool=> 
+Cast
+  Local<class v8::FunctionTemplate>=> => 
+As
+  Local<S>=> 
+New
+  Local<class v8::FunctionTemplate>=> => 
+New
+  Local<class v8::FunctionTemplate>=> => 
+New
+  Local<class v8::FunctionTemplate>=> => 
+Local
+  void=> 
+New
+  Local<class v8::FunctionTemplate>=> => 
+Local
+  void=> 
+Local
+  void=> 
+~Local
+  void=> 
+Local
+  void=> 
+Local
+  void=> 
+Local
+  void=> 
+IsEmpty
+  _Bool=> 
+Clear
+  void=> 
+operator->
+  class v8::Promise *=> 
+operator*
+  class v8::Promise *=> 
+operator==
+  _Bool=> 
+operator==
+  _Bool=> 
+operator!=
+  _Bool=> 
+operator!=
+  _Bool=> 
+Cast
+  Local<class v8::Promise>=> => 
+As
+  Local<S>=> 
+New
+  Local<class v8::Promise>=> => 
+New
+  Local<class v8::Promise>=> => 
+New
+  Local<class v8::Promise>=> => 
+Local
+  void=> 
+New
+  Local<class v8::Promise>=> => 
+Local
+  void=> 
+Local
+  void=> 
+Local
+  void=> 
+Local
+  void=> 
+Local
+  void=> 
+IsEmpty
+  _Bool=> 
+Clear
+  void=> 
+operator->
+  class v8::Data *=> 
+operator*
+  class v8::Data *=> 
+operator==
+  _Bool=> 
+operator==
+  _Bool=> 
+operator!=
+  _Bool=> 
+operator!=
+  _Bool=> 
+Cast
+  Local<class v8::Data>=> => 
+As
+  Local<S>=> 
+New
+  Local<class v8::Data>=> => 
+New
+  Local<class v8::Data>=> => 
+New
+  Local<class v8::Data>=> => 
+Local
+  void=> 
+New
+  Local<class v8::Data>=> => 
+Local
+  void=> 
+Local
+  void=> 
+~Local
+  void=> 
+Local
+  void=> 
+Local
+  void=> 
+Local
+  void=> 
+IsEmpty
+  _Bool=> 
+Clear
+  void=> 
+operator->
+  class v8::AccessorSignature *=> 
+operator*
+  class v8::AccessorSignature *=> 
+operator==
+  _Bool=> 
+operator==
+  _Bool=> 
+operator!=
+  _Bool=> 
+operator!=
+  _Bool=> 
+Cast
+  Local<class v8::AccessorSignature>=> => 
+As
+  Local<S>=> 
+New
+  Local<class v8::AccessorSignature>=> => 
+New
+  Local<class v8::AccessorSignature>=> => 
+New
+  Local<class v8::AccessorSignature>=> => 
+Local
+  void=> 
+New
+  Local<class v8::AccessorSignature>=> => 
+Local
+  void=> 
+Local
+  void=> 
+~Local
+  void=> 
+Local
+  void=> 
+Local
+  void=> 
+Local
+  void=> 
+IsEmpty
+  _Bool=> 
+Clear
+  void=> 
+operator->
+  class v8::Signature *=> 
+operator*
+  class v8::Signature *=> 
+operator==
+  _Bool=> 
+operator==
+  _Bool=> 
+operator!=
+  _Bool=> 
+operator!=
+  _Bool=> 
+Cast
+  Local<class v8::Signature>=> => 
+As
+  Local<S>=> 
+New
+  Local<class v8::Signature>=> => 
+New
+  Local<class v8::Signature>=> => 
+New
+  Local<class v8::Signature>=> => 
+Local
+  void=> 
+New
+  Local<class v8::Signature>=> => 
+Local
+  void=> 
+Local
+  void=> 
+~Local
+  void=> 
+MaybeLocal
+  void=> 
+MaybeLocal
+  void=> 
+IsEmpty
+  _Bool=> 
+ToLocal
+  _Bool=> 
+ToLocalChecked
+  Local<class v8::Value>=> => 
+FromMaybe
+  Local<S>=> 
+MaybeLocal
+  void=> 
+MaybeLocal
+  void=> 
+~MaybeLocal
+  void=> 
+MaybeLocal
+  void=> 
+MaybeLocal
+  void=> 
+IsEmpty
+  _Bool=> 
+ToLocal
+  _Bool=> 
+ToLocalChecked
+  Local<class v8::String>=> => 
+FromMaybe
+  Local<S>=> 
+~MaybeLocal
+  void=> 
+MaybeLocal
+  void=> 
+MaybeLocal
+  void=> 
+IsEmpty
+  _Bool=> 
+ToLocal
+  _Bool=> 
+ToLocalChecked
+  Local<class v8::Object>=> => 
+FromMaybe
+  Local<S>=> 
+~MaybeLocal
+  void=> 
+MaybeLocal
+  void=> 
+MaybeLocal
+  void=> 
+MaybeLocal
+  void=> 
+MaybeLocal
+  void=> 
+IsEmpty
+  _Bool=> 
+ToLocal
+  _Bool=> 
+ToLocalChecked
+  Local<class v8::ObjectTemplate>=> => 
+FromMaybe
+  Local<S>=> 
+MaybeLocal
+  void=> 
+MaybeLocal
+  void=> 
+~MaybeLocal
+  void=> 
+Reset
+  void=> 
+Reset
+  void=> 
+Reset
+  void=> 
+IsEmpty
+  _Bool=> 
+Empty
+  void=> 
+Get
+  Local<class v8::Object>=> => 
+operator==
+  _Bool=> 
+operator==
+  _Bool=> 
+operator!=
+  _Bool=> 
+operator!=
+  _Bool=> 
+SetWeak
+  void=> 
+SetWeak
+  void=> 
+ClearWeak
+  P *=> 
+ClearWeak
+  void=> 
+AnnotateStrongRetainer
+  void=> 
+IsWeak
+  _Bool=> 
+SetWrapperClassId
+  void=> 
+WrapperClassId
+  uint16_t=> => 
+PersistentBase
+  void=> 
+operator=
+  void=> 
+PersistentBase
+  void=> 
+New
+  class v8::Object *=> 
+Reset
+  void=> 
+Reset
+  void=> 
+Reset
+  void=> 
+IsEmpty
+  _Bool=> 
+Empty
+  void=> 
+Get
+  Local<class v8::Promise>=> => 
+operator==
+  _Bool=> 
+operator==
+  _Bool=> 
+operator!=
+  _Bool=> 
+operator!=
+  _Bool=> 
+SetWeak
+  void=> 
+SetWeak
+  void=> 
+ClearWeak
+  P *=> 
+ClearWeak
+  void=> 
+AnnotateStrongRetainer
+  void=> 
+IsWeak
+  _Bool=> 
+SetWrapperClassId
+  void=> 
+WrapperClassId
+  uint16_t=> => 
+PersistentBase
+  void=> 
+operator=
+  void=> 
+PersistentBase
+  void=> 
+New
+  class v8::Promise *=> 
+Persistent
+  void=> 
+Persistent
+  void=> 
+Persistent
+  void=> 
+Persistent
+  void=> 
+Persistent
+  void=> 
+Persistent
+  void=> 
+operator=
+  class v8::Persistent<class v8::Promise, struct v8::CopyablePersistentTraits<class v8::Promise> > &=> 
+operator=
+  class v8::Persistent<class v8::Promise, struct v8::CopyablePersistentTraits<class v8::Promise> > &=> 
+operator=
+  class v8::Persistent<class v8::Promise, struct v8::CopyablePersistentTraits<class v8::Promise> > &=> 
+~Persistent
+  void=> 
+Cast
+  Persistent<class v8::Promise> &=> 
+As
+  Persistent<S> &=> 
+Persistent
+  void=> 
+operator*
+  class v8::Promise *=> 
+Copy
+  void=> 
+TracedGlobal
+  void=> 
+~TracedGlobal
+  void=> 
+TracedGlobal
+  void=> 
+TracedGlobal
+  void=> 
+operator=
+  class v8::TracedGlobal<class v8::Object> &=> 
+TracedGlobal
+  void=> 
+operator=
+  void=> 
+IsEmpty
+  _Bool=> 
+Reset
+  void=> 
+Reset
+  void=> 
+Get
+  Local<class v8::Object>=> => 
+As
+  TracedGlobal<S> &=> 
+operator==
+  _Bool=> 
+operator==
+  _Bool=> 
+operator!=
+  _Bool=> 
+operator!=
+  _Bool=> 
+SetWrapperClassId
+  void=> 
+WrapperClassId
+  uint16_t=> => 
+SetFinalizationCallback
+  void=> 
+New
+  class v8::Object *=> 
+operator*
+  class v8::Object *=> 
+Local<T>
+  void=> 
+Local<T>
+  void=> 
+IsEmpty
+  _Bool=> 
+Clear
+  void=> 
+operator->
+  T *=> 
+operator*
+  T *=> 
+operator==
+  _Bool=> 
+operator==
+  _Bool=> 
+operator!=
+  _Bool=> 
+operator!=
+  _Bool=> 
+Cast
+  Local<T>=> => 
+As
+  Local<S>=> 
+New
+  Local<T>=> => 
+New
+  Local<T>=> => 
+New
+  Local<T>=> => 
+Undefined
+  Local<class v8::Primitive>=> => 
+Null
+  Local<class v8::Primitive>=> => 
+True
+  Local<class v8::Boolean>=> => 
+False
+  Local<class v8::Boolean>=> => 
+Local<T>
+  void=> 
+New
+  Local<T>=> => 
+MaybeLocal<T>
+  void=> 
+MaybeLocal<T>
+  void=> 
+IsEmpty
+  _Bool=> 
+ToLocal
+  _Bool=> 
+ToLocalChecked
+  Local<T>=> 
+FromMaybe
+  Local<S>=> 
+Eternal<T>
+  void=> 
+Eternal<T>
+  void=> 
+Get
+  Local<T>=> 
+IsEmpty
+  _Bool=> 
+Set
+  void=> 
+WeakCallbackInfo<T>
+  void=> 
+GetIsolate
+  class v8::Isolate *=> 
+GetParameter
+  T *=> 
+GetInternalField
+  void *=> 
+SetSecondPassCallback
+  void=> 
+WeakCallbackInfo
+  void=> 
+GetIsolate
+  class v8::Isolate *=> 
+GetParameter
+  void *=> 
+GetInternalField
+  void *=> 
+SetSecondPassCallback
+  void=> 
+Reset
+  void=> 
+Reset
+  void=> 
+Reset
+  void=> 
+IsEmpty
+  _Bool=> 
+Empty
+  void=> 
+Get
+  Local<T>=> 
+operator==
+  _Bool=> 
+operator==
+  _Bool=> 
+operator!=
+  _Bool=> 
+operator!=
+  _Bool=> 
+SetWeak
+  void=> 
+SetWeak
+  void=> 
+ClearWeak
+  P *=> 
+ClearWeak
+  void=> 
+AnnotateStrongRetainer
+  void=> 
+IsWeak
+  _Bool=> 
+SetWrapperClassId
+  void=> 
+WrapperClassId
+  uint16_t=> => 
+PersistentBase<T>
+  void=> 
+operator=
+  void=> 
+PersistentBase<T>
+  void=> 
+New
+  T *=> 
+Copy
+  void=> 
+Uncompilable
+  void=> 
+Copy
+  void=> 
+Persistent<T, M>
+  void=> 
+Persistent<T, M>
+  void=> 
+Persistent<T, M>
+  void=> 
+Persistent<T, M>
+  void=> 
+Persistent<T, M>
+  void=> 
+operator=
+  Persistent<T, M> &=> 
+operator=
+  Persistent<T, M> &=> 
+~Persistent<T, M>
+  void=> 
+Cast
+  Persistent<T> &=> 
+As
+  Persistent<S> &=> 
+Persistent<T, M>
+  void=> 
+operator*
+  T *=> 
+Copy
+  void=> 
+Global<T>
+  void=> 
+Global<T>
+  void=> 
+Global<T>
+  void=> 
+Global<T>
+  void=> 
+~Global<T>
+  void=> 
+operator=
+  Global<T> &=> 
+Pass
+  Global<T>=> 
+Global<T>
+  void=> 
+operator=
+  void=> 
+operator*
+  T *=> 
+TracedGlobal<T>
+  void=> 
+~TracedGlobal<T>
+  void=> 
+TracedGlobal<T>
+  void=> 
+TracedGlobal<T>
+  void=> 
+operator=
+  TracedGlobal<T> &=> 
+TracedGlobal<T>
+  void=> 
+operator=
+  void=> 
+IsEmpty
+  _Bool=> 
+Reset
+  void=> 
+Reset
+  void=> 
+Get
+  Local<T>=> 
+As
+  TracedGlobal<S> &=> 
+operator==
+  _Bool=> 
+operator==
+  _Bool=> 
+operator!=
+  _Bool=> 
+operator!=
+  _Bool=> 
+SetWrapperClassId
+  void=> 
+WrapperClassId
+  uint16_t=> => 
+SetFinalizationCallback
+  void=> 
+New
+  T *=> 
+operator*
+  T *=> 
+HandleScope
+  void=> 
+~HandleScope
+  void=> 
+NumberOfHandles
+  int=> 
+GetIsolate
+  class v8::Isolate *=> 
+HandleScope
+  void=> 
+operator=
+  void=> 
+HandleScope
+  void=> 
+Initialize
+  void=> 
+CreateHandle
+  internal::Address *=> 
+operator new
+  void *=> 
+operator new[]
+  void *=> 
+operator delete
+  void=> 
+operator delete[]
+  void=> 
+EscapableHandleScope
+  void=> 
+~EscapableHandleScope
+  void=> 
+Escape
+  Local<T>=> 
+EscapeMaybe
+  MaybeLocal<T>=> 
+EscapableHandleScope
+  void=> 
+operator=
+  void=> 
+operator new
+  void *=> 
+operator new[]
+  void *=> 
+operator delete
+  void=> 
+operator delete[]
+  void=> 
+Escape
+  internal::Address *=> 
+SealHandleScope
+  void=> 
+~SealHandleScope
+  void=> 
+SealHandleScope
+  void=> 
+operator=
+  void=> 
+operator new
+  void *=> 
+operator new[]
+  void *=> 
+operator delete
+  void=> 
+operator delete[]
+  void=> 
+Data
+  void=> 
+GetResourceName
+  Local<class v8::Value>=> => 
+GetHostDefinedOptions
+  Local<class v8::PrimitiveArray>=> => 
+New
+  Local<class v8::PrimitiveArray>=> => 
+Length
+  int=> 
+Set
+  void=> 
+Get
+  Local<class v8::Primitive>=> => 
+ScriptOriginOptions
+  void=> 
+ScriptOriginOptions
+  void=> 
+IsSharedCrossOrigin
+  _Bool=> 
+IsOpaque
+  _Bool=> 
+IsWasm
+  _Bool=> 
+IsModule
+  _Bool=> 
+Flags
+  int=> 
+ScriptOriginOptions
+  void=> 
+ScriptOriginOptions
+  void=> 
+~ScriptOriginOptions
+  void=> 
+operator=
+  class v8::ScriptOriginOptions &=> 
+operator=
+  class v8::ScriptOriginOptions &=> 
+ScriptOrigin
+  void=> 
+ResourceName
+  Local<class v8::Value>=> => 
+ResourceLineOffset
+  Local<class v8::Integer>=> => 
+ResourceColumnOffset
+  Local<class v8::Integer>=> => 
+ScriptID
+  Local<class v8::Integer>=> => 
+SourceMapUrl
+  Local<class v8::Value>=> => 
+HostDefinedOptions
+  Local<class v8::PrimitiveArray>=> => 
+Options
+  class v8::ScriptOriginOptions=> 
+ScriptOrigin
+  void=> 
+operator=
+  class v8::ScriptOrigin &=> 
+ScriptOrigin
+  void=> 
+BindToCurrentContext
+  Local<class v8::Script>=> => 
+GetId
+  int=> 
+GetScriptName
+  Local<class v8::Value>=> => 
+GetSourceURL
+  Local<class v8::Value>=> => 
+GetSourceMappingURL
+  Local<class v8::Value>=> => 
+GetLineNumber
+  int=> 
+GetLineNumber
+  int=> 
+GetColumnNumber
+  int=> 
+Location
+  void=> 
+GetStatus
+  enum v8::Module::Status=> 
+GetException
+  Local<class v8::Value>=> => 
+GetModuleRequestsLength
+  int=> 
+GetModuleRequest
+  Local<class v8::String>=> => 
+GetModuleRequestLocation
+  class v8::Location=> 
+GetIdentityHash
+  int=> 
+InstantiateModule
+  Maybe<_Bool>=> => 
+Evaluate
+  MaybeLocal<class v8::Value>=> => 
+GetModuleNamespace
+  Local<class v8::Value>=> => 
+GetUnboundModuleScript
+  Local<class v8::UnboundModuleScript>=> => 
+Compile
+  MaybeLocal<class v8::Script>=> => 
+Run
+  MaybeLocal<class v8::Value>=> => 
+GetUnboundScript
+  Local<class v8::UnboundScript>=> => 
+CachedData
+  void=> 
+CachedData
+  void=> 
+~CachedData
+  void=> 
+CachedData
+  void=> 
+operator=
+  struct v8::ScriptCompiler::CachedData &=> 
+Source
+  void=> 
+Source
+  void=> 
+~Source
+  void=> 
+GetCachedData
+  const struct v8::ScriptCompiler::CachedData *=> 
+GetResourceOptions
+  const class v8::ScriptOriginOptions &=> 
+Source
+  void=> 
+operator=
+  class v8::ScriptCompiler::Source &=> 
+~ExternalSourceStream
+  void=> 
+GetMoreData
+  size_t=> => 
+SetBookmark
+  _Bool=> 
+ResetToBookmark
+  void=> 
+operator=
+  class v8::ScriptCompiler::ExternalSourceStream &=> 
+StreamedSource
+  void=> 
+StreamedSource
+  void=> 
+~StreamedSource
+  void=> 
+impl
+  internal::ScriptStreamingData *=> 
+StreamedSource
+  void=> 
+operator=
+  class v8::ScriptCompiler::StreamedSource &=> 
+Run
+  void=> 
+ScriptStreamingTask
+  void=> 
+CompileUnboundScript
+  MaybeLocal<class v8::UnboundScript>=> => 
+Compile
+  MaybeLocal<class v8::Script>=> => 
+StartStreamingScript
+  class v8::ScriptCompiler::ScriptStreamingTask *=> 
+Compile
+  MaybeLocal<class v8::Script>=> => 
+CachedDataVersionTag
+  uint32_t=> => 
+CompileModule
+  MaybeLocal<class v8::Module>=> => 
+CompileFunctionInContext
+  MaybeLocal<class v8::Function>=> => 
+CreateCodeCache
+  struct v8::ScriptCompiler::CachedData *=> 
+CreateCodeCache
+  struct v8::ScriptCompiler::CachedData *=> 
+CreateCodeCacheForFunction
+  struct v8::ScriptCompiler::CachedData *=> 
+CompileUnboundInternal
+  MaybeLocal<class v8::UnboundScript>=> => 
+Get
+  Local<class v8::String>=> => 
+GetIsolate
+  class v8::Isolate *=> 
+GetSourceLine
+  MaybeLocal<class v8::String>=> => 
+GetScriptOrigin
+  class v8::ScriptOrigin=> 
+GetScriptResourceName
+  Local<class v8::Value>=> => 
+GetStackTrace
+  Local<class v8::StackTrace>=> => 
+GetLineNumber
+  Maybe<int>=> => 
+GetStartPosition
+  int=> 
+GetEndPosition
+  int=> 
+ErrorLevel
+  int=> 
+GetStartColumn
+  int=> 
+GetStartColumn
+  Maybe<int>=> => 
+GetEndColumn
+  int=> 
+GetEndColumn
+  Maybe<int>=> => 
+IsSharedCrossOrigin
+  _Bool=> 
+IsOpaque
+  _Bool=> 
+PrintCurrentStackTrace
+  void=> 
+GetFrame
+  Local<class v8::StackFrame>=> => 
+GetFrameCount
+  int=> 
+CurrentStackTrace
+  Local<class v8::StackTrace>=> => 
+GetLineNumber
+  int=> 
+GetColumn
+  int=> 
+GetScriptId
+  int=> 
+GetScriptName
+  Local<class v8::String>=> => 
+GetScriptNameOrSourceURL
+  Local<class v8::String>=> => 
+GetFunctionName
+  Local<class v8::String>=> => 
+IsEval
+  _Bool=> 
+IsConstructor
+  _Bool=> 
+IsWasm
+  _Bool=> 
+IsUserJavaScript
+  _Bool=> 
+RegisterState
+  void=> 
+Parse
+  MaybeLocal<class v8::Value>=> => 
+Stringify
+  MaybeLocal<class v8::String>=> => 
+~Delegate
+  void=> 
+ThrowDataCloneError
+  void=> 
+WriteHostObject
+  Maybe<_Bool>=> => 
+GetSharedArrayBufferId
+  Maybe<uint32_t>=> => 
+GetWasmModuleTransferId
+  Maybe<uint32_t>=> => 
+ReallocateBufferMemory
+  void *=> 
+FreeBufferMemory
+  void=> 
+operator=
+  class v8::ValueSerializer::Delegate &=> 
+ValueSerializer
+  void=> 
+ValueSerializer
+  void=> 
+~ValueSerializer
+  void=> 
+WriteHeader
+  void=> 
+WriteValue
+  Maybe<_Bool>=> => 
+Release
+  std::pair<uint8_t *, size_t>=> => => 
+TransferArrayBuffer
+  void=> 
+SetTreatArrayBufferViewsAsHostObjects
+  void=> 
+WriteUint32
+  void=> 
+WriteUint64
+  void=> 
+WriteDouble
+  void=> 
+WriteRawBytes
+  void=> 
+ValueSerializer
+  void=> 
+operator=
+  void=> 
+~Delegate
+  void=> 
+ReadHostObject
+  MaybeLocal<class v8::Object>=> => 
+GetWasmModuleFromId
+  MaybeLocal<class v8::WasmModuleObject>=> => 
+GetSharedArrayBufferFromId
+  MaybeLocal<class v8::SharedArrayBuffer>=> => 
+operator=
+  class v8::ValueDeserializer::Delegate &=> 
+ValueDeserializer
+  void=> 
+ValueDeserializer
+  void=> 
+~ValueDeserializer
+  void=> 
+ReadHeader
+  Maybe<_Bool>=> => 
+ReadValue
+  MaybeLocal<class v8::Value>=> => 
+TransferArrayBuffer
+  void=> 
+TransferSharedArrayBuffer
+  void=> 
+SetSupportsLegacyWireFormat
+  void=> 
+SetExpectInlineWasm
+  void=> 
+GetWireFormatVersion
+  uint32_t=> => 
+ReadUint32
+  _Bool=> 
+ReadUint64
+  _Bool=> 
+ReadDouble
+  _Bool=> 
+ReadRawBytes
+  _Bool=> 
+ValueDeserializer
+  void=> 
+operator=
+  void=> 
+IsUndefined
+  _Bool=> 
+IsNull
+  _Bool=> 
+IsNullOrUndefined
+  _Bool=> 
+IsTrue
+  _Bool=> 
+IsFalse
+  _Bool=> 
+IsName
+  _Bool=> 
+IsString
+  _Bool=> 
+IsSymbol
+  _Bool=> 
+IsFunction
+  _Bool=> 
+IsArray
+  _Bool=> 
+IsObject
+  _Bool=> 
+IsBigInt
+  _Bool=> 
+IsBoolean
+  _Bool=> 
+IsNumber
+  _Bool=> 
+IsExternal
+  _Bool=> 
+IsInt32
+  _Bool=> 
+IsUint32
+  _Bool=> 
+IsDate
+  _Bool=> 
+IsArgumentsObject
+  _Bool=> 
+IsBigIntObject
+  _Bool=> 
+IsBooleanObject
+  _Bool=> 
+IsNumberObject
+  _Bool=> 
+IsStringObject
+  _Bool=> 
+IsSymbolObject
+  _Bool=> 
+IsNativeError
+  _Bool=> 
+IsRegExp
+  _Bool=> 
+IsAsyncFunction
+  _Bool=> 
+IsGeneratorFunction
+  _Bool=> 
+IsGeneratorObject
+  _Bool=> 
+IsPromise
+  _Bool=> 
+IsMap
+  _Bool=> 
+IsSet
+  _Bool=> 
+IsMapIterator
+  _Bool=> 
+IsSetIterator
+  _Bool=> 
+IsWeakMap
+  _Bool=> 
+IsWeakSet
+  _Bool=> 
+IsArrayBuffer
+  _Bool=> 
+IsArrayBufferView
+  _Bool=> 
+IsTypedArray
+  _Bool=> 
+IsUint8Array
+  _Bool=> 
+IsUint8ClampedArray
+  _Bool=> 
+IsInt8Array
+  _Bool=> 
+IsUint16Array
+  _Bool=> 
+IsInt16Array
+  _Bool=> 
+IsUint32Array
+  _Bool=> 
+IsInt32Array
+  _Bool=> 
+IsFloat32Array
+  _Bool=> 
+IsFloat64Array
+  _Bool=> 
+IsBigInt64Array
+  _Bool=> 
+IsBigUint64Array
+  _Bool=> 
+IsDataView
+  _Bool=> 
+IsSharedArrayBuffer
+  _Bool=> 
+IsProxy
+  _Bool=> 
+IsWebAssemblyCompiledModule
+  _Bool=> 
+IsModuleNamespaceObject
+  _Bool=> 
+ToBigInt
+  MaybeLocal<class v8::BigInt>=> => 
+ToNumber
+  MaybeLocal<class v8::Number>=> => 
+ToString
+  MaybeLocal<class v8::String>=> => 
+ToDetailString
+  MaybeLocal<class v8::String>=> => 
+ToObject
+  MaybeLocal<class v8::Object>=> => 
+ToInteger
+  MaybeLocal<class v8::Integer>=> => 
+ToUint32
+  MaybeLocal<class v8::Uint32>=> => 
+ToInt32
+  MaybeLocal<class v8::Int32>=> => 
+ToBoolean
+  Local<class v8::Boolean>=> => 
+ToArrayIndex
+  MaybeLocal<class v8::Uint32>=> => 
+BooleanValue
+  _Bool=> 
+NumberValue
+  Maybe<double>=> => 
+IntegerValue
+  Maybe<int64_t>=> => 
+Uint32Value
+  Maybe<uint32_t>=> => 
+Int32Value
+  Maybe<int32_t>=> => 
+Equals
+  Maybe<_Bool>=> => 
+StrictEquals
+  _Bool=> 
+SameValue
+  _Bool=> 
+Cast
+  class v8::Value *=> 
+Cast
+  class v8::Value *=> 
+TypeOf
+  Local<class v8::String>=> => 
+InstanceOf
+  Maybe<_Bool>=> => 
+QuickIsUndefined
+  _Bool=> 
+QuickIsNull
+  _Bool=> 
+QuickIsNullOrUndefined
+  _Bool=> 
+QuickIsString
+  _Bool=> 
+FullIsUndefined
+  _Bool=> 
+FullIsNull
+  _Bool=> 
+FullIsString
+  _Bool=> 
+Value
+  _Bool=> 
+Cast
+  class v8::Boolean *=> 
+New
+  Local<class v8::Boolean>=> => 
+CheckCast
+  void=> 
+GetIdentityHash
+  int=> 
+Cast
+  class v8::Name *=> 
+CheckCast
+  void=> 
+Length
+  int=> 
+Utf8Length
+  int=> 
+IsOneByte
+  _Bool=> 
+ContainsOnlyOneByte
+  _Bool=> 
+Write
+  int=> 
+WriteOneByte
+  int=> 
+WriteUtf8
+  int=> 
+Empty
+  Local<class v8::String>=> => 
+IsExternal
+  _Bool=> 
+IsExternalOneByte
+  _Bool=> 
+~ExternalStringResourceBase
+  void=> 
+IsCacheable
+  _Bool=> 
+ExternalStringResourceBase
+  void=> 
+operator=
+  void=> 
+ExternalStringResourceBase
+  void=> 
+Dispose
+  void=> 
+Lock
+  void=> 
+Unlock
+  void=> 
+~ExternalStringResource
+  void=> 
+data
+  const uint16_t *=> 
+length
+  size_t=> => 
+ExternalStringResource
+  void=> 
+ExternalStringResource
+  void=> 
+operator=
+  class v8::String::ExternalStringResource &=> 
+~ExternalOneByteStringResource
+  void=> 
+data
+  const char *=> 
+length
+  size_t=> => 
+ExternalOneByteStringResource
+  void=> 
+ExternalOneByteStringResource
+  void=> 
+operator=
+  class v8::String::ExternalOneByteStringResource &=> 
+GetExternalStringResourceBase
+  class v8::String::ExternalStringResourceBase *=> 
+GetExternalStringResource
+  class v8::String::ExternalStringResource *=> 
+GetExternalOneByteStringResource
+  const class v8::String::ExternalOneByteStringResource *=> 
+Cast
+  class v8::String *=> 
+NewFromUtf8
+  MaybeLocal<class v8::String>=> => 
+NewFromOneByte
+  MaybeLocal<class v8::String>=> => 
+NewFromTwoByte
+  MaybeLocal<class v8::String>=> => 
+Concat
+  Local<class v8::String>=> => 
+NewExternalTwoByte
+  MaybeLocal<class v8::String>=> => 
+MakeExternal
+  _Bool=> 
+NewExternalOneByte
+  MaybeLocal<class v8::String>=> => 
+MakeExternal
+  _Bool=> 
+CanMakeExternal
+  _Bool=> 
+StringEquals
+  _Bool=> 
+Utf8Value
+  void=> 
+~Utf8Value
+  void=> 
+operator*
+  char *=> 
+operator*
+  const char *=> 
+length
+  int=> 
+Utf8Value
+  void=> 
+operator=
+  void=> 
+Value
+  void=> 
+~Value
+  void=> 
+operator*
+  uint16_t *=> 
+operator*
+  const uint16_t *=> 
+length
+  int=> 
+Value
+  void=> 
+operator=
+  void=> 
+VerifyExternalStringResourceBase
+  void=> 
+VerifyExternalStringResource
+  void=> 
+GetExternalStringResourceSlow
+  class v8::String::ExternalStringResource *=> 
+GetExternalStringResourceBaseSlow
+  class v8::String::ExternalStringResourceBase *=> 
+CheckCast
+  void=> 
+Name
+  Local<class v8::Value>=> => 
+New
+  Local<class v8::Symbol>=> => 
+For
+  Local<class v8::Symbol>=> => 
+ForApi
+  Local<class v8::Symbol>=> => 
+GetAsyncIterator
+  Local<class v8::Symbol>=> => 
+GetHasInstance
+  Local<class v8::Symbol>=> => 
+GetIsConcatSpreadable
+  Local<class v8::Symbol>=> => 
+GetIterator
+  Local<class v8::Symbol>=> => 
+GetMatch
+  Local<class v8::Symbol>=> => 
+GetReplace
+  Local<class v8::Symbol>=> => 
+GetSearch
+  Local<class v8::Symbol>=> => 
+GetSplit
+  Local<class v8::Symbol>=> => 
+GetToPrimitive
+  Local<class v8::Symbol>=> => 
+GetToStringTag
+  Local<class v8::Symbol>=> => 
+GetUnscopables
+  Local<class v8::Symbol>=> => 
+Cast
+  class v8::Symbol *=> 
+Symbol
+  void=> 
+CheckCast
+  void=> 
+Name
+  Local<class v8::Value>=> => 
+New
+  Local<class v8::Private>=> => 
+ForApi
+  Local<class v8::Private>=> => 
+Cast
+  class v8::Private *=> 
+Private
+  void=> 
+CheckCast
+  void=> 
+Value
+  double=> 
+New
+  Local<class v8::Number>=> => 
+Cast
+  class v8::Number *=> 
+Number
+  void=> 
+CheckCast
+  void=> 
+New
+  Local<class v8::Integer>=> => 
+NewFromUnsigned
+  Local<class v8::Integer>=> => 
+Value
+  int64_t=> => 
+Cast
+  class v8::Integer *=> 
+Integer
+  void=> 
+CheckCast
+  void=> 
+Value
+  int32_t=> => 
+Cast
+  class v8::Int32 *=> 
+Int32
+  void=> 
+CheckCast
+  void=> 
+Value
+  uint32_t=> => 
+Cast
+  class v8::Uint32 *=> 
+Uint32
+  void=> 
+CheckCast
+  void=> 
+New
+  Local<class v8::BigInt>=> => 
+NewFromUnsigned
+  Local<class v8::BigInt>=> => 
+NewFromWords
+  MaybeLocal<class v8::BigInt>=> => 
+Uint64Value
+  uint64_t=> => 
+Int64Value
+  int64_t=> => 
+WordCount
+  int=> 
+ToWordsArray
+  void=> 
+Cast
+  class v8::BigInt *=> 
+BigInt
+  void=> 
+CheckCast
+  void=> 
+Set
+  _Bool=> 
+Set
+  Maybe<_Bool>=> => 
+Set
+  _Bool=> 
+Set
+  Maybe<_Bool>=> => 
+CreateDataProperty
+  Maybe<_Bool>=> => 
+CreateDataProperty
+  Maybe<_Bool>=> => 
+DefineOwnProperty
+  Maybe<_Bool>=> => 
+DefineProperty
+  Maybe<_Bool>=> => 
+Get
+  Local<class v8::Value>=> => 
+Get
+  MaybeLocal<class v8::Value>=> => 
+Get
+  Local<class v8::Value>=> => 
+Get
+  MaybeLocal<class v8::Value>=> => 
+GetPropertyAttributes
+  Maybe<enum v8::PropertyAttribute>=> => 
+GetOwnPropertyDescriptor
+  MaybeLocal<class v8::Value>=> => 
+Has
+  Maybe<_Bool>=> => 
+Delete
+  Maybe<_Bool>=> => 
+Has
+  Maybe<_Bool>=> => 
+Delete
+  Maybe<_Bool>=> => 
+SetAccessor
+  Maybe<_Bool>=> => 
+SetAccessorProperty
+  void=> 
+SetNativeDataProperty
+  Maybe<_Bool>=> => 
+SetLazyDataProperty
+  Maybe<_Bool>=> => 
+HasPrivate
+  Maybe<_Bool>=> => 
+SetPrivate
+  Maybe<_Bool>=> => 
+DeletePrivate
+  Maybe<_Bool>=> => 
+GetPrivate
+  MaybeLocal<class v8::Value>=> => 
+GetPropertyNames
+  MaybeLocal<class v8::Array>=> => 
+GetPropertyNames
+  MaybeLocal<class v8::Array>=> => 
+GetOwnPropertyNames
+  MaybeLocal<class v8::Array>=> => 
+GetOwnPropertyNames
+  MaybeLocal<class v8::Array>=> => 
+GetPrototype
+  Local<class v8::Value>=> => 
+SetPrototype
+  Maybe<_Bool>=> => 
+FindInstanceInPrototypeChain
+  Local<class v8::Object>=> => 
+ObjectProtoToString
+  MaybeLocal<class v8::String>=> => 
+GetConstructorName
+  Local<class v8::String>=> => 
+SetIntegrityLevel
+  Maybe<_Bool>=> => 
+InternalFieldCount
+  int=> 
+InternalFieldCount
+  int=> 
+InternalFieldCount
+  int=> 
+GetInternalField
+  Local<class v8::Value>=> => 
+SetInternalField
+  void=> 
+GetAlignedPointerFromInternalField
+  void *=> 
+GetAlignedPointerFromInternalField
+  void *=> 
+GetAlignedPointerFromInternalField
+  void *=> 
+SetAlignedPointerInInternalField
+  void=> 
+SetAlignedPointerInInternalFields
+  void=> 
+HasOwnProperty
+  Maybe<_Bool>=> => 
+HasOwnProperty
+  Maybe<_Bool>=> => 
+HasRealNamedProperty
+  Maybe<_Bool>=> => 
+HasRealIndexedProperty
+  Maybe<_Bool>=> => 
+HasRealNamedCallbackProperty
+  Maybe<_Bool>=> => 
+GetRealNamedPropertyInPrototypeChain
+  MaybeLocal<class v8::Value>=> => 
+GetRealNamedPropertyAttributesInPrototypeChain
+  Maybe<enum v8::PropertyAttribute>=> => 
+GetRealNamedProperty
+  MaybeLocal<class v8::Value>=> => 
+GetRealNamedPropertyAttributes
+  Maybe<enum v8::PropertyAttribute>=> => 
+HasNamedLookupInterceptor
+  _Bool=> 
+HasIndexedLookupInterceptor
+  _Bool=> 
+GetIdentityHash
+  int=> 
+Clone
+  Local<class v8::Object>=> => 
+CreationContext
+  Local<class v8::Context>=> => 
+CreationContext
+  Local<class v8::Context>=> => 
+IsCallable
+  _Bool=> 
+IsConstructor
+  _Bool=> 
+CallAsFunction
+  MaybeLocal<class v8::Value>=> => 
+CallAsConstructor
+  MaybeLocal<class v8::Value>=> => 
+GetIsolate
+  class v8::Isolate *=> 
+PreviewEntries
+  MaybeLocal<class v8::Array>=> => 
+New
+  Local<class v8::Object>=> => 
+New
+  Local<class v8::Object>=> => 
+Cast
+  class v8::Object *=> 
+Object
+  void=> 
+CheckCast
+  void=> 
+SlowGetInternalField
+  Local<class v8::Value>=> => 
+SlowGetAlignedPointerFromInternalField
+  void *=> 
+Length
+  uint32_t=> => 
+New
+  Local<class v8::Array>=> => 
+New
+  Local<class v8::Array>=> => 
+Cast
+  class v8::Array *=> 
+Array
+  void=> 
+CheckCast
+  void=> 
+Size
+  size_t=> => 
+Clear
+  void=> 
+Get
+  MaybeLocal<class v8::Value>=> => 
+Set
+  MaybeLocal<class v8::Map>=> => 
+Has
+  Maybe<_Bool>=> => 
+Delete
+  Maybe<_Bool>=> => 
+AsArray
+  Local<class v8::Array>=> => 
+New
+  Local<class v8::Map>=> => 
+Cast
+  class v8::Map *=> 
+Map
+  void=> 
+CheckCast
+  void=> 
+Size
+  size_t=> => 
+Clear
+  void=> 
+Add
+  MaybeLocal<class v8::Set>=> => 
+Has
+  Maybe<_Bool>=> => 
+Delete
+  Maybe<_Bool>=> => 
+AsArray
+  Local<class v8::Array>=> => 
+New
+  Local<class v8::Set>=> => 
+Cast
+  class v8::Set *=> 
+Set
+  void=> 
+CheckCast
+  void=> 
+ReturnValue<T>
+  void=> 
+Set
+  void=> 
+Set
+  void=> 
+Set
+  void=> 
+Set
+  void=> 
+Set
+  void=> 
+Set
+  void=> 
+Set
+  void=> 
+SetNull
+  void=> 
+SetUndefined
+  void=> 
+SetEmptyString
+  void=> 
+GetIsolate
+  class v8::Isolate *=> 
+Set
+  void=> 
+Get
+  Local<class v8::Value>=> => 
+SetInternal
+  void=> 
+GetDefaultValue
+  internal::Address=> => => => 
+ReturnValue<T>
+  void=> 
+Length
+  int=> 
+operator[]
+  Local<class v8::Value>=> => 
+This
+  Local<class v8::Object>=> => 
+Holder
+  Local<class v8::Object>=> => 
+NewTarget
+  Local<class v8::Value>=> => 
+IsConstructCall
+  _Bool=> 
+Data
+  Local<class v8::Value>=> => 
+GetIsolate
+  class v8::Isolate *=> 
+GetReturnValue
+  ReturnValue<T>=> 
+FunctionCallbackInfo<T>
+  void=> 
+GetIsolate
+  class v8::Isolate *=> 
+Data
+  Local<class v8::Value>=> => 
+This
+  Local<class v8::Object>=> => 
+Holder
+  Local<class v8::Object>=> => 
+GetReturnValue
+  ReturnValue<T>=> 
+ShouldThrowOnError
+  _Bool=> 
+PropertyCallbackInfo<T>
+  void=> 
+New
+  MaybeLocal<class v8::Function>=> => 
+NewInstance
+  MaybeLocal<class v8::Object>=> => 
+NewInstance
+  MaybeLocal<class v8::Object>=> => 
+NewInstanceWithSideEffectType
+  MaybeLocal<class v8::Object>=> => 
+Call
+  MaybeLocal<class v8::Value>=> => 
+SetName
+  void=> 
+GetName
+  Local<class v8::Value>=> => 
+GetInferredName
+  Local<class v8::Value>=> => 
+GetDebugName
+  Local<class v8::Value>=> => 
+GetDisplayName
+  Local<class v8::Value>=> => 
+GetScriptLineNumber
+  int=> 
+GetScriptColumnNumber
+  int=> 
+ScriptId
+  int=> 
+GetBoundFunction
+  Local<class v8::Value>=> => 
+GetScriptOrigin
+  class v8::ScriptOrigin=> 
+Cast
+  class v8::Function *=> 
+Function
+  void=> 
+CheckCast
+  void=> 
+New
+  MaybeLocal<class v8::Promise::Resolver>=> => 
+GetPromise
+  Local<class v8::Promise>=> => 
+Resolve
+  Maybe<_Bool>=> => 
+Reject
+  Maybe<_Bool>=> => 
+Cast
+  class v8::Promise::Resolver *=> 
+Resolver
+  void=> 
+CheckCast
+  void=> 
+Catch
+  MaybeLocal<class v8::Promise>=> => 
+Then
+  MaybeLocal<class v8::Promise>=> => 
+Then
+  MaybeLocal<class v8::Promise>=> => 
+HasHandler
+  _Bool=> 
+Result
+  Local<class v8::Value>=> => 
+State
+  enum v8::Promise::PromiseState=> 
+MarkAsHandled
+  void=> 
+Cast
+  class v8::Promise *=> 
+Promise
+  void=> 
+CheckCast
+  void=> 
+PropertyDescriptor
+  void=> 
+PropertyDescriptor
+  void=> 
+PropertyDescriptor
+  void=> 
+PropertyDescriptor
+  void=> 
+~PropertyDescriptor
+  void=> 
+value
+  Local<class v8::Value>=> => 
+has_value
+  _Bool=> 
+get
+  Local<class v8::Value>=> => 
+has_get
+  _Bool=> 
+set
+  Local<class v8::Value>=> => 
+has_set
+  _Bool=> 
+set_enumerable
+  void=> 
+enumerable
+  _Bool=> 
+has_enumerable
+  _Bool=> 
+set_configurable
+  void=> 
+configurable
+  _Bool=> 
+has_configurable
+  _Bool=> 
+writable
+  _Bool=> 
+has_writable
+  _Bool=> 
+get_private
+  struct v8::PropertyDescriptor::PrivateData *=> 
+PropertyDescriptor
+  void=> 
+operator=
+  void=> 
+GetTarget
+  Local<class v8::Value>=> => 
+GetHandler
+  Local<class v8::Value>=> => 
+IsRevoked
+  _Bool=> 
+Revoke
+  void=> 
+New
+  MaybeLocal<class v8::Proxy>=> => 
+Cast
+  class v8::Proxy *=> 
+Proxy
+  void=> 
+CheckCast
+  void=> 
+MemorySpan<T>
+  void=> 
+MemorySpan<T>
+  void=> 
+data
+  T *=> 
+size
+  size_t=> => 
+MemorySpan
+  void=> 
+MemorySpan
+  void=> 
+data
+  const unsigned char *=> 
+size
+  size_t=> => 
+MemorySpan
+  void=> 
+MemorySpan
+  void=> 
+OwnedBuffer
+  void=> 
+OwnedBuffer
+  void=> 
+OwnedBuffer
+  void=> 
+OwnedBuffer
+  void=> 
+operator=
+  struct v8::OwnedBuffer &=> 
+~OwnedBuffer
+  void=> 
+operator=
+  struct v8::OwnedBuffer &=> 
+Serialize
+  struct v8::OwnedBuffer=> 
+GetWireBytesRef
+  MemorySpan<const uint8_t>=> => 
+CompiledWasmModule
+  void=> 
+CompiledWasmModule
+  void=> 
+CompiledWasmModule
+  void=> 
+operator=
+  class v8::CompiledWasmModule &=> 
+~CompiledWasmModule
+  void=> 
+TransferrableModule
+  void=> 
+TransferrableModule
+  void=> 
+operator=
+  class v8::WasmModuleObject::TransferrableModule &=> 
+operator=
+  class v8::WasmModuleObject::TransferrableModule &=> 
+TransferrableModule
+  void=> 
+TransferrableModule
+  void=> 
+~TransferrableModule
+  void=> 
+GetTransferrableModule
+  class v8::WasmModuleObject::TransferrableModule=> 
+FromTransferrableModule
+  MaybeLocal<class v8::WasmModuleObject>=> => 
+GetCompiledModule
+  class v8::CompiledWasmModule=> 
+DeserializeOrCompile
+  MaybeLocal<class v8::WasmModuleObject>=> => 
+Cast
+  class v8::WasmModuleObject *=> 
+Deserialize
+  MaybeLocal<class v8::WasmModuleObject>=> => 
+Compile
+  MaybeLocal<class v8::WasmModuleObject>=> => 
+AsReference
+  MemorySpan<const uint8_t>=> => 
+WasmModuleObject
+  void=> 
+CheckCast
+  void=> 
+~Client
+  void=> 
+OnModuleCompiled
+  void=> 
+operator=
+  class v8::WasmStreaming::Client &=> 
+WasmStreaming
+  void=> 
+~WasmStreaming
+  void=> 
+OnBytesReceived
+  void=> 
+Finish
+  void=> 
+Abort
+  void=> 
+SetCompiledModuleBytes
+  _Bool=> 
+SetClient
+  void=> 
+Unpack
+  std::shared_ptr<WasmStreaming>=> => => 
+WasmStreaming
+  void=> 
+WasmModuleObjectBuilderStreaming
+  void=> 
+OnBytesReceived
+  void=> 
+Finish
+  void=> 
+Abort
+  void=> 
+GetPromise
+  Local<class v8::Promise>=> => 
+~WasmModuleObjectBuilderStreaming
+  void=> 
+WasmModuleObjectBuilderStreaming
+  void=> 
+WasmModuleObjectBuilderStreaming
+  void=> 
+operator=
+  class v8::WasmModuleObjectBuilderStreaming &=> 
+operator=
+  class v8::WasmModuleObjectBuilderStreaming &=> 
+~Allocator
+  void=> 
+Allocate
+  void *=> 
+AllocateUninitialized
+  void *=> 
+Free
+  void=> 
+NewDefaultAllocator
+  class v8::ArrayBuffer::Allocator *=> 
+operator=
+  class v8::ArrayBuffer::Allocator &=> 
+Contents
+  void=> 
+AllocationBase
+  void *=> 
+AllocationLength
+  size_t=> => 
+AllocationMode
+  class Allocator::AllocationMode=> => 
+Data
+  void *=> 
+ByteLength
+  size_t=> => 
+Deleter
+  v8::ArrayBuffer::Contents::DeleterCallback=> => 
+DeleterData
+  void *=> 
+Contents
+  void=> 
+ByteLength
+  size_t=> => 
+New
+  Local<class v8::ArrayBuffer>=> => 
+New
+  Local<class v8::ArrayBuffer>=> => 
+IsExternal
+  _Bool=> 
+IsDetachable
+  _Bool=> 
+IsNeuterable
+  _Bool=> 
+Detach
+  void=> 
+Neuter
+  void=> 
+Externalize
+  class v8::ArrayBuffer::Contents=> 
+GetContents
+  class v8::ArrayBuffer::Contents=> 
+Cast
+  class v8::ArrayBuffer *=> 
+ArrayBuffer
+  void=> 
+CheckCast
+  void=> 
+Buffer
+  Local<class v8::ArrayBuffer>=> => 
+ByteOffset
+  size_t=> => 
+ByteLength
+  size_t=> => 
+CopyContents
+  size_t=> => 
+HasBuffer
+  _Bool=> 
+Cast
+  class v8::ArrayBufferView *=> 
+ArrayBufferView
+  void=> 
+CheckCast
+  void=> 
+Length
+  size_t=> => 
+Cast
+  class v8::TypedArray *=> 
+TypedArray
+  void=> 
+CheckCast
+  void=> 
+New
+  Local<class v8::Uint8Array>=> => 
+New
+  Local<class v8::Uint8Array>=> => 
+Cast
+  class v8::Uint8Array *=> 
+Uint8Array
+  void=> 
+CheckCast
+  void=> 
+New
+  Local<class v8::Uint8ClampedArray>=> => 
+New
+  Local<class v8::Uint8ClampedArray>=> => 
+Cast
+  class v8::Uint8ClampedArray *=> 
+Uint8ClampedArray
+  void=> 
+CheckCast
+  void=> 
+New
+  Local<class v8::Int8Array>=> => 
+New
+  Local<class v8::Int8Array>=> => 
+Cast
+  class v8::Int8Array *=> 
+Int8Array
+  void=> 
+CheckCast
+  void=> 
+New
+  Local<class v8::Uint16Array>=> => 
+New
+  Local<class v8::Uint16Array>=> => 
+Cast
+  class v8::Uint16Array *=> 
+Uint16Array
+  void=> 
+CheckCast
+  void=> 
+New
+  Local<class v8::Int16Array>=> => 
+New
+  Local<class v8::Int16Array>=> => 
+Cast
+  class v8::Int16Array *=> 
+Int16Array
+  void=> 
+CheckCast
+  void=> 
+New
+  Local<class v8::Uint32Array>=> => 
+New
+  Local<class v8::Uint32Array>=> => 
+Cast
+  class v8::Uint32Array *=> 
+Uint32Array
+  void=> 
+CheckCast
+  void=> 
+New
+  Local<class v8::Int32Array>=> => 
+New
+  Local<class v8::Int32Array>=> => 
+Cast
+  class v8::Int32Array *=> 
+Int32Array
+  void=> 
+CheckCast
+  void=> 
+New
+  Local<class v8::Float32Array>=> => 
+New
+  Local<class v8::Float32Array>=> => 
+Cast
+  class v8::Float32Array *=> 
+Float32Array
+  void=> 
+CheckCast
+  void=> 
+New
+  Local<class v8::Float64Array>=> => 
+New
+  Local<class v8::Float64Array>=> => 
+Cast
+  class v8::Float64Array *=> 
+Float64Array
+  void=> 
+CheckCast
+  void=> 
+New
+  Local<class v8::BigInt64Array>=> => 
+New
+  Local<class v8::BigInt64Array>=> => 
+Cast
+  class v8::BigInt64Array *=> 
+BigInt64Array
+  void=> 
+CheckCast
+  void=> 
+New
+  Local<class v8::BigUint64Array>=> => 
+New
+  Local<class v8::BigUint64Array>=> => 
+Cast
+  class v8::BigUint64Array *=> 
+BigUint64Array
+  void=> 
+CheckCast
+  void=> 
+New
+  Local<class v8::DataView>=> => 
+New
+  Local<class v8::DataView>=> => 
+Cast
+  class v8::DataView *=> 
+DataView
+  void=> 
+CheckCast
+  void=> 
+Contents
+  void=> 
+AllocationBase
+  void *=> 
+AllocationLength
+  size_t=> => 
+AllocationMode
+  Allocator::AllocationMode=> => 
+Data
+  void *=> 
+ByteLength
+  size_t=> => 
+Deleter
+  v8::SharedArrayBuffer::Contents::DeleterCallback=> => 
+DeleterData
+  void *=> 
+Contents
+  void=> 
+ByteLength
+  size_t=> => 
+New
+  Local<class v8::SharedArrayBuffer>=> => 
+New
+  Local<class v8::SharedArrayBuffer>=> => 
+New
+  Local<class v8::SharedArrayBuffer>=> => 
+IsExternal
+  _Bool=> 
+Externalize
+  class v8::SharedArrayBuffer::Contents=> 
+GetContents
+  class v8::SharedArrayBuffer::Contents=> 
+Cast
+  class v8::SharedArrayBuffer *=> 
+SharedArrayBuffer
+  void=> 
+CheckCast
+  void=> 
+New
+  MaybeLocal<class v8::Value>=> => 
+ValueOf
+  double=> 
+Cast
+  class v8::Date *=> 
+CheckCast
+  void=> 
+New
+  Local<class v8::Value>=> => 
+ValueOf
+  double=> 
+Cast
+  class v8::NumberObject *=> 
+CheckCast
+  void=> 
+New
+  Local<class v8::Value>=> => 
+ValueOf
+  Local<class v8::BigInt>=> => 
+Cast
+  class v8::BigIntObject *=> 
+CheckCast
+  void=> 
+New
+  Local<class v8::Value>=> => 
+ValueOf
+  _Bool=> 
+Cast
+  class v8::BooleanObject *=> 
+CheckCast
+  void=> 
+New
+  Local<class v8::Value>=> => 
+ValueOf
+  Local<class v8::String>=> => 
+Cast
+  class v8::StringObject *=> 
+CheckCast
+  void=> 
+New
+  Local<class v8::Value>=> => 
+ValueOf
+  Local<class v8::Symbol>=> => 
+Cast
+  class v8::SymbolObject *=> 
+CheckCast
+  void=> 
+New
+  MaybeLocal<class v8::RegExp>=> => 
+GetSource
+  Local<class v8::String>=> => 
+GetFlags
+  enum v8::RegExp::Flags=> 
+Cast
+  class v8::RegExp *=> 
+CheckCast
+  void=> 
+New
+  Local<class v8::External>=> => 
+Cast
+  class v8::External *=> 
+Value
+  void *=> 
+CheckCast
+  void=> 
+Set
+  void=> 
+SetPrivate
+  void=> 
+Set
+  void=> 
+SetAccessorProperty
+  void=> 
+SetNativeDataProperty
+  void=> 
+SetNativeDataProperty
+  void=> 
+SetLazyDataProperty
+  void=> 
+SetIntrinsicDataProperty
+  void=> 
+Template
+  void=> 
+New
+  Local<class v8::FunctionTemplate>=> => 
+FromSnapshot
+  MaybeLocal<class v8::FunctionTemplate>=> => 
+NewWithCache
+  Local<class v8::FunctionTemplate>=> => 
+GetFunction
+  MaybeLocal<class v8::Function>=> => 
+NewRemoteInstance
+  MaybeLocal<class v8::Object>=> => 
+SetCallHandler
+  void=> 
+SetLength
+  void=> 
+InstanceTemplate
+  Local<class v8::ObjectTemplate>=> => 
+Inherit
+  void=> 
+PrototypeTemplate
+  Local<class v8::ObjectTemplate>=> => 
+SetPrototypeProviderTemplate
+  void=> 
+SetClassName
+  void=> 
+SetAcceptAnyReceiver
+  void=> 
+ReadOnlyPrototype
+  void=> 
+RemovePrototype
+  void=> 
+HasInstance
+  _Bool=> 
+Cast
+  class v8::FunctionTemplate *=> 
+FunctionTemplate
+  void=> 
+CheckCast
+  void=> 
+NamedPropertyHandlerConfiguration
+  void=> 
+NamedPropertyHandlerConfiguration
+  void=> 
+NamedPropertyHandlerConfiguration
+  void=> 
+NamedPropertyHandlerConfiguration
+  void=> 
+NamedPropertyHandlerConfiguration
+  void=> 
+IndexedPropertyHandlerConfiguration
+  void=> 
+IndexedPropertyHandlerConfiguration
+  void=> 
+IndexedPropertyHandlerConfiguration
+  void=> 
+IndexedPropertyHandlerConfiguration
+  void=> 
+IndexedPropertyHandlerConfiguration
+  void=> 
+~IndexedPropertyHandlerConfiguration
+  void=> 
+New
+  Local<class v8::ObjectTemplate>=> => 
+FromSnapshot
+  MaybeLocal<class v8::ObjectTemplate>=> => 
+NewInstance
+  MaybeLocal<class v8::Object>=> => 
+SetAccessor
+  void=> 
+SetAccessor
+  void=> 
+SetHandler
+  void=> 
+SetIndexedPropertyHandler
+  void=> 
+SetHandler
+  void=> 
+SetCallAsFunctionHandler
+  void=> 
+MarkAsUndetectable
+  void=> 
+SetAccessCheckCallback
+  void=> 
+SetAccessCheckCallbackAndHandler
+  void=> 
+InternalFieldCount
+  int=> 
+SetInternalFieldCount
+  void=> 
+IsImmutableProto
+  _Bool=> 
+SetImmutableProto
+  void=> 
+Cast
+  class v8::ObjectTemplate *=> 
+ObjectTemplate
+  void=> 
+New
+  Local<class v8::ObjectTemplate>=> => 
+CheckCast
+  void=> 
+New
+  Local<class v8::Signature>=> => 
+Cast
+  class v8::Signature *=> 
+Signature
+  void=> 
+CheckCast
+  void=> 
+New
+  Local<class v8::AccessorSignature>=> => 
+Cast
+  class v8::AccessorSignature *=> 
+AccessorSignature
+  void=> 
+CheckCast
+  void=> 
+Extension
+  void=> 
+~Extension
+  void=> 
+GetNativeFunctionTemplate
+  Local<class v8::FunctionTemplate>=> => 
+name
+  const char *=> 
+source_length
+  size_t=> => 
+source
+  const class String::ExternalOneByteStringResource *=> 
+dependency_count
+  int=> 
+dependencies
+  const char **=> 
+set_auto_enable
+  void=> 
+auto_enable
+  _Bool=> 
+Extension
+  void=> 
+operator=
+  void=> 
+RegisterExtension
+  void=> 
+ConfigureDefaultsFromHeapSize
+  void=> 
+ConfigureDefaults
+  void=> 
+stack_limit
+  uint32_t *=> 
+set_stack_limit
+  void=> 
+code_range_size_in_bytes
+  size_t=> => 
+set_code_range_size_in_bytes
+  void=> 
+max_old_generation_size_in_bytes
+  size_t=> => 
+set_max_old_generation_size_in_bytes
+  void=> 
+max_young_generation_size_in_bytes
+  size_t=> => 
+set_max_young_generation_size_in_bytes
+  void=> 
+initial_old_generation_size_in_bytes
+  size_t=> => 
+set_initial_old_generation_size_in_bytes
+  void=> 
+initial_young_generation_size_in_bytes
+  size_t=> => 
+set_initial_young_generation_size_in_bytes
+  void=> 
+code_range_size
+  size_t=> => 
+set_code_range_size
+  void=> 
+max_semi_space_size_in_kb
+  size_t=> => 
+set_max_semi_space_size_in_kb
+  void=> 
+max_old_space_size
+  size_t=> => 
+set_max_old_space_size
+  void=> 
+max_zone_pool_size
+  size_t=> => 
+set_max_zone_pool_size
+  void=> 
+ResourceConstraints
+  void=> 
+ResourceConstraints
+  void=> 
+ResourceConstraints
+  void=> 
+RangeError
+  Local<class v8::Value>=> => 
+ReferenceError
+  Local<class v8::Value>=> => 
+SyntaxError
+  Local<class v8::Value>=> => 
+TypeError
+  Local<class v8::Value>=> => 
+Error
+  Local<class v8::Value>=> => 
+CreateMessage
+  Local<class v8::Message>=> => 
+GetStackTrace
+  Local<class v8::StackTrace>=> => 
+PromiseRejectMessage
+  void=> 
+GetPromise
+  Local<class v8::Promise>=> => 
+GetEvent
+  enum v8::PromiseRejectEvent=> 
+GetValue
+  Local<class v8::Value>=> => 
+New
+  std::unique_ptr<MicrotaskQueue>=> => => 
+~MicrotaskQueue
+  void=> 
+EnqueueMicrotask
+  void=> 
+EnqueueMicrotask
+  void=> 
+AddMicrotasksCompletedCallback
+  void=> 
+RemoveMicrotasksCompletedCallback
+  void=> 
+PerformCheckpoint
+  void=> 
+IsRunningMicrotasks
+  _Bool=> 
+GetMicrotasksScopeDepth
+  int=> 
+MicrotaskQueue
+  void=> 
+operator=
+  class v8::MicrotaskQueue &=> 
+MicrotaskQueue
+  void=> 
+MicrotasksScope
+  void=> 
+MicrotasksScope
+  void=> 
+~MicrotasksScope
+  void=> 
+PerformCheckpoint
+  void=> 
+GetCurrentDepth
+  int=> 
+IsRunningMicrotasks
+  _Bool=> 
+MicrotasksScope
+  void=> 
+operator=
+  class v8::MicrotasksScope &=> 
+HeapStatistics
+  void=> 
+total_heap_size
+  size_t=> => 
+total_heap_size_executable
+  size_t=> => 
+total_physical_size
+  size_t=> => 
+total_available_size
+  size_t=> => 
+used_heap_size
+  size_t=> => 
+heap_size_limit
+  size_t=> => 
+malloced_memory
+  size_t=> => 
+external_memory
+  size_t=> => 
+peak_malloced_memory
+  size_t=> => 
+number_of_native_contexts
+  size_t=> => 
+number_of_detached_contexts
+  size_t=> => 
+does_zap_garbage
+  size_t=> => 
+HeapSpaceStatistics
+  void=> 
+space_name
+  const char *=> 
+space_size
+  size_t=> => 
+space_used_size
+  size_t=> => 
+space_available_size
+  size_t=> => 
+physical_space_size
+  size_t=> => 
+HeapObjectStatistics
+  void=> 
+object_type
+  const char *=> 
+object_sub_type
+  const char *=> 
+object_count
+  size_t=> => 
+object_size
+  size_t=> => 
+HeapCodeStatistics
+  void=> 
+code_and_metadata_size
+  size_t=> => 
+bytecode_and_metadata_size
+  size_t=> => 
+external_script_source_size
+  size_t=> => 
+~ExternalResourceVisitor
+  void=> 
+VisitExternalString
+  void=> 
+operator=
+  class v8::ExternalResourceVisitor &=> 
+~PersistentHandleVisitor
+  void=> 
+VisitPersistentHandle
+  void=> 
+operator=
+  class v8::PersistentHandleVisitor &=> 
+~TracedGlobalHandleVisitor
+  void=> 
+VisitTracedGlobalHandle
+  void=> 
+operator=
+  class v8::EmbedderHeapTracer::TracedGlobalHandleVisitor &=> 
+~EmbedderHeapTracer
+  void=> 
+IterateTracedGlobalHandles
+  void=> 
+RegisterV8References
+  void=> 
+RegisterEmbedderReference
+  void=> 
+TracePrologue
+  void=> 
+TracePrologue
+  void=> 
+AdvanceTracing
+  _Bool=> 
+IsTracingDone
+  _Bool=> 
+TraceEpilogue
+  void=> 
+TraceEpilogue
+  void=> 
+EnterFinalPause
+  void=> 
+FinalizeTracing
+  void=> 
+IsRootForNonTracingGC
+  _Bool=> 
+GarbageCollectionForTesting
+  void=> 
+IncreaseAllocatedSize
+  void=> 
+DecreaseAllocatedSize
+  void=> 
+isolate
+  v8::Isolate *=> 
+operator=
+  class v8::EmbedderHeapTracer &=> 
+SerializeInternalFieldsCallback
+  void=> 
+SerializeInternalFieldsCallback
+  void=> 
+SerializeInternalFieldsCallback
+  void=> 
+~SerializeInternalFieldsCallback
+  void=> 
+DeserializeInternalFieldsCallback
+  void=> 
+DeserializeInternalFieldsCallback
+  void=> 
+DeserializeInternalFieldsCallback
+  void=> 
+~DeserializeInternalFieldsCallback
+  void=> 
+CreateParams
+  void=> 
+Scope
+  void=> 
+~Scope
+  void=> 
+Scope
+  void=> 
+operator=
+  class v8::Isolate::Scope &=> 
+DisallowJavascriptExecutionScope
+  void=> 
+~DisallowJavascriptExecutionScope
+  void=> 
+DisallowJavascriptExecutionScope
+  void=> 
+operator=
+  class v8::Isolate::DisallowJavascriptExecutionScope &=> 
+AllowJavascriptExecutionScope
+  void=> 
+~AllowJavascriptExecutionScope
+  void=> 
+AllowJavascriptExecutionScope
+  void=> 
+operator=
+  class v8::Isolate::AllowJavascriptExecutionScope &=> 
+SuppressMicrotaskExecutionScope
+  void=> 
+SuppressMicrotaskExecutionScope
+  void=> 
+~SuppressMicrotaskExecutionScope
+  void=> 
+SuppressMicrotaskExecutionScope
+  void=> 
+operator=
+  class v8::Isolate::SuppressMicrotaskExecutionScope &=> 
+SafeForTerminationScope
+  void=> 
+~SafeForTerminationScope
+  void=> 
+SafeForTerminationScope
+  void=> 
+operator=
+  class v8::Isolate::SafeForTerminationScope &=> 
+Allocate
+  class v8::Isolate *=> 
+Initialize
+  void=> 
+New
+  class v8::Isolate *=> 
+GetCurrent
+  class v8::Isolate *=> 
+SetAbortOnUncaughtExceptionCallback
+  void=> 
+SetHostImportModuleDynamicallyCallback
+  void=> 
+SetHostInitializeImportMetaObjectCallback
+  void=> 
+SetPrepareStackTraceCallback
+  void=> 
+MemoryPressureNotification
+  void=> 
+Enter
+  void=> 
+Exit
+  void=> 
+Dispose
+  void=> 
+DumpAndResetStats
+  void=> 
+DiscardThreadSpecificMetadata
+  void=> 
+SetData
+  void=> 
+GetData
+  void *=> 
+GetNumberOfDataSlots
+  uint32_t=> => 
+GetDataFromSnapshotOnce
+  MaybeLocal<T>=> 
+GetHeapStatistics
+  void=> 
+NumberOfHeapSpaces
+  size_t=> => 
+GetHeapSpaceStatistics
+  _Bool=> 
+NumberOfTrackedHeapObjectTypes
+  size_t=> => 
+GetHeapObjectStatisticsAtLastGC
+  _Bool=> 
+GetHeapCodeAndMetadataStatistics
+  _Bool=> 
+GetStackSample
+  void=> 
+AdjustAmountOfExternalAllocatedMemory
+  int64_t=> => 
+NumberOfPhantomHandleResetsSinceLastCall
+  size_t=> => 
+GetHeapProfiler
+  class v8::HeapProfiler *=> 
+SetIdle
+  void=> 
+GetArrayBufferAllocator
+  class ArrayBuffer::Allocator *=> 
+InContext
+  _Bool=> 
+GetCurrentContext
+  Local<class v8::Context>=> => 
+GetEnteredContext
+  Local<class v8::Context>=> => 
+GetEnteredOrMicrotaskContext
+  Local<class v8::Context>=> => 
+GetIncumbentContext
+  Local<class v8::Context>=> => 
+ThrowException
+  Local<class v8::Value>=> => 
+AddGCPrologueCallback
+  void=> 
+AddGCPrologueCallback
+  void=> 
+RemoveGCPrologueCallback
+  void=> 
+RemoveGCPrologueCallback
+  void=> 
+SetEmbedderHeapTracer
+  void=> 
+GetEmbedderHeapTracer
+  class v8::EmbedderHeapTracer *=> 
+Wake
+  void=> 
+SetAtomicsWaitCallback
+  void=> 
+AddGCEpilogueCallback
+  void=> 
+AddGCEpilogueCallback
+  void=> 
+RemoveGCEpilogueCallback
+  void=> 
+RemoveGCEpilogueCallback
+  void=> 
+SetGetExternallyAllocatedMemoryInBytesCallback
+  void=> 
+TerminateExecution
+  void=> 
+IsExecutionTerminating
+  _Bool=> 
+CancelTerminateExecution
+  void=> 
+RequestInterrupt
+  void=> 
+RequestGarbageCollectionForTesting
+  void=> 
+SetEventLogger
+  void=> 
+AddBeforeCallEnteredCallback
+  void=> 
+RemoveBeforeCallEnteredCallback
+  void=> 
+AddCallCompletedCallback
+  void=> 
+RemoveCallCompletedCallback
+  void=> 
+SetPromiseHook
+  void=> 
+SetPromiseRejectCallback
+  void=> 
+RunMicrotasks
+  void=> 
+EnqueueMicrotask
+  void=> 
+EnqueueMicrotask
+  void=> 
+SetMicrotasksPolicy
+  void=> 
+GetMicrotasksPolicy
+  enum v8::MicrotasksPolicy=> 
+AddMicrotasksCompletedCallback
+  void=> 
+AddMicrotasksCompletedCallback
+  void=> 
+RemoveMicrotasksCompletedCallback
+  void=> 
+RemoveMicrotasksCompletedCallback
+  void=> 
+SetUseCounterCallback
+  void=> 
+SetCounterFunction
+  void=> 
+SetCreateHistogramFunction
+  void=> 
+SetAddHistogramSampleFunction
+  void=> 
+IdleNotificationDeadline
+  _Bool=> 
+LowMemoryNotification
+  void=> 
+ContextDisposedNotification
+  int=> 
+IsolateInForegroundNotification
+  void=> 
+IsolateInBackgroundNotification
+  void=> 
+EnableMemorySavingsMode
+  void=> 
+DisableMemorySavingsMode
+  void=> 
+SetRAILMode
+  void=> 
+IncreaseHeapLimitForDebugging
+  void=> 
+RestoreOriginalHeapLimit
+  void=> 
+IsHeapLimitIncreasedForDebugging
+  _Bool=> 
+SetJitCodeEventHandler
+  void=> 
+SetStackLimit
+  void=> 
+GetCodeRange
+  void=> 
+GetUnwindState
+  struct v8::UnwindState=> 
+SetFatalErrorHandler
+  void=> 
+SetOOMErrorHandler
+  void=> 
+AddNearHeapLimitCallback
+  void=> 
+RemoveNearHeapLimitCallback
+  void=> 
+AutomaticallyRestoreInitialHeapLimit
+  void=> 
+SetAllowCodeGenerationFromStringsCallback
+  void=> 
+SetAllowWasmCodeGenerationCallback
+  void=> 
+SetWasmModuleCallback
+  void=> 
+SetWasmInstanceCallback
+  void=> 
+SetWasmStreamingCallback
+  void=> 
+SetWasmThreadsEnabledCallback
+  void=> 
+IsDead
+  _Bool=> 
+AddMessageListener
+  _Bool=> 
+AddMessageListenerWithErrorLevel
+  _Bool=> 
+RemoveMessageListeners
+  void=> 
+SetFailedAccessCheckCallbackFunction
+  void=> 
+SetCaptureStackTraceForUncaughtExceptions
+  void=> 
+VisitExternalResources
+  void=> 
+VisitHandlesWithClassIds
+  void=> 
+VisitWeakHandles
+  void=> 
+IsInUse
+  _Bool=> 
+SetAllowAtomicsWait
+  void=> 
+DateTimeConfigurationChangeNotification
+  void=> 
+LocaleConfigurationChangeNotification
+  void=> 
+Isolate
+  void=> 
+~Isolate
+  void=> 
+Isolate
+  void=> 
+operator=
+  class v8::Isolate &=> 
+operator new
+  void *=> 
+operator new[]
+  void *=> 
+operator delete
+  void=> 
+operator delete[]
+  void=> 
+GetDataFromSnapshotOnce
+  internal::Address *=> 
+ReportExternalAllocationLimitReached
+  void=> 
+CheckMemoryPressure
+  void=> 
+CanBeRehashed
+  _Bool=> 
+SetNativesDataBlob
+  void=> 
+SetSnapshotDataBlob
+  void=> 
+SetDcheckErrorHandler
+  void=> 
+SetFlagsFromString
+  void=> 
+SetFlagsFromString
+  void=> 
+SetFlagsFromString
+  void=> 
+SetFlagsFromCommandLine
+  void=> 
+GetVersion
+  const char *=> 
+Initialize
+  _Bool=> 
+SetEntropySource
+  void=> 
+SetReturnAddressLocationResolver
+  void=> 
+Dispose
+  _Bool=> 
+InitializeICU
+  _Bool=> 
+InitializeICUDefaultLocation
+  _Bool=> 
+InitializeExternalStartupData
+  void=> 
+InitializeExternalStartupData
+  void=> 
+InitializePlatform
+  void=> 
+ShutdownPlatform
+  void=> 
+EnableWebAssemblyTrapHandler
+  _Bool=> 
+SetUnhandledExceptionCallback
+  void=> 
+V8
+  void=> 
+GlobalizeReference
+  internal::Address *=> 
+GlobalizeTracedReference
+  internal::Address *=> 
+MoveGlobalReference
+  void=> 
+MoveTracedGlobalReference
+  void=> 
+CopyGlobalReference
+  internal::Address *=> 
+DisposeGlobal
+  void=> 
+DisposeTracedGlobal
+  void=> 
+MakeWeak
+  void=> 
+MakeWeak
+  void=> 
+ClearWeak
+  void *=> 
+SetFinalizationCallbackTraced
+  void=> 
+AnnotateStrongRetainer
+  void=> 
+Eternalize
+  class v8::Value *=> 
+FromJustIsNothing
+  void=> 
+ToLocalEmpty
+  void=> 
+InternalFieldOutOfBounds
+  void=> 
+SnapshotCreator
+  void=> 
+SnapshotCreator
+  void=> 
+~SnapshotCreator
+  void=> 
+GetIsolate
+  class v8::Isolate *=> 
+SetDefaultContext
+  void=> 
+AddContext
+  size_t=> => 
+AddTemplate
+  size_t=> => 
+AddData
+  size_t=> => 
+AddData
+  size_t=> => 
+CreateBlob
+  class v8::StartupData=> 
+SnapshotCreator
+  void=> 
+operator=
+  void=> 
+AddData
+  size_t=> => 
+AddData
+  size_t=> => 
+IsNothing
+  _Bool=> 
+IsJust
+  _Bool=> 
+ToChecked
+  T=> 
+Check
+  void=> 
+To
+  _Bool=> 
+FromJust
+  T=> 
+FromMaybe
+  T=> 
+operator==
+  _Bool=> 
+operator!=
+  _Bool=> 
+Maybe<T>
+  void=> 
+Maybe<T>
+  void=> 
+Nothing
+  Maybe<U>=> 
+Just
+  Maybe<U>=> 
+Nothing
+  Maybe<T>=> 
+Just
+  Maybe<T>=> 
+IsNothing
+  _Bool=> 
+IsJust
+  _Bool=> 
+operator==
+  _Bool=> 
+operator!=
+  _Bool=> 
+JustTag
+  void=> 
+JustTag
+  void=> 
+JustTag
+  void=> 
+~JustTag
+  void=> 
+Maybe
+  void=> 
+Maybe
+  void=> 
+JustVoid
+  Maybe<void>=> => 
+Maybe
+  void=> 
+Maybe
+  void=> 
+~Maybe
+  void=> 
+TryCatch
+  void=> 
+~TryCatch
+  void=> 
+HasCaught
+  _Bool=> 
+CanContinue
+  _Bool=> 
+HasTerminated
+  _Bool=> 
+ReThrow
+  Local<class v8::Value>=> => 
+Exception
+  Local<class v8::Value>=> => 
+StackTrace
+  MaybeLocal<class v8::Value>=> => 
+Message
+  Local<v8::Message>=> => 
+Reset
+  void=> 
+SetVerbose
+  void=> 
+IsVerbose
+  _Bool=> 
+SetCaptureMessage
+  void=> 
+JSStackComparableAddress
+  void *=> 
+TryCatch
+  void=> 
+operator=
+  void=> 
+operator new
+  void *=> 
+operator new[]
+  void *=> 
+operator delete
+  void=> 
+operator delete[]
+  void=> 
+ResetInternal
+  void=> 
+ExtensionConfiguration
+  void=> 
+ExtensionConfiguration
+  void=> 
+begin
+  const char **=> 
+end
+  const char **=> 
+Global
+  Local<class v8::Object>=> => 
+DetachGlobal
+  void=> 
+New
+  Local<class v8::Context>=> => 
+FromSnapshot
+  MaybeLocal<class v8::Context>=> => 
+NewRemoteContext
+  MaybeLocal<class v8::Object>=> => 
+SetSecurityToken
+  void=> 
+UseDefaultSecurityToken
+  void=> 
+GetSecurityToken
+  Local<class v8::Value>=> => 
+Enter
+  void=> 
+Exit
+  void=> 
+GetIsolate
+  class v8::Isolate *=> 
+GetNumberOfEmbedderDataFields
+  uint32_t=> => 
+GetEmbedderData
+  Local<class v8::Value>=> => 
+GetExtrasBindingObject
+  Local<class v8::Object>=> => 
+SetEmbedderData
+  void=> 
+GetAlignedPointerFromEmbedderData
+  void *=> 
+SetAlignedPointerInEmbedderData
+  void=> 
+AllowCodeGenerationFromStrings
+  void=> 
+IsCodeGenerationFromStringsAllowed
+  _Bool=> 
+SetErrorMessageForCodeGenerationFromStrings
+  void=> 
+GetDataFromSnapshotOnce
+  MaybeLocal<T>=> 
+SetAbortScriptExecution
+  void=> 
+Scope
+  void=> 
+~Scope
+  void=> 
+BackupIncumbentScope
+  void=> 
+~BackupIncumbentScope
+  void=> 
+JSStackComparableAddress
+  uintptr_t=> => 
+GetDataFromSnapshotOnce
+  internal::Address *=> 
+SlowGetEmbedderData
+  Local<class v8::Value>=> => 
+SlowGetAlignedPointerFromEmbedderData
+  void *=> 
+Unlocker
+  void=> 
+~Unlocker
+  void=> 
+Initialize
+  void=> 
+Locker
+  void=> 
+~Locker
+  void=> 
+IsLocked
+  _Bool=> 
+IsActive
+  _Bool=> 
+Locker
+  void=> 
+operator=
+  void=> 
+Initialize
+  void=> 
+TryUnwindV8Frames
+  _Bool=> 
+PCIsInV8
+  _Bool=> 
+Lala
+  void=> 
+Lala
+  void=> 
+Lala
+  void=> 
+lala
+  struct v8::Lala=> 
