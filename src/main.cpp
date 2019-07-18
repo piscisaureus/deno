@@ -27,15 +27,17 @@ class NamedDeclAction : public MatchFinder::MatchCallback {
 private:
   std::unordered_set<const Decl*> seen;
 
-  void handleDeclPathComponent(const clang::Decl* decl) {    
-    if (isa<TranslationUnitDecl>(decl))
+  void handleDeclPathComponent(const clang::Decl* decl) {
+    if (isa<TranslationUnitDecl>(decl)) {
+      std::cout << "<TU>";
       return;
-    
+    }
+
     auto ctx = decl->getDeclContext();
     auto ctx_decl = dyn_cast<Decl>(ctx);
     handleDeclPathComponent(ctx_decl);
     std::cout << "::";
-  
+
     std::cout << "<" << decl->getDeclKindName() << ">";
 
     auto named_decl = dyn_cast<NamedDecl>(decl);
@@ -50,7 +52,7 @@ private:
         break;
       case DeclarationName::NameKind::CXXConstructorName:
         name = "constructor";
-        break;      
+        break;
       case DeclarationName::NameKind::CXXDestructorName:
         name = "destructor";
         break;
@@ -97,15 +99,34 @@ private:
       default:
         name = "[[unsupported]]";
         break;
-        }
+      }
       std::cout << name;
-     }
-   }
+    }
+
+    auto spec_decl = dyn_cast<ClassTemplateSpecializationDecl>(decl);
+    if (spec_decl) {
+      std::cout << "(";
+      auto& args = spec_decl->getTemplateArgs();
+      for (size_t i = 0; i < args.size(); i++) {
+        if (i > 0) {
+          std::cout << ", ";
+        }
+        auto arg = args[i];
+        switch (arg.getKind()) {
+        case TemplateArgument::ArgKind::Type:
+          auto type = arg.getAsType();
+          std::cout << type.getAsString();
+        }
+      }
+      std::cout << ")";
+    }
+  }
 
 public:
   void run(const MatchFinder::MatchResult& result) override {
     auto decl = result.Nodes.getNodeAs<Decl>("decl")->getCanonicalDecl();
-    if (seen.count(decl) > 0) return;
+    if (seen.count(decl) > 0)
+      return;
     seen.insert(decl);
     handleDeclPathComponent(decl);
     std::cout << std::endl;
@@ -132,7 +153,8 @@ public:
       std::cout << "=> ";
       ret2.Ty->dump();
       auto ret3 = ret2.getSingleStepDesugaredType();
-      if (ret2 == ret3) break;
+      if (ret2 == ret3)
+        break;
       ret2 = ret3;
     }
     std::cout << std::endl;
@@ -164,7 +186,7 @@ public:
       auto offset = layout.getFieldOffset(n++);
       auto acc = field->getAccess();
       std::cout << "  " << n << " " << field->getNameAsString() << " +"
-        << offset;
+                << offset;
       switch (acc) {
       case AS_public:
         std::cout << " PUBLIC <===";
@@ -185,6 +207,11 @@ public:
 };
 
 class ASTConsumerImpl : public ASTConsumer {
+  template <typename M>
+  auto inContext(M m) {
+    return anyOf(m, hasDeclContext(m), hasDeclContext(hasAncestor(m)));
+  }
+
   void HandleTranslationUnit(ASTContext& ast) override {
     // Run the matchers when we have the whole TU parsed.
     NamedDeclAction named_decl_action;
@@ -194,12 +221,13 @@ class ASTConsumerImpl : public ASTConsumer {
     // finder.addMatcher(
     //    namedDecl(hasAncestor(namespaceDecl(hasName("::v8")))).bind("decl"),
     //    &named_decl_action);
-    auto v8api = decl(hasAncestor(namespaceDecl(hasName("::v8"))),
-      unless(hasAncestor(namespaceDecl(hasName("internal")))),
-      unless(hasAncestor(functionDecl())));
+
+    auto v8_ns = namespaceDecl(hasName("::v8"));
+    auto v8_internal_ns = namespaceDecl(hasName("::v8::internal"));
+    auto v8api = decl(inContext(v8_ns), unless(inContext(v8_internal_ns)));
     finder.addMatcher(namedDecl(v8api).bind("decl"), &named_decl_action);
-    //finder.addMatcher(recordDecl(v8api).bind("record", &record_action);
-    //finder.addMatcher(functionDecl(v8api).bind("fn"), &function_action);
+    // finder.addMatcher(recordDecl(v8api).bind("record", &record_action);
+    // finder.addMatcher(functionDecl(v8api).bind("fn"), &function_action);
     finder.matchAST(ast);
   }
 };
