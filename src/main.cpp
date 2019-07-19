@@ -129,7 +129,7 @@ private:
           std::cout << ", ";
         }
         auto param_decl = fn_decl->getParamDecl(i);
-        std::cout << param_decl->getNameAsString();
+        std::cout << param_decl->getType().getAsString();
       }
       std::cout << ")";
     }
@@ -238,9 +238,15 @@ class ASTConsumerImpl : public ASTConsumer {
     auto v8_ns = namespaceDecl(hasName("::v8"));
     auto v8_internal_ns = namespaceDecl(hasName("::v8::internal"));
     auto v8api = decl(inContext(v8_ns), unless(inContext(v8_internal_ns)));
-    finder.addMatcher(namedDecl(v8api).bind("decl"), &named_decl_action);
-    // finder.addMatcher(recordDecl(v8api).bind("record", &record_action);
-    // finder.addMatcher(functionDecl(v8api).bind("fn"), &function_action);
+    finder.addMatcher(
+        decl(v8api,
+             unless(anyOf(parmVarDecl(), templateTypeParmDecl(), friendDecl())))
+            .bind("decl"),
+        &named_decl_action);
+    // finder.addMatcher(recordDecl(v8api).bind("record",
+    // &record_action);
+    // finder.addMatcher(functionDecl(v8api).bind("fn"),
+    // &function_action);
     finder.matchAST(ast);
   }
 };
