@@ -120,6 +120,19 @@ private:
       }
       std::cout << ")";
     }
+
+    auto fn_decl = dyn_cast<FunctionDecl>(decl);
+    if (fn_decl) {
+      std::cout << "(";
+      for (size_t i = 0; i < fn_decl->getNumParams(); i++) {
+        if (i > 0) {
+          std::cout << ", ";
+        }
+        auto param_decl = fn_decl->getParamDecl(i);
+        std::cout << param_decl->getNameAsString();
+      }
+      std::cout << ")";
+    }
   }
 
 public:
