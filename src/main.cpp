@@ -35,10 +35,13 @@ private:
 
     auto ctx = decl->getDeclContext();
     auto ctx_decl = dyn_cast<Decl>(ctx);
-    handleDeclPathComponent(ctx_decl);
-    std::cout << "::";
 
-    std::cout << "<" << decl->getDeclKindName() << ">";
+    handleDeclPathComponent(ctx_decl);
+    std::cout << "::<";
+    if (ctx->isDependentContext()) {
+      std::cout << "*";
+    }
+    std::cout << decl->getDeclKindName() << ">";
 
     auto named_decl = dyn_cast<NamedDecl>(decl);
     if (!named_decl) {
@@ -137,12 +140,20 @@ private:
 
 public:
   void run(const MatchFinder::MatchResult& result) override {
-    auto decl = result.Nodes.getNodeAs<Decl>("decl")->getCanonicalDecl();
+    auto decl = result.Nodes.getNodeAs<Decl>("decl");
+    if (isa<TagDecl>(decl) &&
+        dyn_cast<RecordDecl>(decl)->isCompleteDefinition()) {
+      // Leave it.
+    } else {
+      decl = decl->getCanonicalDecl();
+    }
     if (seen.count(decl) > 0)
       return;
     seen.insert(decl);
     handleDeclPathComponent(decl);
-    std::cout << std::endl;
+    auto& sm = decl->getASTContext().getSourceManager();
+    auto loc = decl->getBeginLoc().printToString(sm);
+    std::cout << "  " << loc << std::endl;
   }
 };
 
@@ -225,6 +236,16 @@ class ASTConsumerImpl : public ASTConsumer {
     return anyOf(m, hasDeclContext(m), hasDeclContext(hasAncestor(m)));
   }
 
+  template <typename M>
+  auto isOrHasAncestor(M m) {
+    return anyOf(m, hasAncestor(m));
+  }
+
+  template <typename M>
+  auto unlessUnder(M m) {
+    return unless(anyOf(m, hasAncestor(m)));
+  }
+
   void HandleTranslationUnit(ASTContext& ast) override {
     // Run the matchers when we have the whole TU parsed.
     NamedDeclAction named_decl_action;
@@ -237,12 +258,21 @@ class ASTConsumerImpl : public ASTConsumer {
 
     auto v8_ns = namespaceDecl(hasName("::v8"));
     auto v8_internal_ns = namespaceDecl(hasName("::v8::internal"));
-    auto v8api = decl(inContext(v8_ns), unless(inContext(v8_internal_ns)));
-    finder.addMatcher(
-        decl(v8api,
-             unless(anyOf(parmVarDecl(), templateTypeParmDecl(), friendDecl())))
-            .bind("decl"),
-        &named_decl_action);
+    finder.addMatcher(decl(inContext(v8_ns),
+                           unless(inContext(v8_internal_ns)),
+                           unless(inContext(namespaceDecl(isAnonymous()))),
+                           unless(hasAncestor(stmt())),
+                           // unlessUnder(isPrivate()),
+                           // unlessUnder(decl(isProtected(),
+                           //            unless(hasParent(cxxRecordDecl(
+                           //                hasMethod(isVirtual())))))),
+                           unlessUnder(parmVarDecl()),
+                           unlessUnder(indirectFieldDecl()),
+                           unlessUnder(templateTypeParmDecl()),
+                           unlessUnder(friendDecl()),
+                           unlessUnder(accessSpecDecl()))
+                          .bind("decl"),
+                      &named_decl_action);
     // finder.addMatcher(recordDecl(v8api).bind("record",
     // &record_action);
     // finder.addMatcher(functionDecl(v8api).bind("fn"),
