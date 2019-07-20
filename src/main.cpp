@@ -141,9 +141,8 @@ private:
 public:
   void run(const MatchFinder::MatchResult& result) override {
     auto decl = result.Nodes.getNodeAs<Decl>("decl");
-    if (isa<TagDecl>(decl) &&
-        dyn_cast<RecordDecl>(decl)->isCompleteDefinition()) {
-      // Leave it.
+    if (isa<TagDecl>(decl) && dyn_cast<TagDecl>(decl)->getDefinition()) {
+      decl = dyn_cast<TagDecl>(decl)->getDefinition();
     } else {
       decl = decl->getCanonicalDecl();
     }
@@ -262,10 +261,10 @@ class ASTConsumerImpl : public ASTConsumer {
                            unless(inContext(v8_internal_ns)),
                            unless(inContext(namespaceDecl(isAnonymous()))),
                            unless(hasAncestor(stmt())),
-                           // unlessUnder(isPrivate()),
-                           // unlessUnder(decl(isProtected(),
-                           //            unless(hasParent(cxxRecordDecl(
-                           //                hasMethod(isVirtual())))))),
+                           unlessUnder(isPrivate()),
+                           unlessUnder(decl(isProtected(),
+                                            unless(hasParent(cxxRecordDecl(
+                                                hasMethod(isVirtual())))))),
                            unlessUnder(parmVarDecl()),
                            unlessUnder(indirectFieldDecl()),
                            unlessUnder(templateTypeParmDecl()),
