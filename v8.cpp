@@ -27,4 +27,9 @@ namespace v8 {
       void Foo() && {}
       void Foo() & {}
   };
+  
+  void Poep(int);
+  void Poep(int kaas);
+  void Poep(int);
+  void Poep(int boterham) {}
 }

@@ -25,6 +25,7 @@ using namespace clang::ast_matchers;
 using namespace llvm;
 
 class Matchers {
+public:
   template <typename M>
   static auto inDeclContext(M m) {
     return anyOf(m, hasDeclContext(m), hasDeclContext(hasAncestor(m)));
@@ -40,16 +41,14 @@ class Matchers {
     return unless(anyOf(m, hasAncestor(m)));
   }
 
-public:
   static auto inV8Namespace() {
     return decl(
         inDeclContext(namespaceDecl(hasName("::v8"))),
         unless(inDeclContext(namespaceDecl(hasName("::v8::internal")))));
   }
 
-  static auto anyV8Api() {
-    return decl(inV8Namespace(),
-                unless(hasAncestor(stmt())),
+  static auto pubApi() {
+    return decl(unless(hasAncestor(stmt())),
                 unlessUnder(namespaceDecl(isAnonymous())),
                 unlessUnder(isPrivate()),
                 unlessUnder(decl(
@@ -61,16 +60,22 @@ public:
                 unlessUnder(friendDecl()),
                 unlessUnder(accessSpecDecl()));
   }
+
+  static auto anyV8Api() {
+    return decl(inV8Namespace(), pubApi());
+  }
 };
 
 class NamedDeclAction : public MatchFinder::MatchCallback {
-  const ASTContext& ast_;
+  ASTContext& ast_;
 
 public:
-  explicit NamedDeclAction(const ASTContext& ast) : ast_(ast) {}
+  explicit NamedDeclAction(ASTContext& ast) : ast_(ast) {}
 
 private:
   std::unordered_set<const Decl*> seen;
+  std::unordered_set<const Decl*> todo;
+  bool is_running = false;
 
   void handleIdentifier(const clang::IdentifierInfo* identifier) {
     auto name = identifier->getName().str();
@@ -92,12 +97,90 @@ private:
     std::cout << "_";
   }
 
+  void addTemplateArgs(ArrayRef<TemplateArgument> args) {
+    for (auto arg = args.begin(); arg != args.end(); ++arg) {
+      switch (arg->getKind()) {
+      case TemplateArgument::ArgKind::Declaration:
+        addDeclContext(arg->getAsDecl());
+        break;
+      case TemplateArgument::ArgKind::Type:
+        addType(arg->getAsType());
+        break;
+      case TemplateArgument::ArgKind::Expression:
+        addType(arg->getAsExpr()->getType());
+        break;
+      case TemplateArgument::ArgKind::Pack:
+        addTemplateArgs(arg->getPackAsArray());
+        break;
+      case TemplateArgument::ArgKind::TemplateExpansion:
+      case TemplateArgument::ArgKind::Template: {
+        auto d = arg->getAsTemplateOrTemplatePattern().getAsTemplateDecl();
+        if (d) {
+          addDeclContext(d);
+        }
+        break;
+      }
+      case TemplateArgument::ArgKind::Integral:
+      case TemplateArgument::ArgKind::Null:
+      case TemplateArgument::ArgKind::NullPtr:
+        // Do nothing.
+        break;
+      default:
+        llvm_unreachable("No such template argument kind");
+      }
+    }
+  }
+
+  void addTypes(ArrayRef<QualType> types) {
+    for (auto qt = types.begin(); qt != types.end(); ++qt) {
+      addType(*qt);
+    }
+  }
+
+  void addType(const clang::QualType qual_type) {
+    auto qt = qual_type;
+    for (;;) {
+      auto desugared = qt.getSingleStepDesugaredType(ast_);
+      if (desugared == qt)
+        break;
+      qt = desugared;
+      auto type = qt.getTypePtr();
+      auto tag_type = dyn_cast<TagType>(type);
+      if (tag_type) {
+        addDeclContext(tag_type->getAsTagDecl());
+      }
+      auto typedef_type = dyn_cast<TypedefType>(type);
+      if (typedef_type) {
+        addDeclContext(typedef_type->getDecl());
+      }
+      auto spec_type = dyn_cast<TemplateSpecializationType>(type);
+      if (spec_type) {
+        addTemplateArgs(spec_type->template_arguments());
+      }
+      auto fn_type = dyn_cast<clang::FunctionType>(type);
+      if (fn_type) {
+        addType(fn_type->getReturnType());
+      }
+      auto fn_proto_type = dyn_cast<clang::FunctionProtoType>(type);
+      if (fn_type) {
+        addTypes(fn_proto_type->getParamTypes());
+        addTypes(fn_proto_type->exceptions());
+      }
+    }
+  }
+
   void handleQualType(
-      const clang::QualType& qual_type,
+      const clang::QualType qual_type,
       const clang::Qualifiers extra_quals = clang::Qualifiers()) {
+    addType(qual_type);
+
     auto type = qual_type.getTypePtr();
     auto quals = qual_type.getQualifiers();
     quals.addQualifiers(extra_quals);
+
+    if (type->isDependentType()) {
+      std::cout << "^";
+    }
 
     switch (type->getTypeClass()) {
     case clang::Type::Builtin: {
@@ -201,7 +284,115 @@ private:
     std::cout << ">";
   }
 
+  void handleFunctionParameters(const FunctionDecl* fn_decl) {
+    std::cout << "(";
+    auto params = fn_decl->parameters();
+    for (size_t i = 0; i < params.size(); i++) {
+      if (i > 0) {
+        std::cout << ", ";
+      }
+      auto param_decl = params[i];
+      handleQualType(param_decl->getType());
+
+      // Try to find a name for this parameter by looking at all
+      // redeclarations of this function. When different declarations for
+      // the same function use different names, try to to use the name from
+      // a non-definition declaration, since it is more likely to be
+      // meaningful from an external viewpoint.
+      auto name_parm_decl = param_decl;
+      auto name_parent_fn_decl = fn_decl;
+      auto name_info = param_decl->getDeclName();
+
+      auto fn_redecls = fn_decl->redecls();
+      for (auto f = fn_redecls.begin();
+           f != fn_redecls.end() &&
+           (name_info.isEmpty() ||
+            name_parent_fn_decl->isThisDeclarationADefinition());
+           ++f) {
+        auto p = f->getParamDecl(i);
+        auto n = p->getDeclName();
+        if (n.isEmpty())
+          continue;
+        name_parm_decl = p;
+        name_parent_fn_decl = f->getAsFunction();
+        name_info = n;
+      }
+
+      std::cout << "_";
+      handleName(name_parm_decl);
+    }
+    std::cout << ")";
+  }
+
+  void handleName(const clang::NamedDecl* named_decl) {
+    auto name_info = named_decl->getDeclName();
+    std::string name;
+    switch (name_info.getNameKind()) {
+    case DeclarationName::NameKind::Identifier:
+      name = !name_info.isEmpty() ? name_info.getAsString() : "[[anon]]";
+      break;
+    case DeclarationName::NameKind::CXXConstructorName: {
+      auto ctor_decl = dyn_cast<CXXConstructorDecl>(named_decl);
+      if (ctor_decl && ctor_decl->isConvertingConstructor(false)) {
+        name = "convert_from";
+      } else {
+        name = "constructor";
+      }
+      break;
+    }
+    case DeclarationName::NameKind::CXXDestructorName:
+      name = "destructor";
+      break;
+    case DeclarationName::NameKind::CXXConversionFunctionName:
+      name = "convert_to";
+      break;
+    case DeclarationName::NameKind::CXXOperatorName:
+      switch (name_info.getCXXOverloadedOperator()) {
+      case OverloadedOperatorKind::OO_New:
+        name = "op_new";
+        break;
+      case OverloadedOperatorKind::OO_Delete:
+        name = "op_delete";
+        break;
+      case OverloadedOperatorKind::OO_Array_New:
+        name = "op_new_array";
+        break;
+      case OverloadedOperatorKind::OO_Array_Delete:
+        name = "op_delete_array";
+        break;
+      case OverloadedOperatorKind::OO_Subscript:
+        name = "op_subscript";
+        break;
+      case OverloadedOperatorKind::OO_Equal:
+        name = "op_assign";
+        break;
+      case OverloadedOperatorKind::OO_EqualEqual:
+        name = "op_equal";
+        break;
+      case OverloadedOperatorKind::OO_ExclaimEqual:
+        name = "op_not_equal";
+        break;
+      case OverloadedOperatorKind::OO_Star:
+        name = "op_deref";
+        break;
+      case OverloadedOperatorKind::OO_Arrow:
+        name = "op_deref_recursive";
+        break;
+      default:
+        name = "[[unsupported operator]]";
+        break;
+      }
+      break;
+    default:
+      name = "[[unsupported]]";
+      break;
+    }
+    std::cout << name;
+  }
+
   void handleDeclPathComponent(const clang::Decl* decl) {
+    addDecl(decl);
+
     if (isa<TranslationUnitDecl>(decl)) {
       std::cout << "{TU}";
       return;
@@ -220,7 +411,7 @@ private:
 
     std::cout << "::{";
     if (ctx->isDependentContext()) {
-      std::cout << "*";
+      std::cout << "^";
     }
     std::cout << decl->getDeclKindName() << "}";
 
@@ -229,63 +420,7 @@ private:
       std::cout << "[[??unnamed]]";
       return;
     } else {
-      auto name_info = named_decl->getDeclName();
-      std::string name;
-      switch (name_info.getNameKind()) {
-      case DeclarationName::NameKind::Identifier:
-        name = !name_info.isEmpty() ? name_info.getAsString() : "[[anon]]";
-        break;
-      case DeclarationName::NameKind::CXXConstructorName:
-        name = "constructor";
-        break;
-      case DeclarationName::NameKind::CXXDestructorName:
-        name = "destructor";
-        break;
-      case DeclarationName::NameKind::CXXConversionFunctionName:
-        name = "convert_to";
-        break;
-      case DeclarationName::NameKind::CXXOperatorName:
-        switch (name_info.getCXXOverloadedOperator()) {
-        case OverloadedOperatorKind::OO_New:
-          name = "op_new";
-          break;
-        case OverloadedOperatorKind::OO_Delete:
-          name = "op_delete";
-          break;
-        case OverloadedOperatorKind::OO_Array_New:
-          name = "op_new_array";
-          break;
-        case OverloadedOperatorKind::OO_Array_Delete:
-          name = "op_delete_array";
-          break;
-        case OverloadedOperatorKind::OO_Subscript:
-          name = "op_subscript";
-          break;
-        case OverloadedOperatorKind::OO_Equal:
-          name = "op_assign";
-          break;
-        case OverloadedOperatorKind::OO_EqualEqual:
-          name = "op_equal";
-          break;
-        case OverloadedOperatorKind::OO_ExclaimEqual:
-          name = "op_not_equal";
-          break;
-        case OverloadedOperatorKind::OO_Star:
-          name = "op_deref";
-          break;
-        case OverloadedOperatorKind::OO_Arrow:
-          name = "op_deref_recursive";
-          break;
-        default:
-          name = "[[unsupported operator]]";
-          break;
-        }
-        break;
-      default:
-        name = "[[unsupported]]";
-        break;
-      }
-      std::cout << name;
+      handleName(named_decl);
     }
 
     auto method_decl = dyn_cast<CXXMethodDecl>(decl);
@@ -306,7 +441,7 @@ private:
       }
 
       std::cout << "_";
-      handleQualifiers(method_decl->getType().getQualifiers());
+      handleQualifiers(method_decl->getMethodQualifiers());
     }
 
     auto spec_decl = dyn_cast<ClassTemplateSpecializationDecl>(decl);
@@ -316,37 +451,54 @@ private:
 
     auto fn_decl = dyn_cast<FunctionDecl>(decl);
     if (fn_decl) {
+      addType(fn_decl->getType());
       auto template_args = fn_decl->getTemplateSpecializationArgs();
       if (template_args) {
         handleTemplateArguments(template_args->asArray());
       }
-
-      std::cout << "(";
-      for (size_t i = 0; i < fn_decl->getNumParams(); i++) {
-        if (i > 0) {
-          std::cout << ", ";
-        }
-        auto param_decl = fn_decl->getParamDecl(i);
-        auto param_Type = param_decl->getType();
-        handleQualType(param_Type);
-      }
-      std::cout << ")";
+      handleFunctionParameters(fn_decl);
     }
   }
 
-public:
-  void run(const MatchFinder::MatchResult& result) override {
-    auto decl = result.Nodes.getNodeAs<Decl>("decl")->getCanonicalDecl();
-    // if (isa<TagDecl>(decl) && dyn_cast<TagDecl>(decl)->getDefinition()) {
-    //  decl = dyn_cast<TagDecl>(decl)->getDefinition();
-    //}
-    if (seen.count(decl) > 0)
-      return;
+  void handleDecl(const Decl* decl) {
     seen.insert(decl);
     handleDeclPathComponent(decl);
     auto& sm = decl->getASTContext().getSourceManager();
     auto loc = decl->getBeginLoc().printToString(sm);
     std::cout << "  " << loc << std::endl;
+  }
+
+  void addDeclContext(const Decl* decl) {
+    addDecl(decl);
+
+    MatchFinder finder;
+    finder.addMatcher(clang::ast_matchers::decl(
+                          forEachDescendant(Matchers::pubApi().bind("decl"))),
+                      this);
+    finder.match(*decl, ast_);
+  }
+
+  void addDecl(const Decl* decl) {
+    decl = decl->getCanonicalDecl();
+    if (seen.count(decl) > 0 || todo.count(decl) > 0)
+      return;
+    todo.insert(decl);
+
+    if (is_running)
+      return;
+    is_running = true;
+    while (todo.size() > 0) {
+      auto decl = todo.begin();
+      handleDecl(*decl);
+      todo.erase(decl);
+    }
+    is_running = false;
+  }
+
+public:
+  void run(const MatchFinder::MatchResult& result) override {
+    auto decl = result.Nodes.getNodeAs<Decl>("decl");
+    addDecl(decl);
   }
 };
 
