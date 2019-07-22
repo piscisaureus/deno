@@ -1,9 +1,6 @@
 cmake_minimum_required(VERSION 3.4.3)
 project(gen8)
 
-file(GLOB SOURCES_SRC src/*.cpp src/*.h)
-add_executable(gen8 ${SOURCES_SRC})
-
 set(LLVM_ENABLE_PROJECTS clang CACHE STRING "")
 set(LLVM_TARGETS_TO_BUILD X86 CACHE STRING "")
 
@@ -50,6 +47,14 @@ set(CLANG_LIBS
   clangSerialization
   clangTooling
 )
+
+if(MSVC)
+  # Disable warnings originating in large numbers from clang headers.
+  add_compile_options(/wd4146 /wd4244 /wd4267 /wd4291 /wd4624)
+endif()
+
+file(GLOB SOURCES_SRC src/*.cpp src/*.h)
+add_executable(gen8 ${SOURCES_SRC})
 
 target_include_directories(gen8 PRIVATE
   ${LLVM_INCLUDE_DIRS}

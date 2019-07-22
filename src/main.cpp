@@ -23,13 +23,144 @@ using namespace clang::tooling;
 using namespace clang::ast_matchers;
 using namespace llvm;
 
+class Matchers {
+  template <typename M>
+  static auto inDeclContext(M m) {
+    return anyOf(m, hasDeclContext(m), hasDeclContext(hasAncestor(m)));
+  }
+
+  template <typename M>
+  static auto isOrHasAncestor(M m) {
+    return anyOf(m, hasAncestor(m));
+  }
+
+  template <typename M>
+  static auto unlessUnder(M m) {
+    return unless(anyOf(m, hasAncestor(m)));
+  }
+
+public:
+  static auto inV8Namespace() {
+    return decl(
+        inDeclContext(namespaceDecl(hasName("::v8"))),
+        unless(inDeclContext(namespaceDecl(hasName("::v8::internal")))));
+  }
+
+  static auto anyV8Api() {
+    return decl(inV8Namespace(),
+                unless(hasAncestor(stmt())),
+                unlessUnder(namespaceDecl(isAnonymous())),
+                unlessUnder(isPrivate()),
+                unlessUnder(decl(
+                    isProtected(),
+                    unless(hasParent(cxxRecordDecl(hasMethod(isVirtual())))))),
+                unlessUnder(parmVarDecl()),
+                unlessUnder(indirectFieldDecl()),
+                unlessUnder(templateTypeParmDecl()),
+                unlessUnder(friendDecl()),
+                unlessUnder(accessSpecDecl()));
+  }
+};
+
 class NamedDeclAction : public MatchFinder::MatchCallback {
+  const ASTContext& ast_;
+
+public:
+  explicit NamedDeclAction(const ASTContext& ast) : ast_(ast) {}
+
 private:
   std::unordered_set<const Decl*> seen;
 
+  void handleQualType(const clang::QualType& qual_type) {
+    auto type = qual_type.getTypePtr();
+    auto quals = qual_type.getQualifiers();
+
+    if (quals.empty()) {
+      std::cout << "mut_";
+    } else if (quals.hasOnlyConst()) {
+      std::cout << "const_";
+    } else {
+      std::cout << "[[unsupported_qualifier]]";
+    }
+    switch (type->getTypeClass()) {
+    case clang::Type::Builtin: {
+      PrintingPolicy pp(ast_.getLangOpts());
+      std::cout << dyn_cast<BuiltinType>(type)->getNameAsCString(pp);
+      break;
+    }
+    case clang::Type::TypeClass::Record:
+    case clang::Type::TypeClass::Enum:
+      handleDeclPathComponent(type->getAsTagDecl());
+      break;
+    case clang::Type::TypeClass::Pointer:
+      std::cout << "ptr_";
+      handleQualType(type->getPointeeType());
+      break;
+    case clang::Type::TypeClass::RValueReference:
+      std::cout << "rval_";
+      handleQualType(type->getPointeeType());
+      break;
+    case clang::Type::TypeClass::LValueReference:
+      std::cout << "rval_";
+      handleQualType(type->getPointeeType());
+      break;
+    case clang::Type::TypeClass::Decayed:
+      std::cout << "rval_";
+      handleQualType(type->getPointeeType());
+      break;
+    case clang::Type::TemplateSpecialization: {
+      auto spec_type = dyn_cast<TemplateSpecializationType>(type);
+      auto decl = spec_type->getTemplateName().getAsTemplateDecl();
+      if (decl) {
+        handleDeclPathComponent(decl);
+      } else {
+        std::cout << "[[no-template-decl]]";
+      }
+      handleTemplateArguments(spec_type->template_arguments());
+      break;
+    }
+    case clang::Type::TemplateTypeParm: {
+      auto name = dyn_cast<TemplateTypeParmType>(type)
+                      ->getIdentifier()
+                      ->getName()
+                      .str();
+      std::cout << name;
+      break;
+    }
+    case clang::Type::SubstTemplateTypeParm:
+      handleQualType(
+          dyn_cast<SubstTemplateTypeParmType>(type)->getReplacementType());
+      break;
+    default:
+      std::cout << "[[??" << type->getTypeClassName() << "]]";
+      break;
+    }
+  }
+
+  void handleTemplateArguments(const ArrayRef<TemplateArgument> args) {
+    std::cout << "<";
+    for (size_t i = 0; i < args.size(); i++) {
+      if (i > 0) {
+        std::cout << ", ";
+      }
+      auto& arg = args[i];
+      switch (arg.getKind()) {
+      case TemplateArgument::ArgKind::Type: {
+        auto arg_type = arg.getAsType();
+        handleQualType(arg_type);
+        break;
+      }
+      default:
+        std::cout << "[[??NonTypeArg]]";
+        break;
+      }
+    }
+    std::cout << ">";
+  }
+
   void handleDeclPathComponent(const clang::Decl* decl) {
     if (isa<TranslationUnitDecl>(decl)) {
-      std::cout << "<TU>";
+      std::cout << "{TU}";
       return;
     }
 
@@ -37,11 +168,11 @@ private:
     auto ctx_decl = dyn_cast<Decl>(ctx);
 
     handleDeclPathComponent(ctx_decl);
-    std::cout << "::<";
+    std::cout << "::{";
     if (ctx->isDependentContext()) {
       std::cout << "*";
     }
-    std::cout << decl->getDeclKindName() << ">";
+    std::cout << decl->getDeclKindName() << "}";
 
     auto named_decl = dyn_cast<NamedDecl>(decl);
     if (!named_decl) {
@@ -108,20 +239,7 @@ private:
 
     auto spec_decl = dyn_cast<ClassTemplateSpecializationDecl>(decl);
     if (spec_decl) {
-      std::cout << "(";
-      auto& args = spec_decl->getTemplateArgs();
-      for (size_t i = 0; i < args.size(); i++) {
-        if (i > 0) {
-          std::cout << ", ";
-        }
-        auto arg = args[i];
-        switch (arg.getKind()) {
-        case TemplateArgument::ArgKind::Type:
-          auto type = arg.getAsType();
-          std::cout << type.getAsString();
-        }
-      }
-      std::cout << ")";
+      handleTemplateArguments(spec_decl->getTemplateArgs().asArray());
     }
 
     auto fn_decl = dyn_cast<FunctionDecl>(decl);
@@ -132,7 +250,8 @@ private:
           std::cout << ", ";
         }
         auto param_decl = fn_decl->getParamDecl(i);
-        std::cout << param_decl->getType().getAsString();
+        auto param_Type = param_decl->getType();
+        handleQualType(param_Type);
       }
       std::cout << ")";
     }
@@ -140,12 +259,10 @@ private:
 
 public:
   void run(const MatchFinder::MatchResult& result) override {
-    auto decl = result.Nodes.getNodeAs<Decl>("decl");
-    if (isa<TagDecl>(decl) && dyn_cast<TagDecl>(decl)->getDefinition()) {
-      decl = dyn_cast<TagDecl>(decl)->getDefinition();
-    } else {
-      decl = decl->getCanonicalDecl();
-    }
+    auto decl = result.Nodes.getNodeAs<Decl>("decl")->getCanonicalDecl();
+    // if (isa<TagDecl>(decl) && dyn_cast<TagDecl>(decl)->getDefinition()) {
+    //  decl = dyn_cast<TagDecl>(decl)->getDefinition();
+    //}
     if (seen.count(decl) > 0)
       return;
     seen.insert(decl);
@@ -230,24 +347,10 @@ public:
 };
 
 class ASTConsumerImpl : public ASTConsumer {
-  template <typename M>
-  auto inContext(M m) {
-    return anyOf(m, hasDeclContext(m), hasDeclContext(hasAncestor(m)));
-  }
-
-  template <typename M>
-  auto isOrHasAncestor(M m) {
-    return anyOf(m, hasAncestor(m));
-  }
-
-  template <typename M>
-  auto unlessUnder(M m) {
-    return unless(anyOf(m, hasAncestor(m)));
-  }
 
   void HandleTranslationUnit(ASTContext& ast) override {
     // Run the matchers when we have the whole TU parsed.
-    NamedDeclAction named_decl_action;
+    NamedDeclAction named_decl_action(ast);
     RecordAction record_action;
     FunctionAction function_action;
     MatchFinder finder;
@@ -255,23 +358,7 @@ class ASTConsumerImpl : public ASTConsumer {
     //    namedDecl(hasAncestor(namespaceDecl(hasName("::v8")))).bind("decl"),
     //    &named_decl_action);
 
-    auto v8_ns = namespaceDecl(hasName("::v8"));
-    auto v8_internal_ns = namespaceDecl(hasName("::v8::internal"));
-    finder.addMatcher(decl(inContext(v8_ns),
-                           unless(inContext(v8_internal_ns)),
-                           unless(inContext(namespaceDecl(isAnonymous()))),
-                           unless(hasAncestor(stmt())),
-                           unlessUnder(isPrivate()),
-                           unlessUnder(decl(isProtected(),
-                                            unless(hasParent(cxxRecordDecl(
-                                                hasMethod(isVirtual())))))),
-                           unlessUnder(parmVarDecl()),
-                           unlessUnder(indirectFieldDecl()),
-                           unlessUnder(templateTypeParmDecl()),
-                           unlessUnder(friendDecl()),
-                           unlessUnder(accessSpecDecl()))
-                          .bind("decl"),
-                      &named_decl_action);
+    finder.addMatcher(Matchers::anyV8Api().bind("decl"), &named_decl_action);
     // finder.addMatcher(recordDecl(v8api).bind("record",
     // &record_action);
     // finder.addMatcher(functionDecl(v8api).bind("fn"),
@@ -294,5 +381,7 @@ int main(int argc, const char** argv) {
 
   tooling::ClangTool tool(opt_parser.getCompilations(),
                           opt_parser.getSourcePathList());
-  return tool.run(newFrontendActionFactory<FrontendActionImpl>().get());
+  auto result = tool.run(newFrontendActionFactory<FrontendActionImpl>().get());
+  std::cout << "Done: " << result << std::endl;
+  return result;
 }
