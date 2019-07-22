@@ -77,14 +77,19 @@ private:
     std::cout << name;
   }
 
-  void handleTypeQualifiers(const clang::Qualifiers quals) {
+  void handleQualifiers(const clang::Qualifiers quals) {
     if (quals.empty()) {
-      std::cout << "mut_";
+      std::cout << "mut";
     } else if (quals.hasOnlyConst()) {
-      std::cout << "const_";
+      std::cout << "const";
     } else {
       std::cout << "[[unsupported_qualifier]]";
     }
+  }
+
+  void handleTypeQualifiers(const clang::Qualifiers quals) {
+    handleQualifiers(quals);
+    std::cout << "_";
   }
 
   void handleQualType(
@@ -299,6 +304,9 @@ private:
       default:
         llvm_unreachable("Unexpected RefQualifierKind");
       }
+
+      std::cout << "_";
+      handleQualifiers(method_decl->getType().getQualifiers());
     }
 
     auto spec_decl = dyn_cast<ClassTemplateSpecializationDecl>(decl);

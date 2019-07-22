@@ -18,3 +18,13 @@ namespace v8_c {
     handle.SetWeak(parameter, callback, type);
   }
 }
+
+namespace v8 {
+  class Test {
+    public:
+      void Foo() const & {}
+      void Foo() const && {}
+      void Foo() && {}
+      void Foo() & {}
+  };
+}
