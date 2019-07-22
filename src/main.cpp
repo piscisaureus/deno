@@ -13,6 +13,7 @@
 #include "clang/Tooling/CommonOptionsParser.h"
 #include "clang/Tooling/Tooling.h"
 
+#include <cassert>
 #include <iostream>
 #include <unordered_set>
 
@@ -71,10 +72,12 @@ public:
 private:
   std::unordered_set<const Decl*> seen;
 
-  void handleQualType(const clang::QualType& qual_type) {
-    auto type = qual_type.getTypePtr();
-    auto quals = qual_type.getQualifiers();
+  void handleIdentifier(const clang::IdentifierInfo* identifier) {
+    auto name = identifier->getName().str();
+    std::cout << name;
+  }
 
+  void handleTypeQualifiers(const clang::Qualifiers quals) {
     if (quals.empty()) {
       std::cout << "mut_";
     } else if (quals.hasOnlyConst()) {
@@ -82,33 +85,67 @@ private:
     } else {
       std::cout << "[[unsupported_qualifier]]";
     }
+  }
+
+  void handleQualType(
+      const clang::QualType& qual_type,
+      const clang::Qualifiers extra_quals = clang::Qualifiers()) {
+    auto type = qual_type.getTypePtr();
+    auto quals = qual_type.getQualifiers();
+    quals.addQualifiers(extra_quals);
+
     switch (type->getTypeClass()) {
     case clang::Type::Builtin: {
+      handleTypeQualifiers(quals);
       PrintingPolicy pp(ast_.getLangOpts());
       std::cout << dyn_cast<BuiltinType>(type)->getNameAsCString(pp);
       break;
     }
     case clang::Type::TypeClass::Record:
     case clang::Type::TypeClass::Enum:
+      handleTypeQualifiers(quals);
       handleDeclPathComponent(type->getAsTagDecl());
       break;
     case clang::Type::TypeClass::Pointer:
+      handleTypeQualifiers(quals);
       std::cout << "ptr_";
       handleQualType(type->getPointeeType());
       break;
-    case clang::Type::TypeClass::RValueReference:
-      std::cout << "rval_";
+    case clang::Type::TypeClass::LValueReference:
+      handleTypeQualifiers(quals);
+      std::cout << "ref_";
       handleQualType(type->getPointeeType());
       break;
-    case clang::Type::TypeClass::LValueReference:
-      std::cout << "rval_";
+    case clang::Type::TypeClass::RValueReference:
+      handleTypeQualifiers(quals);
+      std::cout << "move_";
       handleQualType(type->getPointeeType());
+      break;
+    case clang::Type::TypeClass::ConstantArray:
+    case clang::Type::TypeClass::IncompleteArray:
+    case clang::Type::TypeClass::VariableArray:
+    case clang::Type::TypeClass::DependentSizedArray:
+      handleTypeQualifiers(quals);
+      std::cout << "array_of_";
+      handleQualType(dyn_cast<clang::ArrayType>(type)->getElementType());
       break;
     case clang::Type::TypeClass::Decayed:
-      std::cout << "rval_";
-      handleQualType(type->getPointeeType());
+      handleQualType(dyn_cast<DecayedType>(type)->getDecayedType(), quals);
+      break;
+    case clang::Type::TypeClass::Elaborated:
+      handleQualType(dyn_cast<ElaboratedType>(type)->getNamedType(), quals);
+      break;
+    case clang::Type::TypeClass::Typedef:
+      handleTypeQualifiers(quals);
+      handleDeclPathComponent(dyn_cast<TypedefType>(type)->getDecl());
+      break;
+    case clang::Type::InjectedClassName:
+      handleQualType(dyn_cast<InjectedClassNameType>(type)
+                         ->getInjectedSpecializationType(),
+                     quals);
       break;
     case clang::Type::TemplateSpecialization: {
+      handleTypeQualifiers(quals);
       auto spec_type = dyn_cast<TemplateSpecializationType>(type);
       auto decl = spec_type->getTemplateName().getAsTemplateDecl();
       if (decl) {
@@ -119,17 +156,18 @@ private:
       handleTemplateArguments(spec_type->template_arguments());
       break;
     }
-    case clang::Type::TemplateTypeParm: {
-      auto name = dyn_cast<TemplateTypeParmType>(type)
-                      ->getIdentifier()
-                      ->getName()
-                      .str();
-      std::cout << name;
+    case clang::Type::TemplateTypeParm:
+      handleTypeQualifiers(quals);
+      handleIdentifier(dyn_cast<TemplateTypeParmType>(type)->getIdentifier());
       break;
-    }
+    case clang::Type::DependentName:
+      handleTypeQualifiers(quals);
+      handleIdentifier(dyn_cast<DependentNameType>(type)->getIdentifier());
+      break;
     case clang::Type::SubstTemplateTypeParm:
       handleQualType(
-          dyn_cast<SubstTemplateTypeParmType>(type)->getReplacementType());
+          dyn_cast<SubstTemplateTypeParmType>(type)->getReplacementType(),
+          quals);
       break;
     default:
       std::cout << "[[??" << type->getTypeClassName() << "]]";
@@ -164,10 +202,17 @@ private:
       return;
     }
 
+    auto linkage_spec_decl = dyn_cast<LinkageSpecDecl>(decl);
+    if (linkage_spec_decl) {
+      // `extern "C"` declarations have no name and are always global.
+      assert(linkage_spec_decl->getLanguage() == LinkageSpecDecl::lang_c);
+      return handleDeclPathComponent(decl->getTranslationUnitDecl());
+    }
+
     auto ctx = decl->getDeclContext();
     auto ctx_decl = dyn_cast<Decl>(ctx);
-
     handleDeclPathComponent(ctx_decl);
+
     std::cout << "::{";
     if (ctx->isDependentContext()) {
       std::cout << "*";
@@ -176,7 +221,8 @@ private:
 
     auto named_decl = dyn_cast<NamedDecl>(decl);
     if (!named_decl) {
-      std::cout << "[[unnamed]]";
+      std::cout << "[[??unnamed]]";
+      return;
     } else {
       auto name_info = named_decl->getDeclName();
       std::string name;
@@ -237,6 +283,24 @@ private:
       std::cout << name;
     }
 
+    auto method_decl = dyn_cast<CXXMethodDecl>(decl);
+    if (method_decl && method_decl->isInstance()) {
+      auto ref_qual = method_decl->getRefQualifier();
+      switch (ref_qual) {
+      case RefQualifierKind::RQ_LValue:
+        std::cout << "_ref";
+        break;
+      case RefQualifierKind::RQ_RValue:
+        std::cout << "_move";
+        break;
+      case RefQualifierKind::RQ_None:
+        // Nothing.
+        break;
+      default:
+        llvm_unreachable("Unexpected RefQualifierKind");
+      }
+    }
+
     auto spec_decl = dyn_cast<ClassTemplateSpecializationDecl>(decl);
     if (spec_decl) {
       handleTemplateArguments(spec_decl->getTemplateArgs().asArray());
@@ -244,6 +308,11 @@ private:
 
     auto fn_decl = dyn_cast<FunctionDecl>(decl);
     if (fn_decl) {
+      auto template_args = fn_decl->getTemplateSpecializationArgs();
+      if (template_args) {
+        handleTemplateArguments(template_args->asArray());
+      }
+
       std::cout << "(";
       for (size_t i = 0; i < fn_decl->getNumParams(); i++) {
         if (i > 0) {
