@@ -530,6 +530,16 @@ public:
   }
 };
 
+class VarTypeAction : public MatchFinder::MatchCallback {
+public:
+  void run(const MatchFinder::MatchResult& result) override {
+    auto node = result.Nodes.getNodeAs<VarDecl>("decl")->getCanonicalDecl();
+    std::cout << node->getNameAsString() << " => " << node->getType().getAsString() << " => "
+        << node->getType().getCanonicalType().getAsString()
+              << std::endl;
+  }
+};
+
 class RecordAction : public MatchFinder::MatchCallback {
 public:
   void run(const MatchFinder::MatchResult& result) override {
@@ -582,17 +592,22 @@ class ASTConsumerImpl : public ASTConsumer {
     NamedDeclAction named_decl_action(ast);
     RecordAction record_action;
     FunctionAction function_action;
+    VarTypeAction var_type_action;
     MatchFinder finder;
     // finder.addMatcher(
     //    namedDecl(hasAncestor(namespaceDecl(hasName("::v8")))).bind("decl"),
     //    &named_decl_action);
 
-    finder.addMatcher(Matchers::anyV8Api().bind("decl"), &named_decl_action);
-    // finder.addMatcher(recordDecl(v8api).bind("record",
-    // &record_action);
-    // finder.addMatcher(functionDecl(v8api).bind("fn"),
-    // &function_action);
-    finder.matchAST(ast);
+    // finder.addMatcher(Matchers::anyV8Api().bind("decl"), &named_decl_action);
+    finder.addMatcher(
+        decl(varDecl(hasAncestor(namespaceDecl(hasName("::v8_wrap")))))
+            .bind("decl"),
+        &var_type_action);
+        // finder.addMatcher(recordDecl(v8api).bind("record",
+        // &record_action);
+        // finder.addMatcher(functionDecl(v8api).bind("fn"),
+        // &function_action);
+        finder.matchAST(ast);
   }
 };
 
