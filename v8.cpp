@@ -207,8 +207,8 @@ private:
 
     static auto apply(F* f) {
       std::string ret_type = rust_type<R>();
-      std::string arg_type[] = {rust_type<A>()...};
-      size_t arg_count = sizeof(arg_type) / sizeof(arg_type[0]);
+      std::string arg_type[] = {rust_type<A>()..., std::string()};
+      size_t arg_count = sizeof(arg_type) / sizeof(arg_type[0]) - 1;
 
       std::ostringstream s;
       s << "fn(";
