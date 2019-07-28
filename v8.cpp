@@ -39,15 +39,15 @@ namespace v8 {
 }
 */
 
+#include <cassert>
+#include <cstdint>
 #include <cstdio>
 #include <functional>
 #include <iostream>
+#include <sstream>
+#include <string>
 #include <type_traits>
 #include <typeinfo>
-#include <string>
-#include <cstdint>
-#include <sstream>
-#include <cassert>
 
 namespace type_wrapper {
 struct UNKNOWN {};
@@ -58,35 +58,48 @@ struct wrap_qual_type;
 template <class T, typename = void>
 struct wrap_type;
 
-template <int align, typename = void> struct aligned_uint;
-template <int align> using aligned_uint_t = typename aligned_uint<align>::type;
+template <int align, typename = void>
+struct aligned_uint;
+template <int align>
+using aligned_uint_t = typename aligned_uint<align>::type;
 
-template<> struct aligned_uint<1, std::enable_if_t<1 == alignof(uint8_t)>>  { using type = uint8_t; };
-template<> struct aligned_uint<2, std::enable_if_t<2 == alignof(uint16_t)>> { using type = uint16_t; };
-template<> struct aligned_uint<4, std::enable_if_t<4 == alignof(uint32_t)>> { using type = uint32_t; };
-template<> struct aligned_uint<8, std::enable_if_t<8 == alignof(uint64_t)>> { using type = uint64_t; };
-
+template <>
+struct aligned_uint<1, std::enable_if_t<1 == alignof(uint8_t)>> {
+  using type = uint8_t;
+};
+template <>
+struct aligned_uint<2, std::enable_if_t<2 == alignof(uint16_t)>> {
+  using type = uint16_t;
+};
+template <>
+struct aligned_uint<4, std::enable_if_t<4 == alignof(uint32_t)>> {
+  using type = uint32_t;
+};
+template <>
+struct aligned_uint<8, std::enable_if_t<8 == alignof(uint64_t)>> {
+  using type = uint64_t;
+};
 
 template <class T>
 struct filler {
- private:
+private:
   static constexpr size_t size = sizeof(T);
   static constexpr size_t align = alignof(T);
-  
+
   using element = wrap_type<aligned_uint_t<align>>;
   using element_t = typename element::type;
   static constexpr size_t element_count = size / sizeof(element_t);
-  
+
   static_assert(size == sizeof(element_t) * element_count, "size mismatch");
   static_assert(align == alignof(element_t), "alignment mismatch");
- 
- public:
+
+public:
   using type = element_t[element_count];
-  
+
   static std::string rust_type() {
     std::ostringstream s;
     s << "[" << element::rust_type() << "; " << element_count << "]";
-   return s.str();
+    return s.str();
   }
 };
 
@@ -100,7 +113,7 @@ struct wrap_type {
 
 template <auto fn>
 struct fn_wrapper {
- private:
+private:
   template <class R, class... A>
   struct invoker {
     static R invoke_fn(A... args) {
@@ -113,7 +126,7 @@ struct fn_wrapper {
     return invoker<R, A...>::invoke_fn;
   }
 
- public:
+public:
   static constexpr auto ptr = fn_wrapper<fn>::wrap_fn(fn);
   using type = decltype(*ptr);
 };
@@ -132,7 +145,7 @@ struct wrap_type<
     std::enable_if_t<std::is_integral<T>::value && std::is_signed<T>::value>> {
   using type = T;
   static std::string rust_type() {
-    return std::string("u") + std::to_string(8 * sizeof(T));
+    return std::string("i") + std::to_string(8 * sizeof(T));
   }
 };
 
@@ -147,11 +160,9 @@ struct wrap_type<T,
 };
 
 template <class T>
-struct wrap_type<
-    T,
-    std::enable_if_t<std::is_array<T>::value>> {
+struct wrap_type<T, std::enable_if_t<std::is_array<T>::value>> {
   using type = typename filler<T>::type;
-  
+
   static std::string rust_type() {
     return filler<T>::rust_type();
   }
@@ -167,40 +178,66 @@ public:
   static std::string rust_type() {
     std::ostringstream s;
     s << "struct(" << filler<T>::rust_type() << ")";
-   return s.str();
+    return s.str();
   }
 };
 
 template <class F>
 struct wrap_type<F, std::enable_if_t<std::is_function<F>::value>> {
- private:
-  template <class R, class... A>
-  struct invoker {
-    static R invoke_fn(A... args) {
-      return fn(args...);
-    }
+private:
+  template <template <class, class...> class Functor, class R, class... A>
+  static auto apply(R (*f)(A...)) {
+    return Functor<R, A...>::apply(f);
   };
 
   template <class R, class... A>
-  static constexpr auto wrap_fn(R (*f)(A...)) {
-    return invoker<R, A...>::invoke_fn;
-  }
+  struct cast_types {
+    static auto apply(F* f) {
+      return reinterpret_cast<typename wrap_type<R>::type (*)(
+          typename wrap_type<A>::type...)>(f);
+    };
+  };
 
-  static constexpr F* fn = nullptr;
-  static constexpr auto ptr = wrap_fn(fn);
+  template <class R, class... A>
+  struct map_rust_types {
+    template <class T>
+    static auto rust_type() {
+      return wrap_type<T>::rust_type();
+    }
 
- public:
-  using type = decltype(*ptr);
+    static auto apply(F* f) {
+      std::string ret_type = rust_type<R>();
+      std::string arg_type[] = {rust_type<A>()...};
+      size_t arg_count = sizeof(arg_type) / sizeof(arg_type[0]);
+
+      std::ostringstream s;
+      s << "fn(";
+      for (size_t i = 0; i < arg_count; i++) {
+        if (i > 0)
+          s << ", ";
+        s << arg_type[i];
+      }
+      s << ") -> " << ret_type;
+      return s.str();
+    };
+  };
+
+  static constexpr F* f = nullptr;
+
+public:
+  using type = decltype(*apply<cast_types>(f));
+
   static std::string rust_type() {
-    return std::string("FUNC");
+    return apply<map_rust_types>(f);
   }
 };
 
 template <class T>
 struct wrap_type<T, std::enable_if_t<std::is_pointer<T>::value>> {
- private:
+private:
   using target = wrap_qual_type<std::remove_pointer_t<T>>;
- public:
+
+public:
   using type = typename target::type*;
   static std::string rust_type() {
     return std::string("*") + target::rust_raw_type();
@@ -208,30 +245,34 @@ struct wrap_type<T, std::enable_if_t<std::is_pointer<T>::value>> {
 };
 
 template <class T>
-struct wrap_qual_type<T, std::enable_if_t<std::is_const<T>::value && !std::is_volatile<T>::value>> {
+struct wrap_qual_type<
+    T,
+    std::enable_if_t<std::is_const<T>::value && !std::is_volatile<T>::value>> {
   using unqualified = wrap_type<T>;
- 
- public:
+
+public:
   using type = const typename unqualified::type*;
-  
+
   static std::string rust_type() {
     return unqualified::rust_type();
-  }  
+  }
   static std::string rust_raw_type() {
     return std::string("const ") + unqualified::rust_type();
   }
 };
 
 template <class T>
-struct wrap_qual_type<T, std::enable_if_t<!std::is_const<T>::value && !std::is_volatile<T>::value>> {
+struct wrap_qual_type<
+    T,
+    std::enable_if_t<!std::is_const<T>::value && !std::is_volatile<T>::value>> {
   using unqualified = wrap_type<T>;
 
- public:
+public:
   using type = typename unqualified::type*;
 
   static std::string rust_type() {
     return std::string("mut ") + unqualified::rust_type();
-  }  
+  }
   static std::string rust_raw_type() {
     return rust_type();
   }
@@ -299,16 +340,16 @@ extern const auto v8__local_int32__is_empty =
 
 template <class T>
 void test_type() {
-  std::cout << typeid(T).name() << " => "
-            << typeid(typename wrap_type<T>::type).name() << " => "
+  std::cout << typeid(T).name() << "\n  => "
+            << typeid(typename wrap_type<T>::type).name() << "\n  => "
             << wrap_type<T>::rust_type() << std::endl;
 }
 
 struct aap {
-  double d;
+  double d[22];
 };
 
-int funfunfun(const char* const* a, aap b[22], v8::Local<v8::Int32>* d) {
+int funfunfun(const char* const* a, aap b, v8::Local<v8::Int32>* d) {
   return 1;
 }
 
