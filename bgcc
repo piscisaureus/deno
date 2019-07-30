@@ -1,0 +1,3 @@
+#!/bin/sh
+reset
+gcc -std=c++17 v8.cpp -lstdc++ -otest

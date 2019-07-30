@@ -130,6 +130,32 @@ std::string get_rust_name() {
 }
 */
 
+#if defined(__GNUG__) // or Clang when it's emulating GCC.
+#include <cxxabi.h>
+#include <stdlib.h>
+template <class T>
+std::string cxx_typename() {
+  std::string mangled = typeid(T).name();
+  int status;
+  char* str = abi::__cxa_demangle(mangled.c_str(), 0, 0, &status);
+  if (status != 0) {
+    std::cerr << "Demangling '" << mangled << "' failed (status " << status
+              << ")" << std::endl;
+    abort();
+  }
+  std::cout << "status " << status << "\n";
+  std::string demangled(str);
+  free(str);
+  return demangled;
+}
+
+#elif defined(_MSC_VER) // or Clang when it's emulating MSVC.
+template <class T>
+std::string cxx_typename() {
+  return typeid(T).name();
+}
+#endif
+
 class rust_primitive_type : public rust_repr_base {
 public:
   std::string rust_name() override {
@@ -171,7 +197,7 @@ public:
   public:
     std::string rust_type() override {
       std::ostringstream os;
-      os << "<<<UNKNOWN " << typeid(T).name() << ">>>";
+      os << "<<<UNKNOWN " << cxx_typename<T>() << ">>>";
       return os.str();
     }
   };
@@ -232,8 +258,9 @@ public:
 
 template <class T>
 class wrap_type<T, std::enable_if_t<std::is_array<T>::value>> {
-  template <class T>
+  template <class>
   struct array_element {};
+
   template <class E, size_t N>
   struct array_element<E[N]> {
     using type = E;
@@ -296,7 +323,7 @@ struct wrap_type<F, std::enable_if_t<std::is_function<F>::value>> {
         FunctorResult(typename wrap_type<A>::type... args);
   };
 
-  template <F fn>
+  template <F* fn>
   class map_invocation {
     template <typename T>
     static auto& cast_arg(typename wrap_type<T>::type& arg) {
@@ -309,10 +336,6 @@ struct wrap_type<F, std::enable_if_t<std::is_function<F>::value>> {
     }
 
   public:
-#pragma warning(push)
-#pragma warning(disable : 4353)
-#pragma warning(pop)
-
     template <bool is_void, class R, class... A>
     struct invoker;
 
@@ -527,8 +550,8 @@ static void p(std::string s) {
 
 template <class T>
 void print_type_() {
-  p(typeid(T).name());
-  p(typeid(typename wrap_type<T>::type).name());
+  p(cxx_typename<T>());
+  p(cxx_typename<typename wrap_type<T>::type>());
   typename wrap_type<T>::rust_repr rust_repr;
   p(rust_repr.rust_name());
 }
@@ -537,7 +560,7 @@ template <auto fn, class F = std::remove_pointer_t<decltype(fn)>>
 void print_fn_() {
   print_type_<F>();
   static constexpr auto wrapped = wrap_type<F>::template call_wrapper<fn>();
-  p(typeid(decltype(wrapped)).name());
+  p(cxx_typename<decltype(wrapped)>());
 }
 
 void print_(const char* name, void (*printer)()) {
@@ -572,7 +595,7 @@ int main() {
   test_type(void*);
   test_type(v8::Local<v8::Int32>);
   test_type(v8::Local<v8::Int32>*);
-  // test_type(decltype(funfunfun));
+  test_type(decltype(funfunfun));
   test_fn(&funfunfun);
   test_fn(&int_fun1);
   test_fn(&void_fun0);
