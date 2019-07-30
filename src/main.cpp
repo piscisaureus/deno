@@ -502,6 +502,51 @@ public:
   }
 };
 
+class SimpleNamedDeclAction : public MatchFinder::MatchCallback {
+  ASTContext& ast_;
+
+public:
+  explicit SimpleNamedDeclAction(ASTContext& ast) : ast_(ast) {}
+
+private:
+  std::unordered_set<const Decl*> seen;
+
+  void printDecl(const NamedDecl* decl) {
+    std::cout << decl->getDeclKindName() << ", "
+              << decl->getQualifiedNameAsString() << ", ";
+    do {
+      auto fn_decl = dyn_cast<FunctionDecl>(decl);
+      if (!fn_decl)
+        break;
+      auto type = fn_decl->getFunctionType();
+      if (!type)
+        break;
+      auto can_type = type->getCanonicalTypeUnqualified();
+      can_type.dump();
+      return;
+    } while (0);
+    
+    std::cout << "void";
+    return;
+   }
+
+  void addDecl(const NamedDecl* decl) {
+    decl = dyn_cast<NamedDecl>(decl->getCanonicalDecl());
+    if (seen.count(decl) > 0)
+      return;
+    std::cout << "  X(";
+    printDecl(decl);
+    std::cout << ") \\\n";
+  }
+
+public:
+  void run(const MatchFinder::MatchResult& result) override {
+    auto decl = result.Nodes.getNodeAs<NamedDecl>("decl");
+    addDecl(decl);
+  }
+};
+
+
 class FunctionAction : public MatchFinder::MatchCallback {
   std::unordered_set<const FunctionDecl*> seen;
 
@@ -590,6 +635,7 @@ class ASTConsumerImpl : public ASTConsumer {
   void HandleTranslationUnit(ASTContext& ast) override {
     // Run the matchers when we have the whole TU parsed.
     NamedDeclAction named_decl_action(ast);
+    SimpleNamedDeclAction simple_named_decl_action(ast);
     RecordAction record_action;
     FunctionAction function_action;
     VarTypeAction var_type_action;
@@ -598,11 +644,12 @@ class ASTConsumerImpl : public ASTConsumer {
     //    namedDecl(hasAncestor(namespaceDecl(hasName("::v8")))).bind("decl"),
     //    &named_decl_action);
 
-    // finder.addMatcher(Matchers::anyV8Api().bind("decl"), &named_decl_action);
-    finder.addMatcher(
-        decl(varDecl(hasAncestor(namespaceDecl(hasName("::v8_wrap")))))
-            .bind("decl"),
-        &var_type_action);
+    finder.addMatcher(namedDecl(Matchers::anyV8Api()).bind("decl"),
+                      &simple_named_decl_action);
+   // finder.addMatcher(
+   //     decl(varDecl(hasAncestor(namespaceDecl(hasName("::v8_wrap")))))
+   //         .bind("decl"),
+   //     &var_type_action);
         // finder.addMatcher(recordDecl(v8api).bind("record",
         // &record_action);
         // finder.addMatcher(functionDecl(v8api).bind("fn"),
