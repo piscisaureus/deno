@@ -277,18 +277,24 @@ public:
 };
 
 template <class F>
-class wrap_type<F, std::enable_if_t<std::is_function<F>::value>> {
+struct wrap_type<F, std::enable_if_t<std::is_function<F>::value>> {
   static constexpr F* null_fn_ptr = nullptr;
 
   template <template <bool, class, class...> class Functor, class R, class... A>
   static constexpr auto apply_helper(R (*)(A...)) {
-    return Functor<std::is_void_v<R>, R, A...>::apply();
+    return Functor<std::is_void_v<R>, R, A...>::FunctorResult;
   };
 
   template <template <bool, class, class...> class Functor>
   static constexpr auto apply() {
     return apply_helper<Functor>(null_fn_ptr);
   }
+
+  template <bool is_void, class R, class... A>
+  struct map_function_type {
+    static typename wrap_type<R>::type
+        FunctorResult(typename wrap_type<A>::type... args);
+  };
 
   template <F fn>
   class map_invocation {
@@ -298,10 +304,11 @@ class wrap_type<F, std::enable_if_t<std::is_function<F>::value>> {
     }
 
     template <typename T>
-    static auto&& cast_result(T&& result) {
+    static auto&& cast_return(T&& result) {
       return *reinterpret_cast<typename wrap_type<T>::type*>(&result);
     }
 
+  public:
 #pragma warning(push)
 #pragma warning(disable : 4353)
 #pragma warning(pop)
@@ -312,43 +319,31 @@ class wrap_type<F, std::enable_if_t<std::is_function<F>::value>> {
     // Call function without return value.
     template <class R, class... A>
     struct invoker<true, R, A...> {
-      static void invoke(typename wrap_type<A>::type... args) {
+      static void FunctorResult(typename wrap_type<A>::type... args) {
         fn(cast_arg<A>(args)...);
       }
-
-      static constexpr auto apply() {
-        return &invoke;
-      };
     };
 
     // Call function with return value.
     template <class R, class... A>
     struct invoker<false, R, A...> {
       static typename wrap_type<R>::type
-          invoke(typename wrap_type<A>::type... args) {
-        auto result = fn(cast_arg<A>(args)...);
-        return cast_result<R>(std::move(result));
+          FunctorResult(typename wrap_type<A>::type... args) {
+        return cast_return<R>(fn(cast_arg<A>(args)...));
       }
-
-      static constexpr auto apply() {
-        return &invoke;
-      };
     };
-
-  public:
-    static constexpr auto invoke = apply<invoker>();
-    using type = decltype(*invoke);
   };
 
   template <bool is_void, class R, class... A>
-  struct map_rust_types {
+  class map_rust_repr : public rust_non_primitive_type<F> {
     template <class T>
     static auto rust_type_name() {
       typename wrap_type<T>::rust_repr rust_repr;
       return rust_repr.rust_name();
     }
 
-    static auto apply() {
+  public:
+    std::string rust_type() override {
       std::string ret_type = rust_type_name<R>();
       // The last element of arg_type[] is always an empty string.
       // This avoids instantiating to an empty array (which is illegal) when the
@@ -370,23 +365,19 @@ class wrap_type<F, std::enable_if_t<std::is_function<F>::value>> {
         os << ret_type;
       }
       return os.str();
-    };
-  };
+    }
 
-public:
-  using type = typename map_invocation<null_fn_ptr>::type;
-
-  class rust_repr : public rust_non_primitive_type<F> {
-  public:
-    std::string rust_type() override {
-      return apply<map_rust_types>();
+    static auto FunctorResult() {
+      return map_rust_repr();
     }
   };
 
+public:
+  using type = std::remove_pointer_t<decltype(apply<map_function_type>())>;
+  using rust_repr = decltype(apply<map_rust_repr>()());
   template <F* fn>
-  static constexpr auto call_wrapper() {
-    return map_invocation<fn>::invoke;
-  }
+  static constexpr auto call_wrapper =
+      apply<map_invocation<fn>::template invoker>;
 };
 
 template <class W>
@@ -544,8 +535,9 @@ void print_type_() {
 
 template <auto fn, class F = std::remove_pointer_t<decltype(fn)>>
 void print_fn_() {
-  print_type_<decltype(fn)>();
+  print_type_<F>();
   static constexpr auto wrapped = wrap_type<F>::template call_wrapper<fn>();
+  p(typeid(decltype(wrapped)).name());
 }
 
 void print_(const char* name, void (*printer)()) {
@@ -581,7 +573,7 @@ int main() {
   test_type(v8::Local<v8::Int32>);
   test_type(v8::Local<v8::Int32>*);
   // test_type(decltype(funfunfun));
-  // test_fn(&funfunfun);
+  test_fn(&funfunfun);
   test_fn(&int_fun1);
   test_fn(&void_fun0);
   test_fn(&void_fun1);
