@@ -50,8 +50,35 @@ namespace v8 {
 #include <typeinfo>
 
 namespace type_wrapper {
-template <class T, typename = void>
-struct wrap_type;
+
+#if defined(__GNUG__) // or Clang when it's emulating GCC.
+#include <cxxabi.h>
+#include <stdlib.h>
+template <class T>
+std::string cxx_typename() {
+  std::string mangled = typeid(T).name();
+  int status;
+  char* str = abi::__cxa_demangle(mangled.c_str(), 0, 0, &status);
+  if (status != 0) {
+    std::cerr << "Demangling '" << mangled << "' failed (status " << status
+              << ")" << std::endl;
+    abort();
+  }
+  std::cout << "status " << status << "\n";
+  std::string demangled(str);
+  free(str);
+  return demangled;
+}
+
+#elif defined(_MSC_VER) // or Clang when it's emulating MSVC.
+template <class T>
+std::string cxx_typename() {
+  return typeid(T).name();
+}
+#endif
+
+template <class T, class = void>
+class wrap_type;
 
 template <class T, class W = wrap_type<std::remove_cv_t<T>>, class = void>
 struct wrap_qual_type;
@@ -85,7 +112,7 @@ private:
   static constexpr size_t align = alignof(T);
 
   using element = wrap_type<aligned_uint_t<align>>;
-  using element_t = typename element::type;
+  using element_t = typename element::opaque_type;
   static constexpr size_t element_count = size / sizeof(element_t);
   using element_rust_repr_t = typename element::rust_repr;
 
@@ -116,46 +143,6 @@ public:
   };
 };
 
-/*
-template <class W>
-std::string get_rust_type() {
-  typename W::rust_repr rr;
-  return rr.rust_type();
-}
-
-template <class W>
-std::string get_rust_name() {
-  typename W::rust_repr rr;
-  return rr.rust_name();
-}
-*/
-
-#if defined(__GNUG__) // or Clang when it's emulating GCC.
-#include <cxxabi.h>
-#include <stdlib.h>
-template <class T>
-std::string cxx_typename() {
-  std::string mangled = typeid(T).name();
-  int status;
-  char* str = abi::__cxa_demangle(mangled.c_str(), 0, 0, &status);
-  if (status != 0) {
-    std::cerr << "Demangling '" << mangled << "' failed (status " << status
-              << ")" << std::endl;
-    abort();
-  }
-  std::cout << "status " << status << "\n";
-  std::string demangled(str);
-  free(str);
-  return demangled;
-}
-
-#elif defined(_MSC_VER) // or Clang when it's emulating MSVC.
-template <class T>
-std::string cxx_typename() {
-  return typeid(T).name();
-}
-#endif
-
 class rust_primitive_type : public rust_repr_base {
 public:
   std::string rust_name() override {
@@ -184,15 +171,14 @@ public:
   }
 };
 
-template <class T>
-struct UNKNOWN {
-  T _;
-};
-
 template <class T, class>
 class wrap_type {
+  struct UNKNOWN {
+    T _;
+  };
+
 public:
-  using type = UNKNOWN<T>;
+  using opaque_type = UNKNOWN;
   class rust_repr : public rust_primitive_type {
   public:
     std::string rust_type() override {
@@ -206,7 +192,7 @@ public:
 template <class T>
 class wrap_type<T, std::enable_if_t<std::is_same_v<T, void>>> {
 public:
-  using type = void;
+  using opaque_type = void;
 
   class rust_repr : public rust_primitive_type {
   public:
@@ -243,7 +229,7 @@ class wrap_type<
     T,
     std::enable_if_t<std::is_integral<T>::value && std::is_signed<T>::value>> {
 public:
-  using type = T;
+  using opaque_type = T;
   using rust_repr = rust_numeric_type<'i', sizeof(T)>;
 };
 
@@ -252,7 +238,7 @@ class wrap_type<T,
                 std::enable_if_t<std::is_integral<T>::value &&
                                  std::is_unsigned<T>::value>> {
 public:
-  using type = T;
+  using opaque_type = T;
   using rust_repr = rust_numeric_type<'u', sizeof(T)>;
 };
 
@@ -268,13 +254,13 @@ class wrap_type<T, std::enable_if_t<std::is_array<T>::value>> {
   };
 
   using el = array_element<T>;
-  using el_opaque_t = typename wrap_type<typename el::type>::type;
+  using el_opaque_t = typename wrap_type<typename el::type>::opaque_type;
   using el_rust_repr = typename wrap_type<typename el::type>::rust_repr;
 
 public:
-  using type = el_opaque_t[el::count];
-  static_assert(sizeof(T) == sizeof(type), "size mismatch");
-  static_assert(alignof(T) == alignof(type), "alignment mismatch");
+  using opaque_type = el_opaque_t[el::count];
+  static_assert(sizeof(T) == sizeof(opaque_type), "size mismatch");
+  static_assert(alignof(T) == alignof(opaque_type), "alignment mismatch");
 
   class rust_repr : public rust_primitive_type {
   public:
@@ -291,7 +277,7 @@ class wrap_type<
     T,
     std::enable_if_t<std::is_class<T>::value || std::is_union<T>::value>> {
 public:
-  using type = struct { typename filler<T>::type _; };
+  using opaque_type = struct { typename filler<T>::type _; };
 
   class rust_repr : public rust_non_primitive_type<T> {
   public:
@@ -319,20 +305,20 @@ struct wrap_type<F, std::enable_if_t<std::is_function<F>::value>> {
 
   template <bool is_void, class R, class... A>
   struct map_function_type {
-    static typename wrap_type<R>::type
-        FunctorResult(typename wrap_type<A>::type... args);
+    static typename wrap_type<R>::opaque_type
+        FunctorResult(typename wrap_type<A>::opaque_type... args);
   };
 
   template <F* fn>
   class map_invocation {
     template <typename T>
-    static auto& cast_arg(typename wrap_type<T>::type& arg) {
+    static auto& cast_arg(typename wrap_type<T>::opaque_type& arg) {
       return *reinterpret_cast<T*>(&arg);
     }
 
     template <typename T>
     static auto&& cast_return(T&& result) {
-      return *reinterpret_cast<typename wrap_type<T>::type*>(&result);
+      return *reinterpret_cast<typename wrap_type<T>::opaque_type*>(&result);
     }
 
   public:
@@ -342,7 +328,7 @@ struct wrap_type<F, std::enable_if_t<std::is_function<F>::value>> {
     // Call function without return value.
     template <class R, class... A>
     struct invoker<true, R, A...> {
-      static void FunctorResult(typename wrap_type<A>::type... args) {
+      static void FunctorResult(typename wrap_type<A>::opaque_type... args) {
         fn(cast_arg<A>(args)...);
       }
     };
@@ -350,8 +336,8 @@ struct wrap_type<F, std::enable_if_t<std::is_function<F>::value>> {
     // Call function with return value.
     template <class R, class... A>
     struct invoker<false, R, A...> {
-      static typename wrap_type<R>::type
-          FunctorResult(typename wrap_type<A>::type... args) {
+      static typename wrap_type<R>::opaque_type
+          FunctorResult(typename wrap_type<A>::opaque_type... args) {
         return cast_return<R>(fn(cast_arg<A>(args)...));
       }
     };
@@ -396,7 +382,8 @@ struct wrap_type<F, std::enable_if_t<std::is_function<F>::value>> {
   };
 
 public:
-  using type = std::remove_pointer_t<decltype(apply<map_function_type>())>;
+  using opaque_type =
+      std::remove_pointer_t<decltype(apply<map_function_type>())>;
   using rust_repr = decltype(apply<map_rust_repr>()());
   template <F* fn>
   static constexpr auto call_wrapper =
@@ -424,7 +411,7 @@ class wrap_type<T, std::enable_if_t<std::is_pointer_v<T>>> {
                          wrap_qual_type<target, wrap_void_non_unit>>;
 
 public:
-  using type = std::add_pointer_t<typename wrapped_target::type>;
+  using opaque_type = std::add_pointer_t<typename wrapped_target::opaque_type>;
   using rust_repr = rust_pointer_type<wrapped_target>;
 };
 
@@ -435,7 +422,7 @@ private:
   using wrapped_target = wrap_qual_type<target>;
 
 public:
-  using type = std::add_pointer_t<typename wrapped_target::type>;
+  using opaque_type = std::add_pointer_t<typename wrapped_target::opaque_type>;
   using rust_repr = rust_pointer_type<wrapped_target>;
 };
 
@@ -460,7 +447,7 @@ class wrap_qual_type<
     W,
     std::enable_if_t<std::is_const<T>::value && !std::is_volatile<T>::value>> {
 public:
-  using type = const typename W::type;
+  using opaque_type = const typename W::opaque_type;
 
   class rust_repr : public rust_qual_type<W> {
     std::string rust_qual() override {
@@ -475,7 +462,7 @@ class wrap_qual_type<
     W,
     std::enable_if_t<!std::is_const<T>::value && !std::is_volatile<T>::value>> {
 public:
-  using type = typename W::type;
+  using opaque_type = typename W::opaque_type;
 
   class rust_repr : public rust_qual_type<W> {
     std::string rust_qual() override {
@@ -551,7 +538,7 @@ static void p(std::string s) {
 template <class T>
 void print_type_() {
   p(cxx_typename<T>());
-  p(cxx_typename<typename wrap_type<T>::type>());
+  p(cxx_typename<typename wrap_type<T>::opaque_type>());
   typename wrap_type<T>::rust_repr rust_repr;
   p(rust_repr.rust_name());
 }
