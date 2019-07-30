@@ -64,7 +64,6 @@ std::string cxx_typename() {
               << ")" << std::endl;
     abort();
   }
-  std::cout << "status " << status << "\n";
   std::string demangled(str);
   free(str);
   return demangled;
@@ -289,62 +288,64 @@ public:
   };
 };
 
-template <class F>
-struct wrap_type<F, std::enable_if_t<std::is_function<F>::value>> {
-  static constexpr F* null_fn_ptr = nullptr;
+template <class F, template <bool, class, class...> class Functor>
+class transform_function {
+  template <class R, class... A>
+  static constexpr auto deduce(R (*)(A...))
+      -> Functor<std::is_void_v<R>, R, A...>;
 
-  template <template <bool, class, class...> class Functor, class R, class... A>
-  static constexpr auto apply_helper(R (*)(A...)) {
-    return Functor<std::is_void_v<R>, R, A...>::FunctorResult;
-  };
+public:
+  using type = decltype(deduce(std::declval<F>()));
+};
 
-  template <template <bool, class, class...> class Functor>
-  static constexpr auto apply() {
-    return apply_helper<Functor>(null_fn_ptr);
+template <class F, template <bool, class, class...> class Functor>
+using transform_function_t = typename transform_function<F, Functor>::type;
+
+template <auto fn>
+class wrap_function {
+  template <typename T>
+  static auto& cast_arg(typename wrap_type<T>::opaque_type& arg) {
+    return *reinterpret_cast<T*>(&arg);
+  }
+
+  template <typename T>
+  static auto&& cast_return(T&& result) {
+    return *reinterpret_cast<typename wrap_type<T>::opaque_type*>(&result);
   }
 
   template <bool is_void, class R, class... A>
-  struct map_function_type {
+  struct make_wrapper;
+
+  // Call function without return value.
+  template <class R, class... A>
+  struct make_wrapper<true, R, A...> {
+    static void invoke(typename wrap_type<A>::opaque_type... args) {
+      fn(cast_arg<A>(args)...);
+    }
+  };
+
+  // Call function with return value.
+  template <class R, class... A>
+  struct make_wrapper<false, R, A...> {
     static typename wrap_type<R>::opaque_type
-        FunctorResult(typename wrap_type<A>::opaque_type... args);
+        invoke(typename wrap_type<A>::opaque_type... args) {
+      return cast_return<R>(fn(cast_arg<A>(args)...));
+    }
   };
 
-  template <F* fn>
-  class map_invocation {
-    template <typename T>
-    static auto& cast_arg(typename wrap_type<T>::opaque_type& arg) {
-      return *reinterpret_cast<T*>(&arg);
-    }
+public:
+  static constexpr auto invoke =
+      transform_function_t<decltype(fn), make_wrapper>::invoke;
+};
 
-    template <typename T>
-    static auto&& cast_return(T&& result) {
-      return *reinterpret_cast<typename wrap_type<T>::opaque_type*>(&result);
-    }
-
-  public:
-    template <bool is_void, class R, class... A>
-    struct invoker;
-
-    // Call function without return value.
-    template <class R, class... A>
-    struct invoker<true, R, A...> {
-      static void FunctorResult(typename wrap_type<A>::opaque_type... args) {
-        fn(cast_arg<A>(args)...);
-      }
-    };
-
-    // Call function with return value.
-    template <class R, class... A>
-    struct invoker<false, R, A...> {
-      static typename wrap_type<R>::opaque_type
-          FunctorResult(typename wrap_type<A>::opaque_type... args) {
-        return cast_return<R>(fn(cast_arg<A>(args)...));
-      }
-    };
-  };
+template <class F>
+struct wrap_type<F, std::enable_if_t<std::is_function_v<F>>> {
+  template <bool is_void, class R, class... A>
+  using make_opaque_type = typename wrap_type<R>::opaque_type (&)(
+      typename wrap_type<A>::opaque_type... args);
 
   template <bool is_void, class R, class... A>
-  class map_rust_repr : public rust_non_primitive_type<F> {
+  class make_rust_repr : public rust_non_primitive_type<F> {
     template <class T>
     static auto rust_type_name() {
       typename wrap_type<T>::rust_repr rust_repr;
@@ -382,12 +383,8 @@ struct wrap_type<F, std::enable_if_t<std::is_function<F>::value>> {
   };
 
 public:
-  using opaque_type =
-      std::remove_pointer_t<decltype(apply<map_function_type>())>;
-  using rust_repr = decltype(apply<map_rust_repr>()());
-  template <F* fn>
-  static constexpr auto call_wrapper =
-      apply<map_invocation<fn>::template invoker>;
+  using opaque_type = transform_function_t<F, make_opaque_type>;
+  using rust_repr = transform_function_t<F, make_rust_repr>;
 };
 
 template <class W>
@@ -546,7 +543,7 @@ void print_type_() {
 template <auto fn, class F = std::remove_pointer_t<decltype(fn)>>
 void print_fn_() {
   print_type_<F>();
-  static constexpr auto wrapped = wrap_type<F>::template call_wrapper<fn>();
+  static constexpr auto wrapped = wrap_function<fn>::invoke;
   p(cxx_typename<decltype(wrapped)>());
 }
 
