@@ -1,6 +1,7 @@
 #include "clang/AST/AST.h"
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
+#include "clang/AST/PrettyPrinter.h"
 #include "clang/AST/RecordLayout.h"
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
@@ -504,16 +505,16 @@ public:
 
 class SimpleNamedDeclAction : public MatchFinder::MatchCallback {
   ASTContext& ast_;
+  PrintingPolicy pp_;
 
 public:
-  explicit SimpleNamedDeclAction(ASTContext& ast) : ast_(ast) {}
+  explicit SimpleNamedDeclAction(ASTContext& ast)
+      : ast_(ast), pp_(ast_.getLangOpts()) {}
 
 private:
   std::unordered_set<const Decl*> seen;
 
   void printDecl(const NamedDecl* decl) {
-    std::cout << decl->getDeclKindName() << ", "
-              << decl->getQualifiedNameAsString() << ", ";
     do {
       auto fn_decl = dyn_cast<FunctionDecl>(decl);
       if (!fn_decl)
@@ -521,22 +522,23 @@ private:
       auto type = fn_decl->getFunctionType();
       if (!type)
         break;
-      auto can_type = type->getCanonicalTypeUnqualified();
-      can_type.dump();
+      QualType can_type = type->getCanonicalTypeUnqualified();
+      if (can_type.getTypePtr()->isInstantiationDependentType())
+        break;
+      std::cout << "  X(" << decl->getDeclKindName() << ", "
+                << decl->getQualifiedNameAsString() << ", ("
+                << can_type.getAsString() << ")) \\\n";
       return;
     } while (0);
-    
-    std::cout << "void";
+
     return;
-   }
+  }
 
   void addDecl(const NamedDecl* decl) {
     decl = dyn_cast<NamedDecl>(decl->getCanonicalDecl());
     if (seen.count(decl) > 0)
       return;
-    std::cout << "  X(";
     printDecl(decl);
-    std::cout << ") \\\n";
   }
 
 public:
@@ -545,7 +547,6 @@ public:
     addDecl(decl);
   }
 };
-
 
 class FunctionAction : public MatchFinder::MatchCallback {
   std::unordered_set<const FunctionDecl*> seen;
@@ -579,9 +580,9 @@ class VarTypeAction : public MatchFinder::MatchCallback {
 public:
   void run(const MatchFinder::MatchResult& result) override {
     auto node = result.Nodes.getNodeAs<VarDecl>("decl")->getCanonicalDecl();
-    std::cout << node->getNameAsString() << " => " << node->getType().getAsString() << " => "
-        << node->getType().getCanonicalType().getAsString()
-              << std::endl;
+    std::cout << node->getNameAsString() << " => "
+              << node->getType().getAsString() << " => "
+              << node->getType().getCanonicalType().getAsString() << std::endl;
   }
 };
 
@@ -646,15 +647,15 @@ class ASTConsumerImpl : public ASTConsumer {
 
     finder.addMatcher(namedDecl(Matchers::anyV8Api()).bind("decl"),
                       &simple_named_decl_action);
-   // finder.addMatcher(
-   //     decl(varDecl(hasAncestor(namespaceDecl(hasName("::v8_wrap")))))
-   //         .bind("decl"),
-   //     &var_type_action);
-        // finder.addMatcher(recordDecl(v8api).bind("record",
-        // &record_action);
-        // finder.addMatcher(functionDecl(v8api).bind("fn"),
-        // &function_action);
-        finder.matchAST(ast);
+    // finder.addMatcher(
+    //     decl(varDecl(hasAncestor(namespaceDecl(hasName("::v8_wrap")))))
+    //         .bind("decl"),
+    //     &var_type_action);
+    // finder.addMatcher(recordDecl(v8api).bind("record",
+    // &record_action);
+    // finder.addMatcher(functionDecl(v8api).bind("fn"),
+    // &function_action);
+    finder.matchAST(ast);
   }
 };
 
@@ -672,7 +673,8 @@ int main(int argc, const char** argv) {
 
   tooling::ClangTool tool(opt_parser.getCompilations(),
                           opt_parser.getSourcePathList());
+   std::cout << "#define DECLARATIONS(X) \\\n";
   auto result = tool.run(newFrontendActionFactory<FrontendActionImpl>().get());
-  std::cout << "Done: " << result << std::endl;
+  std::cout << "// Done: " << result << std::endl;
   return result;
 }

@@ -1,4 +1,6 @@
 
+#include "o.h"
+
 #include "v8/include/v8config.h"
 #undef V8_EXPORT
 #define V8_EXPORT
@@ -47,6 +49,10 @@ std::string cxx_typename() {
 #endif
 
 // ====== Function and method argument deduction utilities ======
+
+// Helper for selecting an overloaded function or member function.
+template <class T, T v>
+static constexpr T select_overload_v = v;
 
 // Functions and static methods
 template <class F, template <bool, class, class...> class Functor>
@@ -606,8 +612,6 @@ class wrap_function {
   template <class T>
   static auto& cast_arg(opaque_t<T>& arg) {
     auto& r = *reinterpret_cast<std::remove_reference_t<T>*>(&arg);
-    std::cout << "CAST< " << cxx_typename<opaque_t<T>>() << "\n"
-              << "      " << cxx_typename<decltype(r)>() << " >\n";
     return r;
   }
 
@@ -678,6 +682,15 @@ public:
       transform_method_t<decltype(method), make_wrapper>::invoke;
 };
 
+template <auto callable>
+struct wrap_callable
+    : std::conditional_t<std::is_member_function_pointer_v<decltype(callable)>,
+                         wrap_method<callable>,
+                         wrap_function<callable>> {};
+
+template <auto callable>
+static constexpr auto invoke = wrap_callable<callable>::invoke;
+
 } // namespace type_wrapper
 using namespace type_wrapper;
 
@@ -709,19 +722,22 @@ void print_type_() {
   p(rust_repr.rust_name());
 }
 
-template <auto fn, class F = std::remove_pointer_t<decltype(fn)>>
-void print_fn_() {
-  print_type_<F>();
-  static constexpr auto wrapped = wrap_function<fn>::invoke;
-  p(cxx_typename<decltype(wrapped)>());
-}
+// template <void* fn = nullptr, class = std::void_t<>>
+// void print_fn_() {
+//  p("Cannot print");
+//}
 
-template <auto method>
-void print_method_() {
-  print_type_<decltype(method)>();
-  static constexpr auto wrapped = wrap_method<method>::invoke;
-  p(cxx_typename<decltype(wrapped)>());
-}
+template <class F, F fn>
+struct fn_printer_ {
+  static void print_fn() {
+    print_type_<F>();
+    static constexpr auto wrapped = invoke<fn>;
+    p(cxx_typename<decltype(wrapped)>());
+  }
+};
+
+template <auto fn>
+struct fn_printer : fn_printer_<decltype(fn), fn> {};
 
 void print_(const char* name, void (*printer)()) {
   std::cout << name << std::endl;
@@ -730,8 +746,7 @@ void print_(const char* name, void (*printer)()) {
 }
 
 #define test_type(a) print_(#a, print_type_<a>)
-#define test_fn(a) print_(#a, print_fn_<a>)
-#define test_method(a) print_(#a, print_method_<a>)
+#define test_fn(a) print_(#a, fn_printer<a>::print_fn)
 
 struct aap {
   double d[22];
@@ -793,9 +808,9 @@ int main() {
   std::string strings[10];
   test_type(decltype(strings));
   test_type(aap);
-  test_method(&klas::foo0);
-  test_method(&klas::foo1);
-  test_method(&klas::vood1);
+  test_fn(&klas::foo0);
+  test_fn(&klas::foo1);
+  test_fn(&klas::vood1);
 
   test_fn(&ff_mut);
   test_fn(&ff_mut_lval);
@@ -804,13 +819,27 @@ int main() {
   test_fn(&ff_const_lval);
   // test_fn(&ff_const_rval);
 
-  test_method(&klas::mm_mut);
-  // test_method(&klas::mm_mut_lval);
-  // test_method(&klas::mm_mut_rval);
-  test_method(&klas::mm_const);
-  // test_method(&klas::mm_const_lval);
-  // test_method(&klas::mm_const_rval);
+  test_fn(&klas::mm_mut);
+  // test_fn(&klas::mm_mut_lval);
+  // test_fn(&klas::mm_mut_rval);
+  test_fn(&klas::mm_const);
+  // test_fn(&klas::mm_const_lval);
+  // test_fn(&klas::mm_const_rval);
 
-  test_method(&v8::Local<v8::Int32>::As<v8::Value>);
-  test_method(&v8::Persistent<v8::Int32>::Get);
+  test_fn(&v8::Local<v8::Int32>::As<v8::Value>);
+  test_fn(&v8::Local<v8::Int32>::Cast<v8::Value>);
+  test_fn(&v8::Persistent<v8::Int32>::Get);
+  static constexpr auto ccc =
+      select_overload_v<v8::Local<class v8::Primitive> (*)(
+                            class v8::Isolate*,
+                            class v8::Local<class v8::Primitive>),
+                        &v8::Local<v8::Primitive>::New>;
+
+#define xCXXConstructor(name, type)
+#define xCXXDestructor(name, type)
+#define xCXXMethod(name, type) test_fn(&name);
+#define xDisabled(name, type)
+#define xFunction(name, type) test_fn(&name);
+#define X(kind, name, type, ...) x##kind(name, type)
+  // DECLARATIONS(X)
 }

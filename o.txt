@@ -1,4 +1,0 @@
-v8__function__new => class v8::MaybeLocal<class v8::Function> (&)(class v8::Local<class v8::Context>, void (*)(const class v8::FunctionCallbackInfo<class v8::Value> &), class v8::Local<class v8::Value>, int, enum v8::ConstructorBehavior, enum v8::SideEffectType) => class v8::MaybeLocal<class v8::Function> (&)(class v8::Local<class v8::Context>, void (*)(const class v8::FunctionCallbackInfo<class v8::Value> &), class v8::Local<class v8::Value>, int, enum v8::ConstructorBehavior, enum v8::SideEffectType)
-v8__local_int32__cast_value => class v8::Local<class v8::Int32> (&)(class v8::Local<class v8::Value>) => class v8::Local<class v8::Int32> (&)(class v8::Local<class v8::Value>)
-v8__local_int32__as_value => const auto => const auto
-Done: 1
