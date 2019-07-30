@@ -303,14 +303,17 @@ using transform_function_t = typename transform_function<F, Functor>::type;
 
 template <auto fn>
 class wrap_function {
-  template <typename T>
-  static auto& cast_arg(typename wrap_type<T>::opaque_type& arg) {
-    return *reinterpret_cast<T*>(&arg);
-  }
-
-  template <typename T>
+  template <class T>
   static auto&& cast_return(T&& result) {
     return *reinterpret_cast<typename wrap_type<T>::opaque_type*>(&result);
+  }
+
+  // template <class T, class = void>
+  // static auto& cast_arg {};
+
+  template <class T>
+  static auto& cast_arg(typename wrap_type<T>::opaque_type& arg) {
+    return *reinterpret_cast<T*>(&arg);
   }
 
   template <bool is_void, class R, class... A>
@@ -376,15 +379,114 @@ struct wrap_type<F, std::enable_if_t<std::is_function_v<F>>> {
       }
       return os.str();
     }
-
-    static auto FunctorResult() {
-      return map_rust_repr();
-    }
   };
 
 public:
   using opaque_type = transform_function_t<F, make_opaque_type>;
   using rust_repr = transform_function_t<F, make_rust_repr>;
+};
+
+template <class M, template <bool, class, class, class...> class Functor>
+class transform_method {
+  template <class R, class T, class... A>
+  static constexpr auto deduce(R (T::*)(A...))
+      -> Functor<std::is_void_v<R>, R, T, A...>;
+  template <class R, class T, class... A>
+  static constexpr auto deduce(R (T::*)(A...) const)
+      -> Functor<std::is_void_v<R>, R, const T, A...>;
+
+public:
+  using type = decltype(deduce(std::declval<M>()));
+};
+
+template <class M, template <bool, class, class, class...> class Functor>
+using transform_method_t = typename transform_method<M, Functor>::type;
+
+template <auto method>
+class wrap_method {
+  template <typename T>
+  static auto&& cast_return(T&& result) {
+    return *reinterpret_cast<typename wrap_type<T>::opaque_type*>(&result);
+  }
+
+  // template <typename T>
+  // static auto& cast_this(typename wrap_type<T>::opaque_type& arg) {
+  //  return *reinterpret_cast<T*>(&arg);
+  //}
+
+  template <typename T>
+  static auto& cast_arg(typename wrap_type<T>::opaque_type& arg) {
+    return *reinterpret_cast<T*>(&arg);
+  }
+
+  template <bool is_void, class R, class T, class... A>
+  struct make_wrapper;
+
+  // Call method without return value.
+  template <class R, class T, class... A>
+  struct make_wrapper<true, R, T, A...> {
+    static void invoke(typename wrap_qual_type<T*>::opaque_type self,
+                       typename wrap_type<A>::opaque_type... args) {
+      (cast_arg<T*>(self)->*method)(cast_arg<A>(args)...);
+    }
+  };
+
+  // Call method with return value.
+  template <class R, class T, class... A>
+  struct make_wrapper<false, R, T, A...> {
+    static typename wrap_type<R>::opaque_type
+        invoke(typename wrap_type<T>::opaque_type* self,
+               typename wrap_type<A>::opaque_type... args) {
+      return cast_return<R>(
+          (cast_arg<T*>(self)->*method)(cast_arg<A>(args)...));
+    }
+  };
+
+public:
+  static constexpr auto invoke =
+      transform_method_t<decltype(method), make_wrapper>::invoke;
+};
+
+template <class M>
+struct wrap_type<M, std::enable_if_t<std::is_member_function_pointer_v<M>>> {
+  template <bool is_void, class R, class T, class... A>
+  using make_opaque_type = typename wrap_type<R>::opaque_type (T::*)(
+      typename wrap_type<A>::opaque_type... args);
+
+  template <bool is_void, class R, class T, class... A>
+  class make_rust_repr : public rust_non_primitive_type<M> {
+    template <class T>
+    static auto rust_type_name() {
+      typename wrap_type<T>::rust_repr rust_repr;
+      return rust_repr.rust_name();
+    }
+
+  public:
+    std::string rust_type() override {
+      std::string ret_type = rust_type_name<R>();
+      std::string arg_type[] = {rust_type_name<T>(), rust_type_name<A>()...};
+      size_t arg_count = sizeof(arg_type) / sizeof(arg_type[0]);
+
+      std::ostringstream os;
+      os << "extern \"C\" fn(";
+      for (size_t i = 0; i < arg_count; i++) {
+        if (i > 0)
+          os << ", ";
+        os << arg_type[i];
+      }
+      os << ") -> ";
+      if (is_void) {
+        os << "()";
+      } else {
+        os << ret_type;
+      }
+      return os.str();
+    }
+  };
+
+public:
+  using opaque_type = transform_method_t<M, make_opaque_type>;
+  using rust_repr = transform_method_t<M, make_rust_repr>;
 };
 
 template <class W>
@@ -470,6 +572,7 @@ public:
 } // namespace type_wrapper
 using namespace type_wrapper;
 
+#if 0
 namespace method_wrapper {
 namespace {
 template <auto method>
@@ -500,21 +603,6 @@ constexpr auto wrap_method = wrapper<fn>::wrap;
 } // namespace method_wrapper
 using namespace method_wrapper;
 
-template <typename K>
-struct test {
-  int foo0() {
-    return 1;
-  }
-  int foo1(void* arg) {
-    return 1;
-  }
-  template <typename E>
-  int foot1(E e, int a, double b) {
-    return 2;
-  }
-};
-
-#if 0
 namespace v8_wrap {
 extern "C" {
 __declspec(dllexport) extern const auto& v8__function__new = v8::Function::New;
@@ -547,6 +635,13 @@ void print_fn_() {
   p(cxx_typename<decltype(wrapped)>());
 }
 
+template <auto method>
+void print_method_() {
+  print_type_<decltype(method)>();
+  static constexpr auto wrapped = wrap_method<method>::invoke;
+  p(cxx_typename<decltype(wrapped)>());
+}
+
 void print_(const char* name, void (*printer)()) {
   std::cout << name << std::endl;
   printer();
@@ -555,6 +650,7 @@ void print_(const char* name, void (*printer)()) {
 
 #define test_type(a) print_(#a, print_type_<a>)
 #define test_fn(a) print_(#a, print_fn_<a>)
+#define test_method(a) print_(#a, print_method_<a>)
 
 struct aap {
   double d[22];
@@ -566,11 +662,38 @@ int int_fun1(int a) {
   return a;
 }
 
+void ff_mut(aap a) {}
+void ff_mut_lval(aap& a) {}
+void ff_mut_rval(aap&& a) {}
+void ff_const(const aap a) {}
+void ff_const_lval(const aap& a) {}
+void ff_const_rval(const aap&& a) {}
+
 v8::Persistent<v8::Value>&&
     funfunfun(const char* const* a, aap b, v8::Local<v8::Int32>* d) {
   static void* invalid = nullptr;
   return reinterpret_cast<v8::Persistent<v8::Value>&&>(invalid);
 }
+
+struct klas {
+  int foo0() {
+    return 1;
+  }
+  int foo1(void* arg) {
+    return 1;
+  }
+  void vood1(klas k) {}
+  void mm_mut() {}
+  void mm_mut_lval() & {}
+  void mm_mut_rval() && {}
+  void mm_const() const {}
+  void mm_const_lval() const& {}
+  void mm_const_rval() const&& {}
+  template <typename E>
+  int foot1(E e, int a, double b) {
+    return 2;
+  }
+};
 
 int main() {
   test_type(int);
@@ -589,4 +712,23 @@ int main() {
   std::string strings[10];
   test_type(decltype(strings));
   test_type(aap);
+  test_method(&klas::foo0);
+  test_method(&klas::foo1);
+  test_method(&klas::vood1);
+
+  test_fn(&ff_mut);
+  // test_fn(&ff_mut_lval);
+  // test_fn(&ff_mut_rval);
+  test_fn(&ff_const);
+  // test_fn(&ff_const_lval);
+  // test_fn(&ff_const_rval);
+
+  test_method(&klas::mm_mut);
+  // test_method(&klas::mm_mut_lval);
+  // test_method(&klas::mm_mut_rval);
+  test_method(&klas::mm_const);
+  // test_method(&klas::mm_const_lval);
+  // test_method(&klas::mm_const_rval);
+
+  // test_method(&v8::Local<v8::Int32>::As<v8::Value>);
 }
