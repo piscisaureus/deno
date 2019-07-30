@@ -81,6 +81,7 @@ template <class M, template <bool, class, class, class...> class Functor>
 using transform_method_t = typename transform_method<M, Functor>::type;
 
 // ====== Array element type deduction ======
+
 template <class>
 struct array_element {};
 
@@ -117,13 +118,21 @@ struct filler<8> : public filler_traits<8, uint64_t> {};
 template <size_t align>
 using filler_t = typename filler<align>::type;
 
-// ====== Type mapping ======
+// ====== Type mapping: declarations and convenience wrappers ======
 
 template <class T, class = void>
-class wrap_type;
+class map_type;
 
-template <class T, class W = wrap_type<std::remove_cv_t<T>>, class = void>
-struct wrap_qual_type;
+template <class T,
+          class W = typename map_type<std::remove_cv_t<T>>::rust_repr,
+          class = void>
+struct map_qual_type;
+
+template <class T>
+using opaque_t = typename map_type<T>::opaque_type;
+
+template <class T>
+using opaque_qual_t = typename map_qual_type<T>::opaque_type;
 
 // ====== Rust type representations ======
 
@@ -167,9 +176,28 @@ public:
   }
 };
 
-template <class W>
+class rust_unit_void : public rust_primitive_type {
+public:
+  std::string rust_type() override {
+    return "()";
+  }
+};
+
+// The rust equivalent of `void` is `()`, but creating a reference/pointer
+// to `()` isn't possible; we need to use `std::ffi::c_void` instead.
+class rust_ffi_void : public rust_primitive_type {
+public:
+  std::string rust_type() override {
+    return "std::ffi::c_void";
+  }
+};
+
+template <class T>
 class rust_pointer_type : public rust_primitive_type {
-  typename W::rust_repr target_repr;
+  std::conditional_t<!std::is_void_v<T>,
+                     typename map_qual_type<T>::rust_repr,
+                     typename map_qual_type<T, rust_ffi_void>::rust_repr>
+      target_repr;
 
 public:
   std::string rust_type() override {
@@ -181,7 +209,7 @@ public:
 
 template <typename E, size_t N>
 class rust_slice : public rust_primitive_type {
-  typename wrap_type<E>::rust_repr el_repr;
+  typename map_type<E>::rust_repr el_repr;
 
 public:
   std::string rust_type() override {
@@ -210,7 +238,7 @@ public:
 // Qualified types.
 template <class W>
 class rust_qual_type : public rust_primitive_type {
-  typename W::rust_repr target_repr;
+  W target_repr;
   std::string quals;
 
 protected:
@@ -228,10 +256,10 @@ public:
 
 // Unqualified types.
 
-class wrap_type_base {};
+class map_type_base {};
 
 template <class T, class>
-class wrap_type : public wrap_type_base {
+class map_type : public map_type_base {
   struct UNKNOWN {
     T _;
   };
@@ -249,67 +277,47 @@ public:
 };
 
 template <class T>
-class wrap_type<T, std::enable_if_t<std::is_same_v<T, void>>>
-    : public wrap_type_base {
+class map_type<T, std::enable_if_t<std::is_same_v<T, void>>>
+    : public map_type_base {
 public:
   using opaque_type = void;
-
-  class rust_repr : public rust_primitive_type {
-  public:
-    std::string rust_type() override {
-      return "()";
-    }
-  };
-};
-
-// The rust equivalent of `void` is `()`, but creating a reference/pointer
-// to `()` isn't possible; we need to use `std::ffi::c_void` instead.
-class wrap_void_non_unit : public wrap_type<void> {
-public:
-  class rust_repr : public rust_primitive_type {
-  public:
-    std::string rust_type() override {
-      return "std::ffi::c_void";
-    }
-  };
+  using rust_repr = rust_unit_void;
 };
 
 template <class T>
-class wrap_type<T,
-                std::enable_if_t<std::is_integral_v<T> && std::is_signed_v<T>>>
-    : public wrap_type_base {
+class map_type<T,
+               std::enable_if_t<std::is_integral_v<T> && std::is_signed_v<T>>>
+    : public map_type_base {
 public:
   using opaque_type = T;
   using rust_repr = rust_numeric_type<'i', sizeof(T)>;
 };
 
 template <class T>
-class wrap_type<
-    T,
-    std::enable_if_t<std::is_integral_v<T> && std::is_unsigned_v<T>>>
-    : public wrap_type_base {
+class map_type<T,
+               std::enable_if_t<std::is_integral_v<T> && std::is_unsigned_v<T>>>
+    : public map_type_base {
 public:
   using opaque_type = T;
   using rust_repr = rust_numeric_type<'u', sizeof(T)>;
 };
 
 template <class T>
-class wrap_type<T, std::enable_if_t<std::is_array_v<T>>>
-    : public wrap_type_base {
+class map_type<T, std::enable_if_t<std::is_array_v<T>>> : public map_type_base {
   using el = array_element<T>;
-  using el_opaque_t = typename wrap_type<typename el::type>::opaque_type;
+  using el_t = typename el::type;
 
 public:
-  using opaque_type = el_opaque_t[el::count];
+  using opaque_type = opaque_t<el_t>[el::count];
   static_assert(sizeof(T) == sizeof(opaque_type), "size mismatch");
   static_assert(alignof(T) == alignof(opaque_type), "alignment mismatch");
 
-  using rust_repr = rust_slice<typename el::type, el::count>;
+  using rust_repr = rust_slice<el_t, el::count>;
 };
 
 template <class T>
-class wrap_type<T, std::enable_if_t<std::is_class_v<T> || std::is_union_v<T>>>
-    : public wrap_type_base {
+class map_type<T, std::enable_if_t<std::is_class_v<T> || std::is_union_v<T>>>
+    : public map_type_base {
 private:
   using el_t = filler_t<alignof(T)>;
   static constexpr size_t el_count = sizeof(T) / sizeof(el_t);
@@ -334,17 +342,16 @@ public:
 };
 
 template <class F>
-struct wrap_type<F, std::enable_if_t<std::is_function_v<F>>>
-    : public wrap_type_base {
+struct map_type<F, std::enable_if_t<std::is_function_v<F>>>
+    : public map_type_base {
   template <bool is_void, class R, class... A>
-  using make_opaque_type = typename wrap_type<R>::opaque_type (&)(
-      typename wrap_type<A>::opaque_type... args);
+  using make_opaque_type = opaque_t<R> (&)(opaque_t<A>... args);
 
   template <bool is_void, class R, class... A>
   class make_rust_repr : public rust_named_type<F> {
     template <class T>
     static auto rust_type_name() {
-      typename wrap_type<T>::rust_repr rust_repr;
+      typename map_type<T>::rust_repr rust_repr;
       return rust_repr.rust_name();
     }
 
@@ -380,17 +387,17 @@ public:
 };
 
 template <class M>
-struct wrap_type<M, std::enable_if_t<std::is_member_function_pointer_v<M>>>
-    : public wrap_type_base {
+struct map_type<M, std::enable_if_t<std::is_member_function_pointer_v<M>>>
+    : public map_type_base {
   template <bool is_void, class R, class T, class... A>
-  using make_opaque_type = typename wrap_type<R>::opaque_type (T::*)(
-      typename wrap_type<A>::opaque_type... args);
+  using make_opaque_type =
+      opaque_t<R> (opaque_qual_t<T>::*)(opaque_t<A>... args);
 
   template <bool is_void, class R, class T, class... A>
   class make_rust_repr : public rust_named_type<M> {
     template <class X>
     static auto rust_type_name() {
-      typename wrap_type<X>::rust_repr rust_repr;
+      typename map_type<X>::rust_repr rust_repr;
       return rust_repr.rust_name();
     }
 
@@ -423,77 +430,70 @@ public:
 };
 
 template <class T>
-class wrap_type<T, std::enable_if_t<std::is_pointer_v<T>>>
-    : public wrap_type_base {
-  using target = std::remove_pointer_t<T>;
-  using wrapped_target =
-      std::conditional_t<!std::is_void_v<target>,
-                         wrap_qual_type<target>,
-                         wrap_qual_type<target, wrap_void_non_unit>>;
+class map_type<T, std::enable_if_t<std::is_pointer_v<T>>>
+    : public map_type_base {
+private:
+  using tgt_t = std::remove_pointer_t<T>;
 
 public:
-  using opaque_type = std::add_pointer_t<typename wrapped_target::opaque_type>;
-  using rust_repr = rust_pointer_type<wrapped_target>;
+  using opaque_type = std::add_pointer_t<opaque_qual_t<tgt_t>>;
+  using rust_repr = rust_pointer_type<tgt_t>;
 };
 
 template <class T>
-class wrap_type<T, std::enable_if_t<std::is_lvalue_reference_v<T>>>
-    : public wrap_type_base {
+class map_type<T, std::enable_if_t<std::is_lvalue_reference_v<T>>>
+    : public map_type_base {
 private:
-  using target = std::remove_reference_t<T>;
-  using wrapped_target = wrap_qual_type<target>;
+  using tgt_t = std::remove_reference_t<T>;
 
 public:
-  using opaque_type =
-      std::add_lvalue_reference_t<typename wrapped_target::opaque_type>;
-  using rust_repr = rust_pointer_type<wrapped_target>;
+  using opaque_type = std::add_lvalue_reference_t<opaque_qual_t<tgt_t>>;
+  using rust_repr = rust_pointer_type<tgt_t>;
 };
 
 template <class T>
-class wrap_type<T, std::enable_if_t<std::is_rvalue_reference_v<T>>>
-    : public wrap_type_base {
+class map_type<T, std::enable_if_t<std::is_rvalue_reference_v<T>>>
+    : public map_type_base {
 private:
-  using target = std::remove_reference_t<T>;
-  using wrapped_target = wrap_qual_type<target>;
+  using tgt_t = std::remove_reference_t<T>;
 
 public:
-  using opaque_type =
-      std::add_rvalue_reference_t<typename wrapped_target::opaque_type>;
-  using rust_repr = rust_pointer_type<wrapped_target>;
+  using opaque_type = std::add_rvalue_reference_t<opaque_qual_t<tgt_t>>;
+  using rust_repr = rust_pointer_type<tgt_t>;
 };
 
 // Qualified types
 
-class wrap_qual_type_base : public wrap_type_base {};
+class map_qual_type_base : public map_type_base {};
 
 template <class T, class W>
-class wrap_qual_type<
+class map_qual_type<
     T,
     W,
-    std::enable_if_t<std::is_const_v<T> && !std::is_volatile_v<T>>>
-    : public wrap_qual_type_base {
+    std::enable_if_t<!std::is_const_v<T> && !std::is_volatile_v<T>>>
+    : public map_qual_type_base {
 public:
-  using opaque_type = const typename W::opaque_type;
+  using opaque_type = opaque_t<T>;
 
   class rust_repr : public rust_qual_type<W> {
     std::string rust_qual() override {
-      return "const";
+      return "mut";
     }
   };
 };
 
 template <class T, class W>
-class wrap_qual_type<
+class map_qual_type<
     T,
     W,
-    std::enable_if_t<!std::is_const_v<T> && !std::is_volatile_v<T>>>
-    : public wrap_qual_type_base {
+    std::enable_if_t<std::is_const_v<T> && !std::is_volatile_v<T>>>
+    : public map_qual_type_base {
 public:
-  using opaque_type = typename W::opaque_type;
+  using opaque_type = const opaque_t<T>;
 
   class rust_repr : public rust_qual_type<W> {
     std::string rust_qual() override {
-      return "mut";
+      return "const";
     }
   };
 };
@@ -505,12 +505,11 @@ template <auto fn>
 class wrap_function {
   template <class T>
   static auto&& cast_return(std::remove_reference_t<T>&& result) {
-    return reinterpret_cast<
-        std::remove_reference_t<typename wrap_type<T>::opaque_type>&&>(result);
+    return reinterpret_cast<std::remove_reference_t<opaque_t<T>>&&>(result);
   }
 
   template <class T>
-  static auto& cast_arg(typename wrap_type<T>::opaque_type& arg) {
+  static auto& cast_arg(opaque_t<T>& arg) {
     return *reinterpret_cast<T*>(&arg);
   }
 
@@ -520,7 +519,7 @@ class wrap_function {
   // Call function without return value.
   template <class R, class... A>
   struct make_wrapper<true, R, A...> {
-    static void invoke(typename wrap_type<A>::opaque_type... args) {
+    static void invoke(opaque_t<A>... args) {
       fn(cast_arg<A>(args)...);
     }
   };
@@ -528,8 +527,7 @@ class wrap_function {
   // Call function with return value.
   template <class R, class... A>
   struct make_wrapper<false, R, A...> {
-    static typename wrap_type<R>::opaque_type
-        invoke(typename wrap_type<A>::opaque_type... args) {
+    static opaque_t<R> invoke(opaque_t<A>... args) {
       return cast_return<R>(fn(cast_arg<A>(args)...));
     }
   };
@@ -544,17 +542,16 @@ template <auto method>
 class wrap_method {
   template <typename T>
   static auto&& cast_return(std::remove_reference_t<T>&& result) {
-    return reinterpret_cast<
-        std::remove_reference_t<typename wrap_type<T>::opaque_type>&&>(result);
+    return reinterpret_cast<std::remove_reference_t<opaque_t<T>>&&>(result);
   }
 
   // template <typename T>
-  // static auto& cast_this(typename wrap_type<T>::opaque_type& arg) {
+  // static auto& cast_this(opaque_t<T>& arg) {
   //  return *reinterpret_cast<T*>(&arg);
   //}
 
   template <typename T>
-  static auto& cast_arg(typename wrap_type<T>::opaque_type& arg) {
+  static auto& cast_arg(opaque_t<T>& arg) {
     return *reinterpret_cast<T*>(&arg);
   }
 
@@ -564,8 +561,7 @@ class wrap_method {
   // Call method without return value.
   template <class R, class T, class... A>
   struct make_wrapper<true, R, T, A...> {
-    static void invoke(typename wrap_qual_type<T*>::opaque_type self,
-                       typename wrap_type<A>::opaque_type... args) {
+    static void invoke(opaque_qual_t<T*> self, opaque_t<A>... args) {
       (cast_arg<T*>(self)->*method)(cast_arg<A>(args)...);
     }
   };
@@ -573,9 +569,7 @@ class wrap_method {
   // Call method with return value.
   template <class R, class T, class... A>
   struct make_wrapper<false, R, T, A...> {
-    static typename wrap_type<R>::opaque_type
-        invoke(typename wrap_type<T>::opaque_type* self,
-               typename wrap_type<A>::opaque_type... args) {
+    static opaque_t<R> invoke(opaque_qual_t<T*> self, opaque_t<A>... args) {
       return cast_return<R>(
           (cast_arg<T*>(self)->*method)(cast_arg<A>(args)...));
     }
@@ -612,8 +606,8 @@ static void p(std::string s) {
 template <class T>
 void print_type_() {
   p(cxx_typename<T>());
-  p(cxx_typename<typename wrap_type<T>::opaque_type>());
-  typename wrap_type<T>::rust_repr rust_repr;
+  p(cxx_typename<opaque_t<T>>());
+  typename map_type<T>::rust_repr rust_repr;
   p(rust_repr.rust_name());
 }
 
