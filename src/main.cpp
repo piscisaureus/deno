@@ -16,6 +16,7 @@
 
 #include <cassert>
 #include <iostream>
+#include <sstream>
 #include <unordered_set>
 
 using namespace std;
@@ -546,17 +547,27 @@ private:
 
     // Do not write out instantiation-dependent types.
     if (ptr_qty.getTypePtr()->isInstantiationDependentType())
-        return;
+      return;
 
     // Do not print tags ('class' etc).
     // Use 'bool' and not '_Bool'.
     PrintingPolicy pp(ast_.getLangOpts());
     pp.adjustForCPlusPlus();
 
-     std::cout << "  X(" << decl->getDeclKindName() << ", "
-                  << decl->getQualifiedNameAsString() << ", "
-              << ptr_qty.getAsString(pp) << ") \\\n";
+    std::ostringstream os;
+    os << "  X_" << decl->getDeclKindName() << "(( pick_overload_v<"
+       << ptr_qty.getAsString(pp) << ", "
+       << "&" << decl->getQualifiedNameAsString() << "> ))\n";
+    auto s = os.str();
+
+    if (s.find("unique_ptr") != string::npos ||
+        s.find("Uncompilable") != string::npos ||
+        decl->getAccess() == clang::AccessSpecifier::AS_protected) {
+      s = std::string("//") + s;
     }
+
+    std::cout << s;
+  }
 
   void addDecl(const NamedDecl* decl) {
     decl = dyn_cast<NamedDecl>(decl->getCanonicalDecl());
@@ -697,7 +708,6 @@ int main(int argc, const char** argv) {
 
   tooling::ClangTool tool(opt_parser.getCompilations(),
                           opt_parser.getSourcePathList());
-  std::cout << "#define DECLARATIONS(X) \\\n";
   auto result = tool.run(newFrontendActionFactory<FrontendActionImpl>().get());
   std::cout << "// Done: " << result << std::endl;
   return result;

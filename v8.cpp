@@ -1,6 +1,4 @@
 
-#include "o.h"
-
 #include "v8/include/v8config.h"
 #undef V8_EXPORT
 #define V8_EXPORT
@@ -453,7 +451,7 @@ private:
   using tgt_t = std::remove_reference_t<T>;
 
 public:
-  using opaque_type = std::add_pointer_t<opaque_qual_t<tgt_t>>;
+  using opaque_type = std::add_lvalue_reference<opaque_qual_t<tgt_t>>;
   using rust_repr = rust_pointer_type<tgt_t>;
 };
 
@@ -464,7 +462,7 @@ private:
   using tgt_t = std::remove_reference_t<T>;
 
 public:
-  using opaque_type = std::add_pointer_t<opaque_qual_t<tgt_t>>;
+  using opaque_type = std::add_rvalue_reference<opaque_qual_t<tgt_t>>;
   using rust_repr = rust_pointer_type<tgt_t>;
 };
 
@@ -601,20 +599,34 @@ inline typename cast_retty<X, Y *>::ret_type dyn_cast(Y *Val) {
 
 // ====== Function and method wrappers ======
 
-// Functions and static methods.
-template <auto fn>
-class wrap_function {
-  template <class T>
-  static auto&& cast_return(std::remove_reference_t<T>&& result) {
-    return reinterpret_cast<std::remove_reference_t<opaque_t<T>>&&>(result);
-  }
-
-  template <class T>
-  static auto& cast_arg(opaque_t<T>& arg) {
+template <class T>
+class cast {
+  public:
+  static auto& arg(opaque_t<T>& arg) {
     auto& r = *reinterpret_cast<std::remove_reference_t<T>*>(&arg);
     return r;
   }
 
+  static opaque_t<T>&& ret(T&& result) {
+    return std::move(reinterpret_cast<opaque_t<T>&&>(result));
+  }  
+
+  static opaque_t<T>& ret(T& result) {
+    return reinterpret_cast<opaque_t<T>&>(result);
+  }    
+
+  static opaque_t<T> ret(T result) {
+    return *reinterpret_cast<opaque_t<T>*>(&result);
+  }
+
+  //static auto* ret(T* result) {
+  //  return reinterpret_cast<opaque_t<T>*>(result);
+  //}  
+};
+
+// Functions and static methods.
+template <auto fn>
+class wrap_function {
   template <bool is_void, class R, class... A>
   struct make_wrapper;
 
@@ -622,7 +634,7 @@ class wrap_function {
   template <class R, class... A>
   struct make_wrapper<true, R, A...> {
     static void invoke(opaque_t<A>... args) {
-      fn(cast_arg<A>(args)...);
+      fn(cast<A>::arg(args)...);
     }
   };
 
@@ -630,7 +642,7 @@ class wrap_function {
   template <class R, class... A>
   struct make_wrapper<false, R, A...> {
     static opaque_t<R> invoke(opaque_t<A>... args) {
-      return cast_return<R>(fn(cast_arg<A>(args)...));
+      return cast<R>::ret(fn(cast<A>::arg(args)...));
     }
   };
 
@@ -642,22 +654,6 @@ public:
 // Class instance methods
 template <auto method>
 class wrap_method {
-  template <typename T>
-  static auto&& cast_return(std::remove_reference_t<T>&& result) {
-    return reinterpret_cast<std::remove_reference_t<opaque_t<T>>&&>(result);
-  }
-
-  // template <typename T>
-  // static auto& cast_this(opaque_t<T>& arg) {
-  //  return *reinterpret_cast<T*>(&arg);
-  //}
-
-  template <class T>
-  static auto& cast_arg(opaque_t<T>& arg) {
-    auto& r = *reinterpret_cast<std::remove_reference_t<T>*>(&arg);
-    return r;
-  }
-
   template <bool is_void, class R, class T, class... A>
   struct make_wrapper;
 
@@ -665,7 +661,7 @@ class wrap_method {
   template <class R, class T, class... A>
   struct make_wrapper<true, R, T, A...> {
     static void invoke(opaque_qual_t<T*> self, opaque_t<A>... args) {
-      (cast_arg<T*>(self)->*method)(cast_arg<A>(args)...);
+      (cast<T*>::arg(self)->*method)(cast<A>::arg(args)...);
     }
   };
 
@@ -673,8 +669,8 @@ class wrap_method {
   template <class R, class T, class... A>
   struct make_wrapper<false, R, T, A...> {
     static opaque_t<R> invoke(opaque_qual_t<T*> self, opaque_t<A>... args) {
-      return cast_return<R>(
-          (cast_arg<T*>(self)->*method)(cast_arg<A>(args)...));
+      return cast<R>::ret(
+          (cast<T*>::arg(self)->*method)(cast<A>::arg(args)...));
     }
   };
 
@@ -831,11 +827,23 @@ int main() {
   test_fn(&v8::Local<v8::Int32>::Cast<v8::Value>);
   test_fn(&v8::Persistent<v8::Int32>::Get);
 
-#define xCXXConstructor(name, type)
-#define xCXXDestructor(name, type)
-#define xCXXMethod(name, type) test_fn((pick_overload_v<type, &name>));
-#define xDisabled(name, type)
-#define xFunction(name, type) test_fn((pick_overload_v<type, &name>));
-#define X(kind, name, type, ...) x##kind(name, type)
-DECLARATIONS(X)
+  using xxxx = v8::Persistent<v8::Promise,
+                              v8::CopyablePersistentTraits<v8::Promise>>& (
+      v8::Persistent<
+          v8::Promise,
+          v8::CopyablePersistentTraits<
+              v8::Promise>>::*) (const v8::
+                                     Persistent<v8::Promise,
+                                                v8::CopyablePersistentTraits<
+                                                    v8::Promise>>&);
+  xxxx aaaa =
+      &v8::Persistent<v8::Promise, v8::CopyablePersistentTraits<v8::Promise>>::
+          operator=;
+
+#define X_CXXConstructor(f)
+#define X_CXXDestructor(f)
+#define X_CXXMethod(f) test_fn(f);
+#define X_Disabled(f)
+#define X_Function(f) test_fn(f);
+#include "o.h"
 }
