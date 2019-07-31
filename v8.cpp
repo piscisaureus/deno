@@ -260,7 +260,9 @@ public:
 
 // Unqualified types.
 
-class map_type_base {};
+class map_type_base {
+public:
+};
 
 template <class T, class>
 class map_type : public map_type_base {
@@ -599,9 +601,9 @@ inline typename cast_retty<X, Y *>::ret_type dyn_cast(Y *Val) {
 
 // ====== Function and method wrappers ======
 
-template <class T>
+template <class S, class T = std::decay_t<S>>
 class cast {
-  public:
+public:
   static auto& arg(opaque_t<T>& arg) {
     auto& r = *reinterpret_cast<std::remove_reference_t<T>*>(&arg);
     return r;
@@ -609,19 +611,19 @@ class cast {
 
   static opaque_t<T>&& ret(T&& result) {
     return std::move(reinterpret_cast<opaque_t<T>&&>(result));
-  }  
+  }
 
   static opaque_t<T>& ret(T& result) {
     return reinterpret_cast<opaque_t<T>&>(result);
-  }    
+  }
 
   static opaque_t<T> ret(T result) {
     return *reinterpret_cast<opaque_t<T>*>(&result);
   }
 
-  //static auto* ret(T* result) {
-  //  return reinterpret_cast<opaque_t<T>*>(result);
-  //}  
+  static auto* ret(T* result) {
+    return reinterpret_cast<opaque_t<T>*>(result);
+  }
 };
 
 // Functions and static methods.
@@ -718,11 +720,6 @@ void print_type_() {
   typename map_type<T>::rust_repr rust_repr;
   p(rust_repr.rust_name());
 }
-
-// template <void* fn = nullptr, class = std::void_t<>>
-// void print_fn_() {
-//  p("Cannot print");
-//}
 
 template <class F, F fn>
 struct fn_printer_ {
