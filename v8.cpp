@@ -52,7 +52,7 @@ std::string cxx_typename() {
 
 // Helper for selecting an overloaded function or member function.
 template <class T, T v>
-static constexpr T select_overload_v = v;
+static constexpr T pick_overload_v = v;
 
 // Functions and static methods
 template <class F, template <bool, class, class...> class Functor>
@@ -652,9 +652,10 @@ class wrap_method {
   //  return *reinterpret_cast<T*>(&arg);
   //}
 
-  template <typename T>
+  template <class T>
   static auto& cast_arg(opaque_t<T>& arg) {
-    return *reinterpret_cast<T*>(&arg);
+    auto& r = *reinterpret_cast<std::remove_reference_t<T>*>(&arg);
+    return r;
   }
 
   template <bool is_void, class R, class T, class... A>
@@ -829,17 +830,12 @@ int main() {
   test_fn(&v8::Local<v8::Int32>::As<v8::Value>);
   test_fn(&v8::Local<v8::Int32>::Cast<v8::Value>);
   test_fn(&v8::Persistent<v8::Int32>::Get);
-  static constexpr auto ccc =
-      select_overload_v<v8::Local<class v8::Primitive> (*)(
-                            class v8::Isolate*,
-                            class v8::Local<class v8::Primitive>),
-                        &v8::Local<v8::Primitive>::New>;
 
 #define xCXXConstructor(name, type)
 #define xCXXDestructor(name, type)
-#define xCXXMethod(name, type) test_fn(&name);
+#define xCXXMethod(name, type) test_fn((pick_overload_v<type, &name>));
 #define xDisabled(name, type)
-#define xFunction(name, type) test_fn(&name);
+#define xFunction(name, type) test_fn((pick_overload_v<type, &name>));
 #define X(kind, name, type, ...) x##kind(name, type)
-  // DECLARATIONS(X)
+DECLARATIONS(X)
 }

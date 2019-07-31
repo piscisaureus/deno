@@ -515,24 +515,48 @@ private:
   std::unordered_set<const Decl*> seen;
 
   void printDecl(const NamedDecl* decl) {
+    clang::QualType ptr_qty;
     do {
-      auto fn_decl = dyn_cast<FunctionDecl>(decl);
-      if (!fn_decl)
+      auto method_decl = dyn_cast<CXXMethodDecl>(decl);
+      if (method_decl && method_decl->isInstance()) {
+        if (method_decl->isDeleted())
+          return;
+        auto mem_qty = method_decl->getType();
+        auto cls_ty = method_decl->getParent()->getTypeForDecl();
+        ptr_qty = ast_.getMemberPointerType(mem_qty, cls_ty);
         break;
-      auto type = fn_decl->getFunctionType();
-      if (!type)
-        break;
-      QualType can_type = type->getCanonicalTypeUnqualified();
-      if (can_type.getTypePtr()->isInstantiationDependentType())
-        break;
-      std::cout << "  X(" << decl->getDeclKindName() << ", "
-                << decl->getQualifiedNameAsString() << ", ("
-                << can_type.getAsString() << ")) \\\n";
-      return;
-    } while (0);
+      }
 
-    return;
-  }
+      auto fn_decl = dyn_cast<FunctionDecl>(decl);
+      if (fn_decl) {
+        if (fn_decl->isDeleted())
+          return;
+        auto fn_ty = decl->getFunctionType();
+        auto fn_qty = QualType(fn_ty, 0);
+        ptr_qty = ast_.getPointerType(fn_qty);
+        break;
+      }
+
+      // Otherwise, we're not interested.
+      return;
+    } while (false);
+
+    // Canonicalize the type name.
+    ptr_qty = ptr_qty.getCanonicalType();
+
+    // Do not write out instantiation-dependent types.
+    if (ptr_qty.getTypePtr()->isInstantiationDependentType())
+        return;
+
+    // Do not print tags ('class' etc).
+    // Use 'bool' and not '_Bool'.
+    PrintingPolicy pp(ast_.getLangOpts());
+    pp.adjustForCPlusPlus();
+
+     std::cout << "  X(" << decl->getDeclKindName() << ", "
+                  << decl->getQualifiedNameAsString() << ", "
+              << ptr_qty.getAsString(pp) << ") \\\n";
+    }
 
   void addDecl(const NamedDecl* decl) {
     decl = dyn_cast<NamedDecl>(decl->getCanonicalDecl());
@@ -673,7 +697,7 @@ int main(int argc, const char** argv) {
 
   tooling::ClangTool tool(opt_parser.getCompilations(),
                           opt_parser.getSourcePathList());
-   std::cout << "#define DECLARATIONS(X) \\\n";
+  std::cout << "#define DECLARATIONS(X) \\\n";
   auto result = tool.run(newFrontendActionFactory<FrontendActionImpl>().get());
   std::cout << "// Done: " << result << std::endl;
   return result;
