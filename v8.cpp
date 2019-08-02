@@ -260,8 +260,20 @@ public:
 
 // Unqualified types.
 
+template <typename T, typename O = opaque_t<T>>
+struct copy_cast {
+  static T arg(O val) {
+    return *reinterpret_cast<T*>(&val);
+  }
+  static O ret(T val) {
+    return *reinterpret_cast<O*>(&val);
+  }
+};
+
 class map_type_base {
 public:
+  template <typename T>
+  using cast = copy_cast<T>;
 };
 
 template <class T, class>
@@ -442,9 +454,21 @@ private:
   using tgt_t = std::remove_pointer_t<T>;
 
 public:
-  using opaque_type = std::add_pointer_t<opaque_qual_t<tgt_t>>;
+  using opaque_type = opaque_qual_t<tgt_t>*;
   using rust_repr = rust_pointer_type<tgt_t>;
 };
+
+
+template <typename T, typename O = opaque_t<T>>
+struct lvalue_cast {
+  static T&& arg(O& val) {
+    return std::move(*reinterpret_cast<T*>(&val));
+  }
+  static O& ret(T& val) {
+    return std::move(*reinterpret_cast<O*>(&val));
+  }
+};
+
 
 template <class T>
 class map_type<T, std::enable_if_t<std::is_lvalue_reference_v<T>>>
@@ -453,8 +477,21 @@ private:
   using tgt_t = std::remove_reference_t<T>;
 
 public:
-  using opaque_type = std::add_lvalue_reference<opaque_qual_t<tgt_t>>;
+  using opaque_type = opaque_qual_t<tgt_t>*;
   using rust_repr = rust_pointer_type<tgt_t>;
+  template <typename T>
+  using cast = lvalue_cast<T>;
+};
+
+template <typename T, typename O = opaque_t<T>>
+struct rvalue_cast {
+  static T&& arg(O&& val) {
+    return reinterpret_cast<T&&>(val);
+  }
+  static O&& ret(T&& val) {
+    return reinterpret_cast<O&&>(val);
+  }
+  
 };
 
 template <class T>
@@ -464,8 +501,11 @@ private:
   using tgt_t = std::remove_reference_t<T>;
 
 public:
-  using opaque_type = std::add_rvalue_reference<opaque_qual_t<tgt_t>>;
+  using opaque_type = opaque_qual_t<tgt_t>*;
   using rust_repr = rust_pointer_type<tgt_t>;
+  
+  //template <typename T>
+  //using cast = rvalue_cast<T>;
 };
 
 // Qualified types
@@ -602,27 +642,69 @@ inline typename cast_retty<X, Y *>::ret_type dyn_cast(Y *Val) {
 // ====== Function and method wrappers ======
 
 template <class S, class T = std::decay_t<S>>
+//using cast = typename map_type<T>::template cast<T>;
 class cast {
 public:
-  static auto& arg(opaque_t<T>& arg) {
-    auto& r = *reinterpret_cast<std::remove_reference_t<T>*>(&arg);
+  static T* arg(opaque_t<T>* arg) {
+    auto r = reinterpret_cast<std::add_pointer_t<T>>(arg);
     return r;
   }
 
-  static opaque_t<T>&& ret(T&& result) {
-    return std::move(reinterpret_cast<opaque_t<T>&&>(result));
+  static opaque_t<T> ret(T&& result) {
+    return reinterpret_cast<opaque_t<T>>(result);
   }
 
-  static opaque_t<T>& ret(T& result) {
-    return reinterpret_cast<opaque_t<T>&>(result);
-  }
+  //static opaque_t<T&> ret(T& result) {
+  //  return reinterpret_cast<opaque_t<T&>>(result);
+  //}
 
-  static opaque_t<T> ret(T result) {
-    return *reinterpret_cast<opaque_t<T>*>(&result);
-  }
+  //static opaque_t<T> ret(T result) {
+  //  return *reinterpret_cast<opaque_t<T>*>(&result);
+  //}
 
-  static auto* ret(T* result) {
-    return reinterpret_cast<opaque_t<T>*>(result);
+  static opaque_t<T*> ret(T* result) {
+    return reinterpret_cast<opaque_t<T*>>(result);
+  }
+};
+
+
+template <class T, class = void>
+struct xcast  {};
+
+template <class T>
+struct xcast<T, std::enable_if_t<std::is_pointer_v<T>>> {
+  using O = opaque_t<T>;
+  static T arg(O val) { 
+    return reinterpret_cast<T>(val);
+  }
+  static O ret(T val) { 
+    return reinterpret_cast<O>(val);
+  }  
+};
+
+
+template <class T>
+struct xcast<T, std::enable_if_t<std::is_reference_v<T>>> {
+  using O = opaque_t<T>;
+  static T arg(O val) { 
+    return reinterpret_cast<T>(*val);
+  }  
+  static O ret(T val) { 
+    return reinterpret_cast<O>(&val);
+  }
+};
+
+template <class T>
+static constexpr bool is_value_type_v = std::is_arithmetic_v<T> || std::is_class_v<T> || std::is_union_v<T>;
+
+template <class T>
+struct xcast<T, std::enable_if_t<is_value_type_v<T>>> {
+  using O = opaque_t<T>;
+  static T&& arg(O&& val) { 
+    return reinterpret_cast<T&&>(val);
+  }  
+  static O&& ret(T&& val) { 
+    return reinterpret_cast<O&&>(val);
   }
 };
 
@@ -636,7 +718,7 @@ class wrap_function {
   template <class R, class... A>
   struct make_wrapper<true, R, A...> {
     static void invoke(opaque_t<A>... args) {
-      fn(cast<A>::arg(args)...);
+      fn(xcast<A>::arg(args)...);
     }
   };
 
@@ -644,7 +726,7 @@ class wrap_function {
   template <class R, class... A>
   struct make_wrapper<false, R, A...> {
     static opaque_t<R> invoke(opaque_t<A>... args) {
-      return cast<R>::ret(fn(cast<A>::arg(args)...));
+      return xcast<R>::ret(xcast<A>::arg(args)...);
     }
   };
 
@@ -671,8 +753,9 @@ class wrap_method {
   template <class R, class T, class... A>
   struct make_wrapper<false, R, T, A...> {
     static opaque_t<R> invoke(opaque_qual_t<T*> self, opaque_t<A>... args) {
-      return cast<R>::ret(
-          (cast<T*>::arg(self)->*method)(cast<A>::arg(args)...));
+      auto r = 
+          (cast<T*>::arg(self)->*method)(cast<A>::arg(args)...);
+      return return cast<R>::ret(std::move(r));
     }
   };
 
@@ -724,7 +807,7 @@ void print_type_() {
 template <class F, F fn>
 struct fn_printer_ {
   static void print_fn() {
-    print_type_<F>();
+    print_type_<F*>();
     static constexpr auto wrapped = invoke<fn>;
     p(cxx_typename<decltype(wrapped)>());
   }
@@ -759,10 +842,55 @@ void ff_const(const aap a) {}
 void ff_const_lval(const aap& a) {}
 void ff_const_rval(const aap&& a) {}
 
+struct sss {
+  v8::Persistent<v8::Value>&& a;
+  v8::Persistent<v8::Value>& b;
+  v8::Persistent<v8::Value>* c;
+};
+
 v8::Persistent<v8::Value>&&
     funfunfun(const char* const* a, aap b, v8::Local<v8::Int32> d) {
   static void* invalid = nullptr;
   return reinterpret_cast<v8::Persistent<v8::Value>&&>(invalid);
+}
+
+
+
+v8::Persistent<v8::Value>&&
+    moe1(/*const char* const* a, aap b, v8::Local<v8::Int32> d*/) {
+  static void* invalid = nullptr;
+  return reinterpret_cast<v8::Persistent<v8::Value>&&>(invalid);
+}
+
+v8::Persistent<v8::Value>&
+    moe2(/*const char* const* a, aap b, v8::Local<v8::Int32> d*/) {
+  int a = 1;
+  static int* invalid = &a;
+  return reinterpret_cast<v8::Persistent<v8::Value>&>(invalid);
+}
+
+const v8::Persistent<v8::Value>*
+    moe3(/*const char* const* a, aap b, v8::Local<v8::Int32> d*/) {
+  int a = 1;
+  static int* invalid = &a;
+  return reinterpret_cast<v8::Persistent<v8::Value>*>(invalid);
+}
+
+std::unique_ptr<void*> moe4() {};
+
+const int moe5(const char* poep, v8::Persistent<v8::Value>& bla) {};
+
+template <typename T, class... A>
+opaque_t<T> wrap(T (*f)(A...), opaque_t<A>... args) {
+  return xcast<T>::ret(f(xcast<A>::arg(args)...));
+}
+
+void testes() {
+  auto a = wrap(moe3);
+  auto b = wrap(moe2);
+  auto c = wrap(moe1);
+  auto d = wrap(moe4);
+  auto e = wrap(moe5, "lul", b);
 }
 
 struct klas {
@@ -786,6 +914,7 @@ struct klas {
 };
 
 int main() {
+  testes();
   test_type(int);
   test_type(size_t);
   test_type(int*);
@@ -799,6 +928,7 @@ int main() {
   test_fn(&void_fun1);
   int a[3];
   test_type(decltype(a));
+#if 0
   std::string strings[10];
   test_type(decltype(strings));
   test_type(aap);
@@ -836,11 +966,12 @@ int main() {
   xxxx aaaa =
       &v8::Persistent<v8::Promise, v8::CopyablePersistentTraits<v8::Promise>>::
           operator=;
+#endif
 
 #define X_CXXConstructor(f)
 #define X_CXXDestructor(f)
 #define X_CXXMethod(f) test_fn(f);
 #define X_Disabled(f)
 #define X_Function(f) test_fn(f);
-#include "o.h"
+//#include "o.h"
 }
