@@ -448,7 +448,7 @@ public:
 };
 
 template <class T>
-class map_type<T, std::enable_if_t<std::is_pointer_v<T>>>
+class map_type<T, std::enable_if_t<std::is_pointer_v<T> && !std::is_function_v<std::remove_pointer_t<T>>>>
     : public map_type_base {
 private:
   using tgt_t = std::remove_pointer_t<T>;
@@ -700,13 +700,16 @@ static constexpr bool is_value_type_v = std::is_arithmetic_v<T> || std::is_class
 template <class T>
 struct xcast<T, std::enable_if_t<is_value_type_v<T>>> {
   using O = opaque_t<T>;
-  static T&& arg(O&& val) { 
-    return reinterpret_cast<T&&>(val);
+  static T arg(O val) { 
+    return *reinterpret_cast<T*>(&val);
   }  
   static O&& ret(T&& val) { 
     return reinterpret_cast<O&&>(val);
   }
 };
+
+template <class T>
+using xxcast = xcast<T>;
 
 // Functions and static methods.
 template <auto fn>
@@ -718,7 +721,7 @@ class wrap_function {
   template <class R, class... A>
   struct make_wrapper<true, R, A...> {
     static void invoke(opaque_t<A>... args) {
-      fn(xcast<A>::arg(args)...);
+      fn(xxcast<A>::arg(args)...);
     }
   };
 
@@ -726,7 +729,7 @@ class wrap_function {
   template <class R, class... A>
   struct make_wrapper<false, R, A...> {
     static opaque_t<R> invoke(opaque_t<A>... args) {
-      return xcast<R>::ret(xcast<A>::arg(args)...);
+      return xxcast<R>::ret(fn(xxcast<A>::arg(args)...));
     }
   };
 
@@ -745,7 +748,7 @@ class wrap_method {
   template <class R, class T, class... A>
   struct make_wrapper<true, R, T, A...> {
     static void invoke(opaque_qual_t<T*> self, opaque_t<A>... args) {
-      (cast<T*>::arg(self)->*method)(cast<A>::arg(args)...);
+      (xxcast<T*>::arg(self)->*method)(xxcast<A>::arg(args)...);
     }
   };
 
@@ -753,9 +756,7 @@ class wrap_method {
   template <class R, class T, class... A>
   struct make_wrapper<false, R, T, A...> {
     static opaque_t<R> invoke(opaque_qual_t<T*> self, opaque_t<A>... args) {
-      auto r = 
-          (cast<T*>::arg(self)->*method)(cast<A>::arg(args)...);
-      return return cast<R>::ret(std::move(r));
+      return xxcast<R>::ret((xxcast<T*>::arg(self)->*method)(xxcast<A>::arg(args)...));
     }
   };
 
@@ -807,7 +808,7 @@ void print_type_() {
 template <class F, F fn>
 struct fn_printer_ {
   static void print_fn() {
-    print_type_<F*>();
+    print_type_<F>();
     static constexpr auto wrapped = invoke<fn>;
     p(cxx_typename<decltype(wrapped)>());
   }
@@ -914,7 +915,7 @@ struct klas {
 };
 
 int main() {
-  testes();
+  //testes();
   test_type(int);
   test_type(size_t);
   test_type(int*);
@@ -922,20 +923,19 @@ int main() {
   test_type(v8::Local<v8::Int32>);
   test_type(v8::Local<v8::Int32>*);
   test_type(decltype(funfunfun));
-  test_fn(&funfunfun);
-  test_fn(&int_fun1);
-  test_fn(&void_fun0);
+  //test_fn(&funfunfun);
+  //test_fn(&int_fun1);
+  //test_fn(&void_fun0);
   test_fn(&void_fun1);
   int a[3];
   test_type(decltype(a));
-#if 0
   std::string strings[10];
   test_type(decltype(strings));
   test_type(aap);
   test_fn(&klas::foo0);
   test_fn(&klas::foo1);
   test_fn(&klas::vood1);
-
+#if 0
   test_fn(&ff_mut);
   test_fn(&ff_mut_lval);
   // test_fn(&ff_mut_rval);
@@ -973,5 +973,5 @@ int main() {
 #define X_CXXMethod(f) test_fn(f);
 #define X_Disabled(f)
 #define X_Function(f) test_fn(f);
-//#include "o.h"
+#include "o.h"
 }
