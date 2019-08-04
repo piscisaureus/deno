@@ -447,8 +447,19 @@ public:
   using rust_repr = transform_method_t<M, make_rust_repr>;
 };
 
+template <typename T>
+struct is_complete_helper {
+    template <typename U>
+    static auto test(U*)  -> std::integral_constant<bool, sizeof(U) == sizeof(U)>;
+    static auto test(...) -> std::false_type;
+    using type = decltype(test((T*)0));
+};
+
+template <typename T>
+struct is_complete : is_complete_helper<T>::type {};
+
 template <class T>
-class map_type<T, std::enable_if_t<std::is_pointer_v<T> && !std::is_function_v<std::remove_pointer_t<T>>>>
+class map_type<T, std::enable_if_t<std::is_pointer_v<T> && is_complete<std::remove_pointer<T>>() && !std::is_function_v<std::remove_pointer_t<T>>>>
     : public map_type_base {
 private:
   using tgt_t = std::remove_pointer_t<T>;
@@ -546,128 +557,6 @@ public:
 
 // ====== Casting between opaque and non-opaque types ======
 
-/*
-template<typename From> struct simplify_type {
-  using SimpleType = From; // The real type this represents...
-
-  // An accessor to get the real value...
-  static SimpleType &getSimplifiedValue(From &Val) { return Val; }
-};
-
-template<typename From> struct simplify_type<const From> {
-  using NonConstSimpleType = typename simplify_type<From>::SimpleType;
-  using SimpleType =
-      typename add_const_past_pointer<NonConstSimpleType>::type;
-  using RetType =
-      typename add_lvalue_reference_if_not_pointer<SimpleType>::type;
-
-  static RetType getSimplifiedValue(const From& Val) {
-    return simplify_type<From>::getSimplifiedValue(const_cast<From&>(Val));
-  }
-};
-
-
-template<class To, class From> struct cast_retty;
-
-// Calculate what type the 'cast' function should return, based on a requested
-// type of To and a source type of From.
-template<class To, class From> struct cast_retty_impl {
-  using ret_type = To &;       // Normal case, return Ty&
-};
-template<class To, class From> struct cast_retty_impl<To, const From> {
-  using ret_type = const To &; // Normal case, return Ty&
-};
-
-template<class To, class From> struct cast_retty_impl<To, From*> {
-  using ret_type = To *;       // Pointer arg case, return Ty*
-};
-
-template<class To, class From> struct cast_retty_impl<To, const From*> {
-  using ret_type = const To *; // Constant pointer arg case, return const Ty*
-};
-
-template<class To, class From> struct cast_retty_impl<To, const From*const> {
-  using ret_type = const To *; // Constant pointer arg case, return const Ty*
-};
-
-template <class To, class From>
-struct cast_retty_impl<To, std::unique_ptr<From>> {
-private:
-  using PointerType = typename cast_retty_impl<To, From *>::ret_type;
-  using ResultType = typename std::remove_pointer<PointerType>::type;
-
-public:
-  using ret_type = std::unique_ptr<ResultType>;
-};
-
-template<class To, class From, class SimpleFrom>
-struct cast_retty_wrap {
-  // When the simplified type and the from type are not the same, use the type
-  // simplifier to reduce the type, then reuse cast_retty_impl to get the
-  // resultant type.
-  using ret_type = typename cast_retty<To, SimpleFrom>::ret_type;
-};
-
-template<class To, class FromTy>
-struct cast_retty_wrap<To, FromTy, FromTy> {
-  // When the simplified type is equal to the from type, use it directly.
-  using ret_type = typename cast_retty_impl<To,FromTy>::ret_type;
-};
-
-template<class To, class From>
-struct cast_retty {
-  using ret_type = typename cast_retty_wrap<
-      To, From, typename simplify_type<From>::SimpleType>::ret_type;
-};
-
-template <class X, class Y>
-inline
-    typename std::enable_if<!is_simple_type<Y>::value,
-                            typename cast_retty<X, const Y>::ret_type>::type
-    dyn_cast(const Y &Val) {
-  return isa<X>(Val) ? cast<X>(Val) : nullptr;
-}
-
-template <class X, class Y>
-inline typename cast_retty<X, Y>::ret_type dyn_cast(Y &Val) {
-  return isa<X>(Val) ? cast<X>(Val) : nullptr;
-}
-
-template <class X, class Y>
-inline typename cast_retty<X, Y *>::ret_type dyn_cast(Y *Val) {
-  return isa<X>(Val) ? cast<X>(Val) : nullptr;
-}
-*/
-
-// ====== Function and method wrappers ======
-
-template <class S, class T = std::decay_t<S>>
-//using cast = typename map_type<T>::template cast<T>;
-class cast {
-public:
-  static T* arg(opaque_t<T>* arg) {
-    auto r = reinterpret_cast<std::add_pointer_t<T>>(arg);
-    return r;
-  }
-
-  static opaque_t<T> ret(T&& result) {
-    return reinterpret_cast<opaque_t<T>>(result);
-  }
-
-  //static opaque_t<T&> ret(T& result) {
-  //  return reinterpret_cast<opaque_t<T&>>(result);
-  //}
-
-  //static opaque_t<T> ret(T result) {
-  //  return *reinterpret_cast<opaque_t<T>*>(&result);
-  //}
-
-  static opaque_t<T*> ret(T* result) {
-    return reinterpret_cast<opaque_t<T*>>(result);
-  }
-};
-
-
 template <class T, class = void>
 struct xcast  {};
 
@@ -710,6 +599,8 @@ struct xcast<T, std::enable_if_t<is_value_type_v<T>>> {
 
 template <class T>
 using xxcast = xcast<T>;
+
+// ====== Function and method wrappers ======
 
 // Functions and static methods.
 template <auto fn>
@@ -973,5 +864,5 @@ int main() {
 #define X_CXXMethod(f) test_fn(f);
 #define X_Disabled(f)
 #define X_Function(f) test_fn(f);
-#include "o.h"
+#include "o2.h"
 }
