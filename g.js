@@ -8,19 +8,23 @@ const isEnabled = l => !isDisabled(l);
 
 function tryOut() {
   try {
-    execFileSync("clang-cl", [
-      "/std:c++17",
-      "/D_ITERATOR_DEBUG_LEVEL=0",
-      "v8.cpp",
-      "D:/deno2/target/debug/obj/core/libdeno/libdeno.lib",
-      "-fuse-ld=lld-link",
-      "/MTd",
-      "/link",
-      "winmm.lib"
-    ]);
-    return true;
+    execFileSync(
+      "clang-cl",
+      [
+        "/std:c++17",
+        "/D_ITERATOR_DEBUG_LEVEL=0",
+        "v8.cpp",
+        "D:/deno2/target/debug/obj/core/libdeno/libdeno.lib",
+        "-fuse-ld=lld-link",
+        "/MTd",
+        "/link",
+        "winmm.lib"
+      ],
+      { stdio: ["ignore", "pipe", "pipe"], encoding: "utf-8" }
+    );
+    return [true, null];
   } catch (err) {
-    return false;
+    return [false, err];
   }
 }
 
@@ -36,9 +40,11 @@ function simple() {
     lines[i] = enabled_l;
     writeFileSync("o2.h", lines.join("\n"));
     writeFileSync("o3.h", enabled_l);
-    if (tryOut()) {
+    let [passed, err] = tryOut();
+    if (passed) {
       console.log(i, "ok!");
     } else {
+      console.log(err.stderr);
       console.log(i, "no!");
       lines[i] = disable(lines[i]);
     }
@@ -60,7 +66,7 @@ function advanced() {
 
     writeFileSync("o3.h", batch_lines.join("\n"));
 
-    const passed = tryOut();
+    const [passed, err] = tryOut();
 
     if (!passed && batch_size > 1) {
       batch_size = 1;
@@ -77,6 +83,7 @@ function advanced() {
       }
       writeFileSync("o2.h", lines.join("\n"));
     } else {
+      console.log(err.stderr);
       for (const [num, line] of batch_line_entries) {
         console.log(`fail! ${num}: ${line}`);
       }

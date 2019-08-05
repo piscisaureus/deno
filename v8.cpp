@@ -134,6 +134,23 @@ public:
 template <class M>
 static constexpr auto pick_destructor_v = pick_destructor<M>::destructor;
 
+// ====== Distinguishing between complete and incomplete classes ======
+
+template <typename T>
+class is_complete {
+private:
+  template <typename U>
+  static auto test(U*) -> std::integral_constant<bool, sizeof(U) == sizeof(U)>;
+  static auto test(...) -> std::false_type;
+
+public:
+  using type = decltype(test((std::add_pointer_t<T>) 0));
+  static constexpr bool value = type();
+};
+
+template <typename T>
+static constexpr bool is_complete_v = is_complete<T>::value;
+
 // ====== Array element type deduction ======
 
 template <class>
@@ -371,6 +388,14 @@ public:
 };
 
 template <class T>
+class map_type<T, std::enable_if_t<std::is_floating_point_v<T>>>
+    : public map_type_base {
+public:
+  using opaque_type = T;
+  using rust_repr = rust_numeric_type<'f', sizeof(T)>;
+};
+
+template <class T>
 class map_type<T, std::enable_if_t<std::is_array_v<T>>> : public map_type_base {
   using el = array_element<T>;
   using el_t = typename el::type;
@@ -384,7 +409,9 @@ public:
 };
 
 template <class T>
-class map_type<T, std::enable_if_t<std::is_class_v<T> || std::is_union_v<T>>>
+class map_type<T,
+               std::enable_if_t<(std::is_class_v<T> ||
+                                 std::is_union_v<T>) &&is_complete_v<T>>>
     : public map_type_base {
 private:
   using el_t = filler_t<alignof(T)>;
@@ -404,6 +431,40 @@ public:
     std::string rust_type() override {
       std::ostringstream os;
       os << "struct(" << filler_repr.rust_type() << ")";
+      return os.str();
+    }
+  };
+};
+
+template <class T>
+class map_type<T,
+               std::enable_if_t<(std::is_class_v<T> ||
+                                 std::is_union_v<T>) &&!is_complete_v<T>>>
+    : public map_type_base {
+public:
+  using opaque_type = void;
+  class rust_repr : public rust_named_type<T> {
+  public:
+    std::string rust_type() override {
+      return "struct([u8; 0])";
+    }
+  };
+};
+
+template <class T>
+class map_type<T, std::enable_if_t<std::is_enum_v<T>>> : public map_type_base {
+  using underlying_t = std::underlying_type_t<T>;
+
+public:
+  using opaque_type = underlying_t;
+  class rust_repr : public rust_named_type<T> {
+    typename map_type<underlying_t>::rust_repr underlying_repr;
+
+  public:
+    std::string rust_type() override {
+      std::ostringstream os;
+      os << "#[repr(transparent)] struct(" << underlying_repr.rust_name()
+         << ")";
       return os.str();
     }
   };
@@ -497,21 +558,9 @@ public:
   using rust_repr = transform_method_t<M, make_rust_repr>;
 };
 
-template <typename T>
-struct is_complete_helper {
-  template <typename U>
-  static auto test(U*) -> std::integral_constant<bool, sizeof(U) == sizeof(U)>;
-  static auto test(...) -> std::false_type;
-  using type = decltype(test((T*) 0));
-};
-
-template <typename T>
-struct is_complete : is_complete_helper<T>::type {};
-
 template <class T>
 class map_type<T,
                std::enable_if_t<std::is_pointer_v<T> &&
-                                is_complete<std::remove_pointer<T>>() &&
                                 !std::is_function_v<std::remove_pointer_t<T>>>>
     : public map_type_base {
 private:
@@ -525,22 +574,14 @@ public:
 template <class T>
 class map_type<T,
                std::enable_if_t<std::is_pointer_v<T> &&
-                                (!is_complete<std::remove_pointer<T>>() ||
-                                 std::is_function_v<std::remove_pointer_t<T>>)>>
+                                std::is_function_v<std::remove_pointer_t<T>>>>
     : public map_type_base {
+private:
+  using tgt_t = std::remove_pointer_t<T>;
+
 public:
   using opaque_type = void*;
-  using rust_repr = rust_pointer_type<void>;
-};
-
-template <typename T, typename O = opaque_t<T>>
-struct lvalue_cast {
-  static T&& arg(O& val) {
-    return std::move(*reinterpret_cast<T*>(&val));
-  }
-  static O& ret(T& val) {
-    return std::move(*reinterpret_cast<O*>(&val));
-  }
+  using rust_repr = rust_pointer_type<tgt_t>;
 };
 
 template <class T>
@@ -552,18 +593,6 @@ private:
 public:
   using opaque_type = opaque_qual_t<tgt_t>*;
   using rust_repr = rust_pointer_type<tgt_t>;
-  template <typename T>
-  using cast = lvalue_cast<T>;
-};
-
-template <typename T, typename O = opaque_t<T>>
-struct rvalue_cast {
-  static T&& arg(O&& val) {
-    return reinterpret_cast<T&&>(val);
-  }
-  static O&& ret(T&& val) {
-    return reinterpret_cast<O&&>(val);
-  }
 };
 
 template <class T>
@@ -575,9 +604,6 @@ private:
 public:
   using opaque_type = opaque_qual_t<tgt_t>*;
   using rust_repr = rust_pointer_type<tgt_t>;
-
-  // template <typename T>
-  // using cast = rvalue_cast<T>;
 };
 
 // Qualified types
@@ -645,7 +671,8 @@ struct xcast<T, std::enable_if_t<std::is_reference_v<T>>> {
 
 template <class T>
 static constexpr bool is_value_type_v =
-    std::is_arithmetic_v<T> || std::is_class_v<T> || std::is_union_v<T>;
+    std::is_arithmetic_v<T> || std::is_class_v<T> || std::is_union_v<T> ||
+    std::is_enum_v<T>;
 
 template <class T>
 struct xcast<T, std::enable_if_t<is_value_type_v<T>>> {
