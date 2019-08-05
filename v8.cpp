@@ -46,13 +46,9 @@ std::string cxx_typename() {
 }
 #endif
 
-// ====== Function and method argument deduction utilities ======
+// ====== Function and method transformation helpers ======
 
-// Helper for selecting an overloaded function or member function.
-template <class T, T v>
-static constexpr T pick_overload_v = v;
-
-// Functions and static methods
+// Functions and static methods.
 template <class F, template <bool, class, class...> class Functor>
 class transform_function {
   template <class R, class... A>
@@ -66,7 +62,7 @@ public:
 template <class F, template <bool, class, class...> class Functor>
 using transform_function_t = typename transform_function<F, Functor>::type;
 
-// Instance methods
+// Instance methods.
 template <class M, template <bool, class, class, class...> class Functor>
 class transform_method {
   template <class R, class T, class... A>
@@ -83,6 +79,60 @@ public:
 
 template <class M, template <bool, class, class, class...> class Functor>
 using transform_method_t = typename transform_method<M, Functor>::type;
+
+// ====== Creating references to functions and methods ======
+
+// Helper for selecting an overloaded function or member function.
+template <class M, M ptr>
+static constexpr M pick_overload_v = ptr;
+
+// Helper for selecting an overloaded constructor.
+template <class M>
+class pick_constructor {
+  // It's not allowed to get a reference to a constructor, but it is possible
+  // to create a zero-cost wrapper around it and reference that.
+  //
+  // The actual wrapper class is necessary because some V8 classes make
+  // `operator new()` private in order to prevent an object from being allocated
+  // on the heap, but this means that we can't use placement new to construct
+  // the desired object directly.
+  template <bool, class, class T, class... A>
+  struct constructor_wrapper {
+    T object;
+    inline constructor_wrapper(A... args) : object(std::forward<A>(args)...) {}
+
+    static void constructor(void* address, A... args) {
+      new (address) constructor_wrapper(std::forward<A>(args)...);
+    }
+  };
+
+public:
+  static constexpr auto constructor =
+      &transform_method_t<M, constructor_wrapper>::constructor;
+};
+
+template <class M>
+static constexpr auto pick_constructor_v = pick_constructor<M>::constructor;
+
+// Helper for selecting a destructor.
+template <class M>
+class pick_destructor {
+  // It's not allowed to get a reference to a destructor, but it is possible
+  // to create a zero-cost wrapper around it and reference that.
+  template <bool, class, class T, class...>
+  struct destructor_wrapper {
+    static void destructor(T* object) {
+      object->~T();
+    }
+  };
+
+public:
+  static constexpr auto destructor =
+      &transform_method_t<M, destructor_wrapper>::destructor;
+};
+
+template <class M>
+static constexpr auto pick_destructor_v = pick_destructor<M>::destructor;
 
 // ====== Array element type deduction ======
 
@@ -288,7 +338,7 @@ public:
   public:
     std::string rust_type() override {
       std::ostringstream os;
-      os << "<<<UNKNOWN " << cxx_typename<T>() << ">>>";
+      os << "<<<UNKNOWN\n    " << cxx_typename<T>() << "\n>>>";
       return os.str();
     }
   };
@@ -449,17 +499,20 @@ public:
 
 template <typename T>
 struct is_complete_helper {
-    template <typename U>
-    static auto test(U*)  -> std::integral_constant<bool, sizeof(U) == sizeof(U)>;
-    static auto test(...) -> std::false_type;
-    using type = decltype(test((T*)0));
+  template <typename U>
+  static auto test(U*) -> std::integral_constant<bool, sizeof(U) == sizeof(U)>;
+  static auto test(...) -> std::false_type;
+  using type = decltype(test((T*) 0));
 };
 
 template <typename T>
 struct is_complete : is_complete_helper<T>::type {};
 
 template <class T>
-class map_type<T, std::enable_if_t<std::is_pointer_v<T> && is_complete<std::remove_pointer<T>>() && !std::is_function_v<std::remove_pointer_t<T>>>>
+class map_type<T,
+               std::enable_if_t<std::is_pointer_v<T> &&
+                                is_complete<std::remove_pointer<T>>() &&
+                                !std::is_function_v<std::remove_pointer_t<T>>>>
     : public map_type_base {
 private:
   using tgt_t = std::remove_pointer_t<T>;
@@ -469,6 +522,16 @@ public:
   using rust_repr = rust_pointer_type<tgt_t>;
 };
 
+template <class T>
+class map_type<T,
+               std::enable_if_t<std::is_pointer_v<T> &&
+                                (!is_complete<std::remove_pointer<T>>() ||
+                                 std::is_function_v<std::remove_pointer_t<T>>)>>
+    : public map_type_base {
+public:
+  using opaque_type = void*;
+  using rust_repr = rust_pointer_type<void>;
+};
 
 template <typename T, typename O = opaque_t<T>>
 struct lvalue_cast {
@@ -479,7 +542,6 @@ struct lvalue_cast {
     return std::move(*reinterpret_cast<O*>(&val));
   }
 };
-
 
 template <class T>
 class map_type<T, std::enable_if_t<std::is_lvalue_reference_v<T>>>
@@ -502,7 +564,6 @@ struct rvalue_cast {
   static O&& ret(T&& val) {
     return reinterpret_cast<O&&>(val);
   }
-  
 };
 
 template <class T>
@@ -514,9 +575,9 @@ private:
 public:
   using opaque_type = opaque_qual_t<tgt_t>*;
   using rust_repr = rust_pointer_type<tgt_t>;
-  
-  //template <typename T>
-  //using cast = rvalue_cast<T>;
+
+  // template <typename T>
+  // using cast = rvalue_cast<T>;
 };
 
 // Qualified types
@@ -558,41 +619,41 @@ public:
 // ====== Casting between opaque and non-opaque types ======
 
 template <class T, class = void>
-struct xcast  {};
+struct xcast {};
 
 template <class T>
 struct xcast<T, std::enable_if_t<std::is_pointer_v<T>>> {
   using O = opaque_t<T>;
-  static T arg(O val) { 
+  static T arg(O val) {
     return reinterpret_cast<T>(val);
   }
-  static O ret(T val) { 
+  static O ret(T val) {
     return reinterpret_cast<O>(val);
-  }  
+  }
 };
-
 
 template <class T>
 struct xcast<T, std::enable_if_t<std::is_reference_v<T>>> {
   using O = opaque_t<T>;
-  static T arg(O val) { 
+  static T arg(O val) {
     return reinterpret_cast<T>(*val);
-  }  
-  static O ret(T val) { 
+  }
+  static O ret(T val) {
     return reinterpret_cast<O>(&val);
   }
 };
 
 template <class T>
-static constexpr bool is_value_type_v = std::is_arithmetic_v<T> || std::is_class_v<T> || std::is_union_v<T>;
+static constexpr bool is_value_type_v =
+    std::is_arithmetic_v<T> || std::is_class_v<T> || std::is_union_v<T>;
 
 template <class T>
 struct xcast<T, std::enable_if_t<is_value_type_v<T>>> {
   using O = opaque_t<T>;
-  static T arg(O val) { 
+  static T arg(O val) {
     return *reinterpret_cast<T*>(&val);
-  }  
-  static O&& ret(T&& val) { 
+  }
+  static O&& ret(T&& val) {
     return reinterpret_cast<O&&>(val);
   }
 };
@@ -647,7 +708,8 @@ class wrap_method {
   template <class R, class T, class... A>
   struct make_wrapper<false, R, T, A...> {
     static opaque_t<R> invoke(opaque_qual_t<T*> self, opaque_t<A>... args) {
-      return xxcast<R>::ret((xxcast<T*>::arg(self)->*method)(xxcast<A>::arg(args)...));
+      return xxcast<R>::ret(
+          (xxcast<T*>::arg(self)->*method)(xxcast<A>::arg(args)...));
     }
   };
 
@@ -746,8 +808,6 @@ v8::Persistent<v8::Value>&&
   return reinterpret_cast<v8::Persistent<v8::Value>&&>(invalid);
 }
 
-
-
 v8::Persistent<v8::Value>&&
     moe1(/*const char* const* a, aap b, v8::Local<v8::Int32> d*/) {
   static void* invalid = nullptr;
@@ -768,9 +828,8 @@ const v8::Persistent<v8::Value>*
   return reinterpret_cast<v8::Persistent<v8::Value>*>(invalid);
 }
 
-std::unique_ptr<void*> moe4() {};
-
-const int moe5(const char* poep, v8::Persistent<v8::Value>& bla) {};
+// std::unique_ptr<void*> moe4() {};
+// const int moe5(const char* poep, v8::Persistent<v8::Value>& bla) {};
 
 template <typename T, class... A>
 opaque_t<T> wrap(T (*f)(A...), opaque_t<A>... args) {
@@ -781,8 +840,8 @@ void testes() {
   auto a = wrap(moe3);
   auto b = wrap(moe2);
   auto c = wrap(moe1);
-  auto d = wrap(moe4);
-  auto e = wrap(moe5, "lul", b);
+  // auto d = wrap(moe4);
+  // auto e = wrap(moe5, "lul", b);
 }
 
 struct klas {
@@ -805,7 +864,13 @@ struct klas {
   }
 };
 
+struct AA {
+  void method() {}
+  static void method(int a) {}
+};
+
 int main() {
+#if 0
   //testes();
   test_type(int);
   test_type(size_t);
@@ -826,7 +891,7 @@ int main() {
   test_fn(&klas::foo0);
   test_fn(&klas::foo1);
   test_fn(&klas::vood1);
-#if 0
+
   test_fn(&ff_mut);
   test_fn(&ff_mut_lval);
   // test_fn(&ff_mut_rval);
@@ -857,12 +922,20 @@ int main() {
   xxxx aaaa =
       &v8::Persistent<v8::Promise, v8::CopyablePersistentTraits<v8::Promise>>::
           operator=;
+
+constexpr auto x1 = pick_constructor_v<void (v8::Local<v8::Primitive>::*)()>;
+constexpr auto x2 = pick_constructor_v<void (v8::Local<v8::Primitive>::*)(v8::Local<v8::Primitive>)>;
+
+auto y1 = x1();
+auto y2 = x2(y1);
+
+test_fn(x1);
+test_fn(x2);
 #endif
 
-#define X_CXXConstructor(f)
-#define X_CXXDestructor(f)
+#define X_CXXConstructor(f) test_fn(f);
+#define X_CXXDestructor(f) test_fn(f);
 #define X_CXXMethod(f) test_fn(f);
-#define X_Disabled(f)
 #define X_Function(f) test_fn(f);
 #include "o2.h"
 }

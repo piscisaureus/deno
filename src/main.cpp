@@ -68,463 +68,61 @@ public:
   }
 };
 
-class NamedDeclAction : public MatchFinder::MatchCallback {
-  ASTContext& ast_;
-
-public:
-  explicit NamedDeclAction(ASTContext& ast) : ast_(ast) {}
-
-private:
-  std::unordered_set<const Decl*> seen;
-  std::unordered_set<const Decl*> todo;
-  bool is_running = false;
-
-  void handleIdentifier(const clang::IdentifierInfo* identifier) {
-    auto name = identifier->getName().str();
-    std::cout << name;
-  }
-
-  void handleQualifiers(const clang::Qualifiers quals) {
-    if (quals.empty()) {
-      std::cout << "mut";
-    } else if (quals.hasOnlyConst()) {
-      std::cout << "const";
-    } else {
-      std::cout << "[[unsupported_qualifier]]";
-    }
-  }
-
-  void handleTypeQualifiers(const clang::Qualifiers quals) {
-    handleQualifiers(quals);
-    std::cout << "_";
-  }
-
-  void addTemplateArgs(ArrayRef<TemplateArgument> args) {
-    for (auto arg = args.begin(); arg != args.end(); ++arg) {
-      switch (arg->getKind()) {
-      case TemplateArgument::ArgKind::Declaration:
-        addDeclContext(arg->getAsDecl());
-        break;
-      case TemplateArgument::ArgKind::Type:
-        addType(arg->getAsType());
-        break;
-      case TemplateArgument::ArgKind::Expression:
-        addType(arg->getAsExpr()->getType());
-        break;
-      case TemplateArgument::ArgKind::Pack:
-        addTemplateArgs(arg->getPackAsArray());
-        break;
-      case TemplateArgument::ArgKind::TemplateExpansion:
-      case TemplateArgument::ArgKind::Template: {
-        auto d = arg->getAsTemplateOrTemplatePattern().getAsTemplateDecl();
-        if (d) {
-          addDeclContext(d);
-        }
-        break;
-      }
-      case TemplateArgument::ArgKind::Integral:
-      case TemplateArgument::ArgKind::Null:
-      case TemplateArgument::ArgKind::NullPtr:
-        // Do nothing.
-        break;
-      default:
-        llvm_unreachable("No such template argument kind");
-      }
-    }
-  }
-
-  void addTypes(ArrayRef<QualType> types) {
-    for (auto qt = types.begin(); qt != types.end(); ++qt) {
-      addType(*qt);
-    }
-  }
-
-  void addType(const clang::QualType qual_type) {
-    auto qt = qual_type;
-    for (;;) {
-      auto desugared = qt.getSingleStepDesugaredType(ast_);
-      if (desugared == qt)
-        break;
-      qt = desugared;
-      auto type = qt.getTypePtr();
-      auto tag_type = dyn_cast<TagType>(type);
-      if (tag_type) {
-        addDeclContext(tag_type->getAsTagDecl());
-      }
-      auto typedef_type = dyn_cast<TypedefType>(type);
-      if (typedef_type) {
-        addDeclContext(typedef_type->getDecl());
-      }
-      auto spec_type = dyn_cast<TemplateSpecializationType>(type);
-      if (spec_type) {
-        addTemplateArgs(spec_type->template_arguments());
-      }
-      auto fn_type = dyn_cast<clang::FunctionType>(type);
-      if (fn_type) {
-        addType(fn_type->getReturnType());
-      }
-      auto fn_proto_type = dyn_cast<clang::FunctionProtoType>(type);
-      if (fn_type) {
-        addTypes(fn_proto_type->getParamTypes());
-        addTypes(fn_proto_type->exceptions());
-      }
-    }
-  }
-
-  void handleQualType(
-      const clang::QualType qual_type,
-      const clang::Qualifiers extra_quals = clang::Qualifiers()) {
-    addType(qual_type);
-
-    auto type = qual_type.getTypePtr();
-    auto quals = qual_type.getQualifiers();
-    quals.addQualifiers(extra_quals);
-
-    if (type->isDependentType()) {
-      std::cout << "^";
-    }
-
-    switch (type->getTypeClass()) {
-    case clang::Type::Builtin: {
-      handleTypeQualifiers(quals);
-      PrintingPolicy pp(ast_.getLangOpts());
-      std::cout << dyn_cast<BuiltinType>(type)->getNameAsCString(pp);
-      break;
-    }
-    case clang::Type::TypeClass::Record:
-    case clang::Type::TypeClass::Enum:
-      handleTypeQualifiers(quals);
-      handleDeclPathComponent(type->getAsTagDecl());
-      break;
-    case clang::Type::TypeClass::Pointer:
-      handleTypeQualifiers(quals);
-      std::cout << "ptr_";
-      handleQualType(type->getPointeeType());
-      break;
-    case clang::Type::TypeClass::LValueReference:
-      handleTypeQualifiers(quals);
-      std::cout << "ref_";
-      handleQualType(type->getPointeeType());
-      break;
-    case clang::Type::TypeClass::RValueReference:
-      handleTypeQualifiers(quals);
-      std::cout << "move_";
-      handleQualType(type->getPointeeType());
-      break;
-    case clang::Type::TypeClass::ConstantArray:
-    case clang::Type::TypeClass::IncompleteArray:
-    case clang::Type::TypeClass::VariableArray:
-    case clang::Type::TypeClass::DependentSizedArray:
-      handleTypeQualifiers(quals);
-      std::cout << "array_of_";
-      handleQualType(dyn_cast<clang::ArrayType>(type)->getElementType());
-      break;
-    case clang::Type::TypeClass::Decayed:
-      handleQualType(dyn_cast<DecayedType>(type)->getDecayedType(), quals);
-      break;
-    case clang::Type::TypeClass::Elaborated:
-      handleQualType(dyn_cast<ElaboratedType>(type)->getNamedType(), quals);
-      break;
-    case clang::Type::TypeClass::Typedef:
-      handleTypeQualifiers(quals);
-      handleDeclPathComponent(dyn_cast<TypedefType>(type)->getDecl());
-      break;
-    case clang::Type::InjectedClassName:
-      handleQualType(dyn_cast<InjectedClassNameType>(type)
-                         ->getInjectedSpecializationType(),
-                     quals);
-      break;
-    case clang::Type::TemplateSpecialization: {
-      handleTypeQualifiers(quals);
-      auto spec_type = dyn_cast<TemplateSpecializationType>(type);
-      auto decl = spec_type->getTemplateName().getAsTemplateDecl();
-      if (decl) {
-        handleDeclPathComponent(decl);
-      } else {
-        std::cout << "[[no-template-decl]]";
-      }
-      handleTemplateArguments(spec_type->template_arguments());
-      break;
-    }
-    case clang::Type::TemplateTypeParm:
-      handleTypeQualifiers(quals);
-      handleIdentifier(dyn_cast<TemplateTypeParmType>(type)->getIdentifier());
-      break;
-    case clang::Type::DependentName:
-      handleTypeQualifiers(quals);
-      handleIdentifier(dyn_cast<DependentNameType>(type)->getIdentifier());
-      break;
-    case clang::Type::SubstTemplateTypeParm:
-      handleQualType(
-          dyn_cast<SubstTemplateTypeParmType>(type)->getReplacementType(),
-          quals);
-      break;
-    default:
-      std::cout << "[[??" << type->getTypeClassName() << "]]";
-      break;
-    }
-  }
-
-  void handleTemplateArguments(const ArrayRef<TemplateArgument> args) {
-    std::cout << "<";
-    for (size_t i = 0; i < args.size(); i++) {
-      if (i > 0) {
-        std::cout << ", ";
-      }
-      auto& arg = args[i];
-      switch (arg.getKind()) {
-      case TemplateArgument::ArgKind::Type: {
-        auto arg_type = arg.getAsType();
-        handleQualType(arg_type);
-        break;
-      }
-      default:
-        std::cout << "[[??NonTypeArg]]";
-        break;
-      }
-    }
-    std::cout << ">";
-  }
-
-  void handleFunctionParameters(const FunctionDecl* fn_decl) {
-    std::cout << "(";
-    auto params = fn_decl->parameters();
-    for (size_t i = 0; i < params.size(); i++) {
-      if (i > 0) {
-        std::cout << ", ";
-      }
-      auto param_decl = params[i];
-      handleQualType(param_decl->getType());
-
-      // Try to find a name for this parameter by looking at all
-      // redeclarations of this function. When different declarations for
-      // the same function use different names, try to to use the name from
-      // a non-definition declaration, since it is more likely to be
-      // meaningful from an external viewpoint.
-      auto name_parm_decl = param_decl;
-      auto name_parent_fn_decl = fn_decl;
-      auto name_info = param_decl->getDeclName();
-
-      auto fn_redecls = fn_decl->redecls();
-      for (auto f = fn_redecls.begin();
-           f != fn_redecls.end() &&
-           (name_info.isEmpty() ||
-            name_parent_fn_decl->isThisDeclarationADefinition());
-           ++f) {
-        auto p = f->getParamDecl(i);
-        auto n = p->getDeclName();
-        if (n.isEmpty())
-          continue;
-        name_parm_decl = p;
-        name_parent_fn_decl = f->getAsFunction();
-        name_info = n;
-      }
-
-      std::cout << "_";
-      handleName(name_parm_decl);
-    }
-    std::cout << ")";
-  }
-
-  void handleName(const clang::NamedDecl* named_decl) {
-    auto name_info = named_decl->getDeclName();
-    std::string name;
-    switch (name_info.getNameKind()) {
-    case DeclarationName::NameKind::Identifier:
-      name = !name_info.isEmpty() ? name_info.getAsString() : "[[anon]]";
-      break;
-    case DeclarationName::NameKind::CXXConstructorName: {
-      auto ctor_decl = dyn_cast<CXXConstructorDecl>(named_decl);
-      if (ctor_decl && ctor_decl->isConvertingConstructor(false)) {
-        name = "convert_from";
-      } else {
-        name = "constructor";
-      }
-      break;
-    }
-    case DeclarationName::NameKind::CXXDestructorName:
-      name = "destructor";
-      break;
-    case DeclarationName::NameKind::CXXConversionFunctionName:
-      name = "convert_to";
-      break;
-    case DeclarationName::NameKind::CXXOperatorName:
-      switch (name_info.getCXXOverloadedOperator()) {
-      case OverloadedOperatorKind::OO_New:
-        name = "op_new";
-        break;
-      case OverloadedOperatorKind::OO_Delete:
-        name = "op_delete";
-        break;
-      case OverloadedOperatorKind::OO_Array_New:
-        name = "op_new_array";
-        break;
-      case OverloadedOperatorKind::OO_Array_Delete:
-        name = "op_delete_array";
-        break;
-      case OverloadedOperatorKind::OO_Subscript:
-        name = "op_subscript";
-        break;
-      case OverloadedOperatorKind::OO_Equal:
-        name = "op_assign";
-        break;
-      case OverloadedOperatorKind::OO_EqualEqual:
-        name = "op_equal";
-        break;
-      case OverloadedOperatorKind::OO_ExclaimEqual:
-        name = "op_not_equal";
-        break;
-      case OverloadedOperatorKind::OO_Star:
-        name = "op_deref";
-        break;
-      case OverloadedOperatorKind::OO_Arrow:
-        name = "op_deref_recursive";
-        break;
-      default:
-        name = "[[unsupported operator]]";
-        break;
-      }
-      break;
-    default:
-      name = "[[unsupported]]";
-      break;
-    }
-    std::cout << name;
-  }
-
-  void handleDeclPathComponent(const clang::Decl* decl) {
-    addDecl(decl);
-
-    if (isa<TranslationUnitDecl>(decl)) {
-      std::cout << "{TU}";
-      return;
-    }
-
-    auto linkage_spec_decl = dyn_cast<LinkageSpecDecl>(decl);
-    if (linkage_spec_decl) {
-      // `extern "C"` declarations have no name and are always global.
-      assert(linkage_spec_decl->getLanguage() == LinkageSpecDecl::lang_c);
-      return handleDeclPathComponent(decl->getTranslationUnitDecl());
-    }
-
-    auto ctx = decl->getDeclContext();
-    auto ctx_decl = dyn_cast<Decl>(ctx);
-    handleDeclPathComponent(ctx_decl);
-
-    std::cout << "::{";
-    if (ctx->isDependentContext()) {
-      std::cout << "^";
-    }
-    std::cout << decl->getDeclKindName() << "}";
-
-    auto named_decl = dyn_cast<NamedDecl>(decl);
-    if (!named_decl) {
-      std::cout << "[[??unnamed]]";
-      return;
-    } else {
-      handleName(named_decl);
-    }
-
-    auto method_decl = dyn_cast<CXXMethodDecl>(decl);
-    if (method_decl && method_decl->isInstance()) {
-      auto ref_qual = method_decl->getRefQualifier();
-      switch (ref_qual) {
-      case RefQualifierKind::RQ_LValue:
-        std::cout << "_ref";
-        break;
-      case RefQualifierKind::RQ_RValue:
-        std::cout << "_move";
-        break;
-      case RefQualifierKind::RQ_None:
-        // Nothing.
-        break;
-      default:
-        llvm_unreachable("Unexpected RefQualifierKind");
-      }
-
-      std::cout << "_";
-      handleQualifiers(method_decl->getMethodQualifiers());
-    }
-
-    auto spec_decl = dyn_cast<ClassTemplateSpecializationDecl>(decl);
-    if (spec_decl) {
-      handleTemplateArguments(spec_decl->getTemplateArgs().asArray());
-    }
-
-    auto fn_decl = dyn_cast<FunctionDecl>(decl);
-    if (fn_decl) {
-      addType(fn_decl->getType());
-      auto template_args = fn_decl->getTemplateSpecializationArgs();
-      if (template_args) {
-        handleTemplateArguments(template_args->asArray());
-      }
-      handleFunctionParameters(fn_decl);
-    }
-  }
-
-  void handleDecl(const Decl* decl) {
-    seen.insert(decl);
-    handleDeclPathComponent(decl);
-    auto& sm = decl->getASTContext().getSourceManager();
-    auto loc = decl->getBeginLoc().printToString(sm);
-    std::cout << "  " << loc << std::endl;
-  }
-
-  void addDeclContext(const Decl* decl) {
-    addDecl(decl);
-
-    MatchFinder finder;
-    finder.addMatcher(clang::ast_matchers::decl(
-                          forEachDescendant(Matchers::pubApi().bind("decl"))),
-                      this);
-    finder.match(*decl, ast_);
-  }
-
-  void addDecl(const Decl* decl) {
-    decl = decl->getCanonicalDecl();
-    if (seen.count(decl) > 0 || todo.count(decl) > 0)
-      return;
-    todo.insert(decl);
-
-    if (is_running)
-      return;
-    is_running = true;
-    while (todo.size() > 0) {
-      auto decl = todo.begin();
-      handleDecl(*decl);
-      todo.erase(decl);
-    }
-    is_running = false;
-  }
-
-public:
-  void run(const MatchFinder::MatchResult& result) override {
-    auto decl = result.Nodes.getNodeAs<Decl>("decl");
-    addDecl(decl);
-  }
-};
-
-class SimpleNamedDeclAction : public MatchFinder::MatchCallback {
+class InvokableDeclAction : public MatchFinder::MatchCallback {
   ASTContext& ast_;
   PrintingPolicy pp_;
 
 public:
-  explicit SimpleNamedDeclAction(ASTContext& ast)
-      : ast_(ast), pp_(ast_.getLangOpts()) {}
+  explicit InvokableDeclAction(ASTContext& ast)
+      : ast_(ast), pp_(ast_.getLangOpts()) {
+    // Ensure that printing types yields valid C++. This ensures:
+    //   - tags ('class' etc) are not printed in type specifiers.
+    //   - 'bool' is used rather than '_Bool'.
+    pp_.adjustForCPlusPlus();
+  }
 
 private:
   std::unordered_set<const Decl*> seen;
 
-  void printDecl(const NamedDecl* decl) {
-    clang::QualType ptr_qty;
+  void printDecl(const Decl* decl) {
+    auto named_decl = dyn_cast<NamedDecl>(decl);
+
+    clang::QualType signature;
+    std::string value;
+    static const char* wrapper_template;
+
     do {
+      auto ctor_decl = dyn_cast<CXXConstructorDecl>(decl);
+      if (ctor_decl) {
+        if (ctor_decl->isDeleted())
+          return;
+        auto mem_qty = ctor_decl->getType();
+        auto cls_ty = ctor_decl->getParent()->getTypeForDecl();
+        signature = ast_.getMemberPointerType(mem_qty, cls_ty);
+        wrapper_template = "pick_constructor_v";
+        break;
+      }
+
+      auto dtor_decl = dyn_cast<CXXDestructorDecl>(decl);
+      if (dtor_decl) {
+        if (dtor_decl->isDeleted())
+          return;
+        auto mem_qty = dtor_decl->getType();
+        auto cls_ty = dtor_decl->getParent()->getTypeForDecl();
+        signature = ast_.getMemberPointerType(mem_qty, cls_ty);
+        wrapper_template = "pick_destructor_v";
+        break;
+      }
+
       auto method_decl = dyn_cast<CXXMethodDecl>(decl);
       if (method_decl && method_decl->isInstance()) {
         if (method_decl->isDeleted())
           return;
         auto mem_qty = method_decl->getType();
         auto cls_ty = method_decl->getParent()->getTypeForDecl();
-        ptr_qty = ast_.getMemberPointerType(mem_qty, cls_ty);
+        signature = ast_.getMemberPointerType(mem_qty, cls_ty);
+        value = std::string("&") + named_decl->getQualifiedNameAsString();
+        wrapper_template = "pick_overload_v";
         break;
       }
 
@@ -534,7 +132,9 @@ private:
           return;
         auto fn_ty = decl->getFunctionType();
         auto fn_qty = QualType(fn_ty, 0);
-        ptr_qty = ast_.getPointerType(fn_qty);
+        signature = ast_.getPointerType(fn_qty);
+        value = std::string("&") + named_decl->getQualifiedNameAsString();
+        wrapper_template = "pick_overload_v";
         break;
       }
 
@@ -543,34 +143,32 @@ private:
     } while (false);
 
     // Canonicalize the type name.
-    ptr_qty = ptr_qty.getCanonicalType();
+    signature = signature.getCanonicalType();
 
     // Do not write out instantiation-dependent types.
-    if (ptr_qty.getTypePtr()->isInstantiationDependentType())
+    if (signature.getTypePtr()->isInstantiationDependentType())
       return;
 
-    // Do not print tags ('class' etc).
-    // Use 'bool' and not '_Bool'.
-    PrintingPolicy pp(ast_.getLangOpts());
-    pp.adjustForCPlusPlus();
-
     std::ostringstream os;
-    os << "  X_" << decl->getDeclKindName() << "(( pick_overload_v<"
-       << ptr_qty.getAsString(pp) << ", "
-       << "&" << decl->getQualifiedNameAsString() << "> ))\n";
+    os << "  X_" << decl->getDeclKindName() << "(( " << wrapper_template << "<"
+       << signature.getAsString(pp_);
+    if (!value.empty()) {
+      os << ", " << value;
+    }
+    os << "> ))\n";
     auto s = os.str();
 
-    if (s.find("unique_ptr") != string::npos ||
-        s.find("Uncompilable") != string::npos ||
-        decl->getAccess() == clang::AccessSpecifier::AS_protected) {
-      s = std::string("//") + s;
-    }
+    // if (s.find("unique_ptr") != string::npos ||
+    //    s.find("Uncompilable") != string::npos ||
+    //    decl->getAccess() == clang::AccessSpecifier::AS_protected) {
+    s = std::string("// ") + s;
+    //}
 
     std::cout << s;
   }
 
-  void addDecl(const NamedDecl* decl) {
-    decl = dyn_cast<NamedDecl>(decl->getCanonicalDecl());
+  void addDecl(const Decl* decl) {
+    decl = decl->getCanonicalDecl();
     if (seen.count(decl) > 0)
       return;
     printDecl(decl);
@@ -580,44 +178,6 @@ public:
   void run(const MatchFinder::MatchResult& result) override {
     auto decl = result.Nodes.getNodeAs<NamedDecl>("decl");
     addDecl(decl);
-  }
-};
-
-class FunctionAction : public MatchFinder::MatchCallback {
-  std::unordered_set<const FunctionDecl*> seen;
-
-public:
-  void run(const MatchFinder::MatchResult& result) override {
-    auto node = result.Nodes.getNodeAs<FunctionDecl>("fn")->getCanonicalDecl();
-    if (seen.count(node) > 0) {
-      return;
-    }
-    seen.insert(node);
-    std::cout << node->getNameAsString() << std::endl;
-
-    auto ret = node->getReturnType();
-    std::cout << "  " << ret.getAsString();
-
-    auto ret2 = ret.split();
-    for (;;) {
-      std::cout << "=> ";
-      ret2.Ty->dump();
-      auto ret3 = ret2.getSingleStepDesugaredType();
-      if (ret2 == ret3)
-        break;
-      ret2 = ret3;
-    }
-    std::cout << std::endl;
-  }
-};
-
-class VarTypeAction : public MatchFinder::MatchCallback {
-public:
-  void run(const MatchFinder::MatchResult& result) override {
-    auto node = result.Nodes.getNodeAs<VarDecl>("decl")->getCanonicalDecl();
-    std::cout << node->getNameAsString() << " => "
-              << node->getType().getAsString() << " => "
-              << node->getType().getCanonicalType().getAsString() << std::endl;
   }
 };
 
@@ -670,18 +230,15 @@ class ASTConsumerImpl : public ASTConsumer {
 
   void HandleTranslationUnit(ASTContext& ast) override {
     // Run the matchers when we have the whole TU parsed.
-    NamedDeclAction named_decl_action(ast);
-    SimpleNamedDeclAction simple_named_decl_action(ast);
+    InvokableDeclAction invokable_action(ast);
     RecordAction record_action;
-    FunctionAction function_action;
-    VarTypeAction var_type_action;
     MatchFinder finder;
     // finder.addMatcher(
     //    namedDecl(hasAncestor(namespaceDecl(hasName("::v8")))).bind("decl"),
     //    &named_decl_action);
 
-    finder.addMatcher(namedDecl(Matchers::anyV8Api()).bind("decl"),
-                      &simple_named_decl_action);
+    finder.addMatcher(decl(Matchers::anyV8Api()).bind("decl"),
+                      &invokable_action);
     // finder.addMatcher(
     //     decl(varDecl(hasAncestor(namespaceDecl(hasName("::v8_wrap")))))
     //         .bind("decl"),
