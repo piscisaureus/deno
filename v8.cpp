@@ -896,6 +896,9 @@ struct AA {
   static void method(int a) {}
 };
 
+template <typename T>
+using pass = T;
+
 int main() {
 #if 0
   //testes();
@@ -960,9 +963,17 @@ test_fn(x1);
 test_fn(x2);
 #endif
 
+
+
+using namespace v8;
+auto allo =  pick_overload_v<void (FunctionTemplate::*)(
+  pass<void (*)(const v8::FunctionCallbackInfo<v8::Value> &)>, 
+  v8::Local<v8::Value>, v8::SideEffectType), 
+  &v8::FunctionTemplate::SetCallHandler> ;
+
 #define X_CXXConstructor(f) test_fn(f);
 #define X_CXXDestructor(f) test_fn(f);
 #define X_CXXMethod(f) test_fn(f);
 #define X_Function(f) test_fn(f);
-#include "o2.h"
+//#include "o2.h"
 }

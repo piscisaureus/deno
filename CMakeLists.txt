@@ -39,6 +39,7 @@ set(CLANG_LIBS
   clangDriver
   clangEdit
   clangFrontend
+  clangIndex
   clangLex
   clangParse
   clangRewrite
