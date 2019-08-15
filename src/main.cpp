@@ -150,7 +150,7 @@ private:
     signature = signature.getCanonicalType();
 
     // Do not write out instantiation-dependent types.
-    if (signature.getTypePtr()->isInstantiationDependentType())
+    if (signature->isInstantiationDependentType())
       return;
 
     std::ostringstream os;
@@ -259,14 +259,26 @@ public:
   }
 
 private:
-  void add_type(const clang::Type* type) {
-    if (type->isInstantiationDependentType())
-      return;
+  std::string meta_id(const char* prefix, size_t id_num) {
+    std::ostringstream buf;
+    buf << prefix << id_num;
+    return buf.str();
+  }
 
+  std::string add_name(std::string name) {
+    auto& name_id = name_ids[name];
+    if (name_id == 0) {
+      name_id = name_ids.size();
+      assert(name_id > 0);
+    }
+    return meta_id("name", name_id);
+  }
+
+  std::string add_type(const clang::Type* type) {
     // Assign id.
     auto& type_id = type_ids[type];
     if (type_id > 0)
-      return;
+      goto done;
     type_id = type_ids.size();
     assert(type_id > 0);
 
@@ -274,6 +286,10 @@ private:
     auto pointee_type = type->getPointeeOrArrayElementType();
     if (pointee_type != type)
       add_type(pointee_type);
+
+    auto reference_type = type->getAs<ReferenceType>();
+    if (reference_type)
+      add_qty(reference_type->getPointeeTypeAsWritten());
 
     // Add function arguments and return qualified type.
     auto fn_proto_qty = type->getAs<FunctionProtoType>();
@@ -301,41 +317,38 @@ private:
     auto pointee_decl = type->getPointeeCXXRecordDecl();
     if (pointee_decl)
       add_decl(pointee_decl);
+
+  done:
+    return meta_id("ty", type_id);
   }
 
-  void add_qty(QualType qty) {
-    auto type = qty.getTypePtr();
-    auto quals = qty.getLocalQualifiers();
-
-    if (type->isInstantiationDependentType())
-      return;
-
+  std::string add_qty(QualType qty) {
     // Only 'const' qualified and mutable types are supported.
+    auto quals = qty.getQualifiers();
     assert(quals.empty() || quals.hasOnlyConst());
 
     // Assign id.
     auto& qty_id = qty_ids[qty];
     if (qty_id > 0)
-      return;
+      goto done;
     qty_id = qty_ids.size();
     assert(qty_id > 0);
 
-    // Add unqualified type.
-    add_type(type);
+    // Add base type.
+    add_type(qty.getTypePtr());
+
+  done:
+    return meta_id("qty", qty_id);
   }
 
-  void add_decl(const Decl* decl) {
+  std::string add_decl(const Decl* decl) {
     // Only process canonical decls.
     decl = decl->getCanonicalDecl();
-
-    // Skip deleted functions.
-    if (isa<FunctionDecl>(decl) && dyn_cast<FunctionDecl>(decl)->isDeleted())
-      return;
 
     // Assign id.
     auto& decl_id = decl_ids[decl];
     if (decl_id > 0)
-      return;
+      goto done;
     decl_id = decl_ids.size();
     assert(decl_id > 0);
 
@@ -371,10 +384,12 @@ private:
 
     auto method_decl = dyn_cast<CXXMethodDecl>(decl);
     if (method_decl && method_decl->isInstance()) {
-      auto cls_ty = method_decl->getParent()->getTypeForDecl();
-      // Todo: add const and ref-quals.
-      add_type(cls_ty);
+      auto this_qty = method_decl->getThisType();
+      add_qty(this_qty);
     }
+
+  done:
+    return meta_id("decl", decl_id);
   }
 
   template <class K, class V>
@@ -391,23 +406,22 @@ private:
 
   void print_meta_type_decls(llvm::raw_ostream& out) {
     for (auto& it : sort_by_id(type_ids)) {
-      out << "struct ty" << it.second << ";  // "
+      out << "struct " << meta_id("type", it.second) << ";  // "
           << it.first->getTypeClassName() << " ";
       QualType(it.first, 0).print(out, pp_);
       out << "\n";
     }
 
     for (auto& it : sort_by_id(qty_ids)) {
-      auto ty = it.first.getTypePtr();
-      auto quals = it.first.getLocalQualifiers();
-      out << "struct qty" << it.second << ";  // " << ty->getTypeClassName()
-          << " " << (quals.hasConst() ? "const" : "mut") << " ";
-      QualType(ty, 0).print(out, pp_);
+      out << "struct " << meta_id("qty", it.second) << ";  // "
+          << (it.first.isConstQualified() ? "const" : "mut") << " "
+          << it.first->getTypeClassName() << " ";
+      it.first.getUnqualifiedType().print(out, pp_);
       out << "\n";
     }
 
     for (auto& it : sort_by_id(decl_ids)) {
-      out << "struct def" << it.second << ";  // "
+      out << "struct " << meta_id("decl", it.second) << ";  // "
           << it.first->getDeclKindName();
       if (isa<NamedDecl>(it.first)) {
         out << " " << dyn_cast<NamedDecl>(it.first)->getNameAsString();
@@ -416,20 +430,9 @@ private:
     }
 
     for (auto& it : sort_by_id(name_ids)) {
-      out << "struct nm" << it.second << " { "
-          << "static const char* name() { "
-          << "return \"" << it.first << "\"; "
-          << "} "
-          << "};\n";
+      out << "static const char* " << meta_id("name", it.second) << " = \""
+          << it.first << "\";\n";
     }
-  }
-
-  void print_meta_class(llvm::raw_ostream& out, clang::Type* type) {
-    out << "ty" << type_ids[type];
-  }
-
-  void print_meta_class(llvm::raw_ostream& out, Decl* decl) {
-    out << "def" << decl_ids[decl];
   }
 
 public:
