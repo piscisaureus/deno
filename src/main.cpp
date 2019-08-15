@@ -247,7 +247,9 @@ class AstToTemplates : public MatchFinder::MatchCallback {
   std::unordered_map<const clang::Decl*, size_t> decl_ids;
   std::unordered_map<const clang::Type*, size_t> type_ids;
   std::unordered_map<clang::QualType, size_t> qty_ids;
-  std::unordered_map<std::string, size_t> name_ids;
+  std::unordered_map<std::string, size_t> string_ids;
+
+  std::unordered_map<const clang::Decl*, std::set<std::string>> decl_traits;
 
 public:
   explicit AstToTemplates(ASTContext& ast)
@@ -259,19 +261,36 @@ public:
   }
 
 private:
-  std::string meta_id(const char* prefix, size_t id_num) {
+  std::string make_tag(const char* prefix, size_t id_num) {
     std::ostringstream buf;
     buf << prefix << id_num;
     return buf.str();
   }
 
-  std::string add_name(std::string name) {
-    auto& name_id = name_ids[name];
-    if (name_id == 0) {
-      name_id = name_ids.size();
-      assert(name_id > 0);
+  template <class... Args>
+  std::string make_trait_args(Args... args) {
+    std::ostringstream buf;
+    size_t count;
+    buf << "<";
+    [&](auto& arg) { buf << (count++ ? "" : ", ") << arg; }(args...);
+    buf << ">";
+    return buf.str();
+  }
+
+  template <class... Args>
+  std::string make_trait(const char* name, Args... args) {
+    std::ostringstream buf;
+    buf << name << make_trait_args(args...);
+    return buf.str();
+  }
+
+  std::string add_string(std::string s) {
+    auto& string_id = string_ids[s];
+    if (string_id == 0) {
+      string_id = string_ids.size();
+      assert(string_id > 0);
     }
-    return meta_id("name", name_id);
+    return make_tag("_s", string_id);
   }
 
   std::string add_type(const clang::Type* type) {
@@ -319,7 +338,7 @@ private:
       add_decl(pointee_decl);
 
   done:
-    return meta_id("ty", type_id);
+    return make_tag("_ty", type_id);
   }
 
   std::string add_qty(QualType qty) {
@@ -338,8 +357,10 @@ private:
     add_type(qty.getTypePtr());
 
   done:
-    return meta_id("qty", qty_id);
+    return make_tag("_qty", qty_id);
   }
+
+  std::string add_function(const Decl* decl) {}
 
   std::string add_decl(const Decl* decl) {
     // Only process canonical decls.
@@ -356,10 +377,8 @@ private:
     auto named_decl = dyn_cast<NamedDecl>(decl);
     if (named_decl) {
       auto name = named_decl->getNameAsString();
-      auto& name_id = name_ids[name];
-      if (name_id == 0) {
-        name_id = name_ids.size();
-        assert(name_id > 0);
+      if (!name.empty()) {
+        decl_traits[decl].emplace(make_trait("DeclName", add_string(name)));
       }
     }
 
@@ -389,7 +408,7 @@ private:
     }
 
   done:
-    return meta_id("decl", decl_id);
+    return make_tag("_d", decl_id);
   }
 
   template <class K, class V>
@@ -404,16 +423,23 @@ private:
     return vec;
   }
 
-  void print_meta_type_decls(llvm::raw_ostream& out) {
+  void print_const_strings(llvm::raw_ostream& out) {
+    for (auto& it : sort_by_id(string_ids)) {
+      out << "struct " << make_tag("_s", it.second)
+          << " { static const char* value = \"" << it.first << "\"; };\n";
+    }
+  }
+
+  void print_forward_decls(llvm::raw_ostream& out) {
     for (auto& it : sort_by_id(type_ids)) {
-      out << "struct " << meta_id("type", it.second) << ";  // "
+      out << "struct " << make_tag("_ty", it.second) << ";  // "
           << it.first->getTypeClassName() << " ";
       QualType(it.first, 0).print(out, pp_);
       out << "\n";
     }
 
     for (auto& it : sort_by_id(qty_ids)) {
-      out << "struct " << meta_id("qty", it.second) << ";  // "
+      out << "struct " << make_tag("_qty", it.second) << ";  // "
           << (it.first.isConstQualified() ? "const" : "mut") << " "
           << it.first->getTypeClassName() << " ";
       it.first.getUnqualifiedType().print(out, pp_);
@@ -421,23 +447,41 @@ private:
     }
 
     for (auto& it : sort_by_id(decl_ids)) {
-      out << "struct " << meta_id("decl", it.second) << ";  // "
+      out << "struct " << make_tag("_d", it.second) << ";";
+      out << " // "
           << it.first->getDeclKindName();
       if (isa<NamedDecl>(it.first)) {
         out << " " << dyn_cast<NamedDecl>(it.first)->getNameAsString();
       }
       out << "\n";
     }
+  }
 
-    for (auto& it : sort_by_id(name_ids)) {
-      out << "static const char* " << meta_id("name", it.second) << " = \""
-          << it.first << "\";\n";
+  void print_traits(llvm::raw_ostream& out) {
+    for (auto& it : sort_by_id(decl_ids)) {
+      auto trait_set = decl_traits[it.first];
+      if (trait_set.empty())
+        continue;
+
+      out << "struct " << make_tag("_d", it.second);
+      size_t count = 0;
+      for (auto& trait_str : trait_set) {
+        out << (count++ ? ", " : ": ") << trait_str;
+      }
+      out << " {};";
+      out << " // " << it.first->getDeclKindName();
+      if (isa<NamedDecl>(it.first)) {
+        out << " " << dyn_cast<NamedDecl>(it.first)->getNameAsString();
+      }
+      out << "\n";
     }
   }
 
 public:
   void write(llvm::raw_ostream& out) {
-    print_meta_type_decls(out);
+    print_const_strings(out);
+    print_forward_decls(out);
+    print_traits(out);
   }
 
   void run(const MatchFinder::MatchResult& result) override {
