@@ -267,12 +267,37 @@ private:
     return buf.str();
   }
 
-  template <class... Args>
-  std::string make_trait_args(Args... args) {
+  std::string none() {
+    return "None";
+  }
+
+  std::string pack_vec(std::vector<std::string> args) {
     std::ostringstream buf;
-    size_t count;
-    buf << "<";
-    [&](auto& arg) { buf << (count++ ? "" : ", ") << arg; }(args...);
+    size_t count = 0;
+    buf << "Pack<";
+    for (auto& arg : args) {
+      buf << (count++ ? ", " : "") << arg;
+    }
+    buf << ">";
+    return buf.str();
+  }
+
+  template <class A0>
+  void _print_template_args(std::ostringstream& out, A0 arg) {
+    out << arg;
+  }
+
+  template <class A0, class... Args>
+  void _print_template_args(std::ostringstream& out, A0 arg0, Args... args) {
+    out << arg0 << ", ";
+    _print_template_args(out, args...);
+  }
+
+  template <class... Args>
+  std::string pack(Args... args) {
+    std::ostringstream buf;
+    buf << "Pack<";
+    _print_template_args(buf, args...);
     buf << ">";
     return buf.str();
   }
@@ -280,8 +305,14 @@ private:
   template <class... Args>
   std::string make_trait(const char* name, Args... args) {
     std::ostringstream buf;
-    buf << name << make_trait_args(args...);
+    buf << name << "<";
+    _print_template_args(buf, args...);
+    buf << ">";
     return buf.str();
+  }
+
+  std::string make_trait(const char* name) {
+    return name;
   }
 
   std::string add_string(std::string s) {
@@ -360,11 +391,10 @@ private:
     return make_tag("_qty", qty_id);
   }
 
-  std::string add_function(const Decl* decl) {}
-
   std::string add_decl(const Decl* decl) {
     // Only process canonical decls.
     decl = decl->getCanonicalDecl();
+    auto& traits = decl_traits[decl];
 
     // Assign id.
     auto& decl_id = decl_ids[decl];
@@ -374,37 +404,90 @@ private:
     assert(decl_id > 0);
 
     // Add name if named.
-    auto named_decl = dyn_cast<NamedDecl>(decl);
-    if (named_decl) {
+    do {
+      auto named_decl = dyn_cast<NamedDecl>(decl);
+      if (!named_decl)
+        break;
+
+      // Do not attempt for constructors and destructors.
+      if (isa<CXXConstructorDecl>(decl) || isa<CXXDestructorDecl>(decl) ||
+          isa<CXXConversionDecl>(decl))
+        break;
+
       auto name = named_decl->getNameAsString();
-      if (!name.empty()) {
-        decl_traits[decl].emplace(make_trait("DeclName", add_string(name)));
+
+      // The trait `NamedDecl` is always added.
+      std::string trait;
+      if (name.empty()) {
+        // Anonymous namespace or union. Generate a name, but use NamedDeclAnon.
+        static size_t anon_counter = 0;
+        auto anon_name = std::ostringstream() << "anonymous_" << ++anon_counter;
+        trait = make_trait("NamedDeclAnon", add_string(name));
+      } else {
+        // NameDecl has a name.
+        trait = make_trait("NamedDeclName", add_string(name));
       }
-    }
+      traits.emplace(trait);
+    } while (0);
 
     // Add type.
     auto type_decl = dyn_cast<TypeDecl>(decl);
     if (type_decl) {
       auto qty = ast_.getTypeDeclType(type_decl);
-      add_qty(qty);
+      traits.emplace(make_trait("TypeDecl", add_qty(qty)));
+    }
+
+    // Add function(-like) traits.
+    auto fn_decl = dyn_cast<FunctionDecl>(decl);
+    if (fn_decl) {
+
+      auto fn_ty = fn_decl->getFunctionType();
+      auto fn_proto_ty = fn_ty->getAs<FunctionProtoType>();
+      assert(fn_proto_ty && "All functions must have a prototype.");
+
+      // Add function parameters.
+      std::vector<std::string> params;
+      for (auto& parm_var_decl : fn_decl->parameters()) {
+        params.push_back(add_decl(parm_var_decl));
+      }
+      traits.emplace(
+          make_trait("FunctionDecl", add_type(fn_proto_ty), pack_vec(params)));
+
+      // Add Function result information.
+      if (!(isa<CXXConstructorDecl>(fn_decl) ||
+            isa<CXXDestructorDecl>(fn_decl) ||
+            isa<CXXConversionDecl>(fn_decl))) {
+        traits.emplace(make_trait("FunctionResult",
+                                  add_qty(fn_decl->getReturnType()),
+                                  add_qty(fn_decl->getCallResultType())));
+      } else {
+        traits.emplace(make_trait("FunctionNoResult"));
+      }
+
+      // Add This type information.
+      auto method_decl = dyn_cast<CXXMethodDecl>(fn_decl);
+      if (method_decl && method_decl->isInstance()) {
+        traits.emplace(make_trait("FunctionInstance",
+                                  add_qty(method_decl->getThisType())));
+      } else {
+        traits.emplace(make_trait("FunctionNoInstance"));
+      }
+
+      // Mark special CXX methods.
+      if (isa<CXXMethodDecl>(fn_decl))
+        traits.emplace(make_trait("CXXMethodDecl"));
+      if (isa<CXXConstructorDecl>(fn_decl))
+        traits.emplace(make_trait("CXXConstructorDecl"));
+      if (isa<CXXDestructorDecl>(fn_decl))
+        traits.emplace(make_trait("CXXDestructorDecl"));
+      if (isa<CXXConversionDecl>(fn_decl))
+        traits.emplace(make_trait("CXXConversionDecl"));
     }
 
     auto value_decl = dyn_cast<ValueDecl>(decl);
     if (value_decl) {
       auto qty = value_decl->getType();
       add_qty(qty);
-    }
-
-    auto fn_decl = dyn_cast<FunctionDecl>(decl);
-    if (fn_decl) {
-      auto fn_ty = decl->getFunctionType();
-      add_type(fn_ty);
-    }
-
-    auto method_decl = dyn_cast<CXXMethodDecl>(decl);
-    if (method_decl && method_decl->isInstance()) {
-      auto this_qty = method_decl->getThisType();
-      add_qty(this_qty);
     }
 
   done:
@@ -423,10 +506,61 @@ private:
     return vec;
   }
 
+  void print_prologue(llvm::raw_ostream& out) {
+    out << "struct None {};\n"
+           "\n"
+           "template <class... Ts>\n"
+           "struct Pack {};\n"
+           "\n"
+           "template <class S>\n"
+           "struct NamedDecl {\n"
+           "  constexpr static const char* DeclName = S::value;\n"
+           "};\n"
+           "template <class S>\n"
+           "struct NamedDeclName : NamedDecl<S> {};\n"
+           "template <class S>\n"
+           "struct NamedDeclAnon : NamedDecl<S> {};\n"
+           "\n"
+           "template <typename T>\n"
+           "struct TypeDecl {\n"
+           "  using Type = T;\n"
+           "};\n"
+           "\n"
+           "template <typename F, typename P>\n"
+           "struct FunctionDecl {\n"
+           "  using FunctionProtoType = F;\n"
+           "  using Params = P;\n"
+           "};\n"
+           "\n"
+           "template <typename RT, typename CRT>\n"
+           "struct FunctionResult {\n"
+           "  using ReturnType = RT;\n"
+           "  using CallResultType = CRT;\n"
+           "};\n"
+           "struct FunctionNoResult {\n"
+           "  using ReturnType = None;\n"
+           "  using CallResultType = None;\n"
+           "};\n"
+           "\n"
+           "template <typename T>\n"
+           "struct FunctionInstance {\n"
+           "  using ThisType = T;\n"
+           "};\n"
+           "struct FunctionNoInstance {\n"
+           "  using ThisType = None;\n"
+           "};\n"
+           "\n"
+           "struct CXXMethodDecl {};\n"
+           "struct CXXConstructorDecl {};\n"
+           "struct CXXDestructorDecl {};\n"
+           "struct CXXConversionDecl {};\n";
+  }
+
   void print_const_strings(llvm::raw_ostream& out) {
     for (auto& it : sort_by_id(string_ids)) {
       out << "struct " << make_tag("_s", it.second)
-          << " { static const char* value = \"" << it.first << "\"; };\n";
+          << " { constexpr static const char* value = \"" << it.first
+          << "\"; };\n";
     }
   }
 
@@ -448,8 +582,7 @@ private:
 
     for (auto& it : sort_by_id(decl_ids)) {
       out << "struct " << make_tag("_d", it.second) << ";";
-      out << " // "
-          << it.first->getDeclKindName();
+      out << " // " << it.first->getDeclKindName();
       if (isa<NamedDecl>(it.first)) {
         out << " " << dyn_cast<NamedDecl>(it.first)->getNameAsString();
       }
@@ -479,6 +612,7 @@ private:
 
 public:
   void write(llvm::raw_ostream& out) {
+    print_prologue(out);
     print_const_strings(out);
     print_forward_decls(out);
     print_traits(out);
