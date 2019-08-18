@@ -250,10 +250,9 @@ class AstToTemplates : public MatchFinder::MatchCallback {
   ASTContext& ast_;
   PrintingPolicy pp_;
 
-  std::unordered_map<const clang::Decl*, size_t> decl_ids;
-  std::unordered_map<clang::QualType, size_t> qty_ids;
   std::unordered_map<std::string, size_t> string_ids;
-  std::unordered_map<ASTEntity, std::set<std::string>> traits;
+  std::unordered_map<ASTEntity, size_t> ast_ids;
+  std::unordered_map<ASTEntity, std::set<std::string>> ast_traits;
 
 public:
   explicit AstToTemplates(ASTContext& ast)
@@ -265,16 +264,15 @@ public:
   }
 
 private:
-  static const char* get_tag_prefix(const clang::Decl*) {
-    return "_d";
-  }
-  static const char* get_tag_prefix(clang::QualType) {
-    return "_qty";
+  std::string make_string_tag(size_t id_num) {
+    std::ostringstream buf;
+    buf << "_str" << id_num;
+    return buf.str();
   }
 
-  std::string make_tag(const char* prefix, size_t id_num) {
+  std::string make_ast_tag(size_t id_num) {
     std::ostringstream buf;
-    buf << prefix << id_num;
+    buf << "_ast" << id_num;
     return buf.str();
   }
 
@@ -333,11 +331,11 @@ private:
 
   template <class... Args>
   void add_trait(ASTEntity e, Args... args) {
-    traits[e].emplace(make_trait(args...));
+    ast_traits[e].emplace(make_trait(args...));
   }
 
   void add_trait(ASTEntity e, std::string trait) {
-    traits[e].emplace(trait);
+    ast_traits[e].emplace(trait);
   }
 
   std::string add_string(std::string s) {
@@ -346,15 +344,15 @@ private:
       string_id = string_ids.size();
       assert(string_id > 0);
     }
-    return make_tag("_s", string_id);
+    return make_string_tag(string_id);
   }
 
   std::string add_qty(QualType qty) {
     // Assign id.
-    auto& qty_id = qty_ids[qty];
+    auto& qty_id = ast_ids[qty];
     if (qty_id > 0)
       goto done;
-    qty_id = qty_ids.size();
+    qty_id = ast_ids.size();
     assert(qty_id > 0);
 
     auto ty = qty.getTypePtr();
@@ -612,7 +610,7 @@ private:
     }
 
   done:
-    return make_tag("_qty", qty_id);
+    return make_ast_tag(qty_id);
   }
 
   std::string add_type(const clang::Type* ty) {
@@ -624,10 +622,10 @@ private:
     decl = decl->getCanonicalDecl();
 
     // Assign id.
-    auto& decl_id = decl_ids[decl];
+    auto& decl_id = ast_ids[decl];
     if (decl_id > 0)
       goto done;
-    decl_id = decl_ids.size();
+    decl_id = ast_ids.size();
     assert(decl_id > 0);
 
     // Add name if named.
@@ -717,19 +715,16 @@ private:
     }
 
   done:
-    return make_tag("_d", decl_id);
+    return make_ast_tag(decl_id);
   }
 
   template <class K, class V>
   auto sort_by_id(const std::unordered_map<K, V>& map) {
-    std::vector<std::pair<K, V>> vec;
+    std::map<V, K> ordered_map;
     for (auto& it : map) {
-      vec.push_back(it);
+      ordered_map.emplace(std::make_pair(it.second, it.first));
     }
-    std::sort(vec.begin(), vec.end(), [](const auto& a, const auto& b) -> bool {
-      return a.second < b.second;
-    });
-    return vec;
+    return ordered_map;
   }
 
 #define PROLOGUE                                                               \
@@ -872,28 +867,9 @@ private:
 
   void print_const_strings(llvm::raw_ostream& out) {
     for (auto& it : sort_by_id(string_ids)) {
-      out << "struct " << make_tag("_s", it.second)
-          << " { constexpr static const char* value = \"" << it.first
+      out << "struct " << make_string_tag(it.first)
+          << " { constexpr static const char* value = \"" << it.second
           << "\"; };\n";
-    }
-  }
-
-  void print_forward_decls(llvm::raw_ostream& out) {
-    for (auto& it : sort_by_id(qty_ids)) {
-      out << "struct " << make_tag("_qty", it.second) << ";  // "
-          << (it.first.isConstQualified() ? "const" : "mut") << " "
-          << it.first->getTypeClassName() << " ";
-      it.first.getUnqualifiedType().print(out, pp_);
-      out << "\n";
-    }
-
-    for (auto& it : sort_by_id(decl_ids)) {
-      out << "struct " << make_tag("_d", it.second) << ";";
-      out << " // " << it.first->getDeclKindName();
-      if (isa<NamedDecl>(it.first)) {
-        out << " " << dyn_cast<NamedDecl>(it.first)->getNameAsString();
-      }
-      out << "\n";
     }
   }
 
@@ -901,6 +877,7 @@ private:
     out << qty->getTypeClassName() << " ";
     qty.print(out, pp_);
   }
+
   void print_comment(llvm::raw_ostream& out, const clang::Decl* decl) {
     out << decl->getDeclKindName();
     auto named_decl = dyn_cast<NamedDecl>(decl);
@@ -908,22 +885,35 @@ private:
       out << " " << named_decl->getNameAsString();
   }
 
+  void print_comment(llvm::raw_ostream& out, const ASTEntity& e) {
+    std::visit([&](const auto& v) { print_comment(out, v); }, e);
+  }
+
+  void print_forward_decls(llvm::raw_ostream& out) {
+    for (auto& it : sort_by_id(ast_ids)) {
+      out << "struct " << make_ast_tag(it.first) << "; // ";
+      print_comment(out, it.second);
+      out << "\n";
+    }
+  }
+
   template <typename T>
   void print_traits(llvm::raw_ostream& out, const T& id_map) {
     for (auto& it : sort_by_id(id_map)) {
-      auto trait_set = traits[it.first];
+      auto trait_set = ast_traits[it.second];
       if (trait_set.empty())
         continue;
 
-      auto tag = make_tag(get_tag_prefix(it.first), it.second);
+      auto tag = make_ast_tag(it.first);
       out << "struct " << tag;
 
       size_t count = 0;
       for (auto& trait_str : trait_set) {
         out << (count++ ? ", " : ": ") << trait_str;
       }
+
       out << " {}; // ";
-      print_comment(out, it.first);
+      print_comment(out, it.second);
       out << "\n";
     }
   }
@@ -933,8 +923,7 @@ public:
     print_prologue(out);
     print_const_strings(out);
     print_forward_decls(out);
-    print_traits(out, qty_ids);
-    print_traits(out, decl_ids);
+    print_traits(out, ast_ids);
   }
 
   void run(const MatchFinder::MatchResult& result) override {
