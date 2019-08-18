@@ -1,3 +1,5 @@
+#define _SILENCE_CXX17_ITERATOR_BASE_CLASS_DEPRECATION_WARNING
+
 #include "clang/AST/AST.h"
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
@@ -18,10 +20,12 @@
 #include <cassert>
 #include <iostream>
 #include <map>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
+#include <variant>
 
 using namespace std;
 using namespace clang;
@@ -241,15 +245,15 @@ struct hash<clang::QualType> {
 };
 
 class AstToTemplates : public MatchFinder::MatchCallback {
+  using ASTEntity = std::variant<const clang::Decl*, const QualType>;
+
   ASTContext& ast_;
   PrintingPolicy pp_;
 
   std::unordered_map<const clang::Decl*, size_t> decl_ids;
-  std::unordered_map<const clang::Type*, size_t> type_ids;
   std::unordered_map<clang::QualType, size_t> qty_ids;
   std::unordered_map<std::string, size_t> string_ids;
-
-  std::unordered_map<const clang::Decl*, std::set<std::string>> decl_traits;
+  std::unordered_map<ASTEntity, std::set<std::string>> traits;
 
 public:
   explicit AstToTemplates(ASTContext& ast)
@@ -261,6 +265,13 @@ public:
   }
 
 private:
+  static const char* get_tag_prefix(const clang::Decl*) {
+    return "_d";
+  }
+  static const char* get_tag_prefix(clang::QualType) {
+    return "_qty";
+  }
+
   std::string make_tag(const char* prefix, size_t id_num) {
     std::ostringstream buf;
     buf << prefix << id_num;
@@ -271,12 +282,17 @@ private:
     return "None";
   }
 
-  std::string pack_vec(std::vector<std::string> args) {
+  template <class Iterator,
+            class Item = decltype(*(std::declval<const Iterator>().begin())),
+            class TransformFn = std::function<std::string(const Item&)>>
+  std::string pack_it(
+      const Iterator& args,
+      TransformFn transform = [](const auto& s) -> std::string { return s; }) {
     std::ostringstream buf;
     size_t count = 0;
     buf << "Pack<";
-    for (auto& arg : args) {
-      buf << (count++ ? ", " : "") << arg;
+    for (const Item& arg : args) {
+      buf << (count++ ? ", " : "") << transform(arg);
     }
     buf << ">";
     return buf.str();
@@ -315,6 +331,15 @@ private:
     return name;
   }
 
+  template <class... Args>
+  void add_trait(ASTEntity e, Args... args) {
+    traits[e].emplace(make_trait(args...));
+  }
+
+  void add_trait(ASTEntity e, std::string trait) {
+    traits[e].emplace(trait);
+  }
+
   std::string add_string(std::string s) {
     auto& string_id = string_ids[s];
     if (string_id == 0) {
@@ -324,59 +349,7 @@ private:
     return make_tag("_s", string_id);
   }
 
-  std::string add_type(const clang::Type* type) {
-    // Assign id.
-    auto& type_id = type_ids[type];
-    if (type_id > 0)
-      goto done;
-    type_id = type_ids.size();
-    assert(type_id > 0);
-
-    // Add dereferenced type.
-    auto pointee_type = type->getPointeeOrArrayElementType();
-    if (pointee_type != type)
-      add_type(pointee_type);
-
-    auto reference_type = type->getAs<ReferenceType>();
-    if (reference_type)
-      add_qty(reference_type->getPointeeTypeAsWritten());
-
-    // Add function arguments and return qualified type.
-    auto fn_proto_qty = type->getAs<FunctionProtoType>();
-    if (fn_proto_qty) {
-      add_qty(fn_proto_qty->getReturnType());
-      // Adjusted return type.
-      add_qty(fn_proto_qty->getCallResultType(ast_));
-
-      for (auto& param_type : fn_proto_qty->param_types()) {
-        add_qty(param_type);
-        // Adjusted parameter type.
-        add_qty(ast_.getAdjustedParameterType(param_type));
-      }
-    }
-
-    // Add desugared qualified type.
-    auto desugared_qty = type->getLocallyUnqualifiedSingleStepDesugaredType();
-    add_qty(desugared_qty);
-
-    // Add declarations.
-    auto tag_decl = type->getAsTagDecl();
-    if (tag_decl)
-      add_decl(tag_decl);
-
-    auto pointee_decl = type->getPointeeCXXRecordDecl();
-    if (pointee_decl)
-      add_decl(pointee_decl);
-
-  done:
-    return make_tag("_ty", type_id);
-  }
-
   std::string add_qty(QualType qty) {
-    // Only 'const' qualified and mutable types are supported.
-    auto quals = qty.getQualifiers();
-    assert(quals.empty() || quals.hasOnlyConst());
-
     // Assign id.
     auto& qty_id = qty_ids[qty];
     if (qty_id > 0)
@@ -384,17 +357,271 @@ private:
     qty_id = qty_ids.size();
     assert(qty_id > 0);
 
-    // Add base type.
-    add_type(qty.getTypePtr());
+    auto ty = qty.getTypePtr();
+    auto quals = qty.getLocalQualifiers();
+
+    assert((quals.empty() || quals.hasOnlyConst()) &&
+           "Only 'const' qualified and unqualified are supported");
+
+    // Mutable is the default; if const, add ConstQualifiedType wrapper.
+    if (quals.hasConst()) {
+      add_trait(qty, "ConstQualifiedType", add_type(ty));
+      goto done;
+    }
+    assert(quals.empty());
+
+    using TC = clang::Type::TypeClass;
+    switch (ty->getTypeClass()) {
+    case TC::Pointer: { // extends Type
+      add_trait(qty,
+                "PointerType",
+                add_qty(dyn_cast<clang::PointerType>(ty)->getPointeeType()));
+      break;
+    }
+
+    case TC::MemberPointer: { // extends Type
+      auto mem_ptr_ty = dyn_cast<clang::MemberPointerType>(ty);
+      add_trait(qty,
+                "MemberPointerType",
+                add_type(mem_ptr_ty->getClass()),
+                add_qty(mem_ptr_ty->getPointeeType()));
+      break;
+    }
+
+    case TC::LValueReference:   // extends ReferenceType
+    case TC::RValueReference: { // extends ReferenceType
+      auto ref_ty = dyn_cast<clang::ReferenceType>(ty);
+      add_trait(qty,
+                ref_ty->isSpelledAsLValue() ? "LValueReferenceType"
+                                            : "RValueReferenceType",
+                make_trait("ReferenceType",
+                           add_qty(ref_ty->getPointeeTypeAsWritten())));
+      break;
+    }
+
+    case TC::FunctionProto: {
+      auto fn_proto_ty = dyn_cast<FunctionProtoType>(ty);
+      auto method_quals = fn_proto_ty->getMethodQuals();
+      auto ref_qual = fn_proto_ty->getRefQualifier();
+      // TODO: add ref-qualifiers.
+      assert(!fn_proto_ty->isVariadic() &&
+             "Variadic functions are not supported");
+      assert((method_quals.empty() || method_quals.hasOnlyConst()) &&
+             "Only 'const' qualified and unqualified are supported");
+      assert(ref_qual == RefQualifierKind::RQ_None &&
+             "Ref-qualifiers are not supported");
+      add_trait(
+          qty,
+          "FunctionProtoType",
+          add_qty(fn_proto_ty->getReturnType()),
+          pack_it(
+              fn_proto_ty->getParamTypes(),
+              [&](QualType param_qty) -> auto { return add_qty(param_qty); }),
+          method_quals.hasConst() ? "ConstQualifiedType" : "SameType");
+      break;
+    }
+
+    case TC::Builtin: { // extends Type
+      auto builtin_ty = dyn_cast<BuiltinType>(ty);
+
+      using K = BuiltinType::Kind;
+      switch (builtin_ty->getKind()) {
+      case K::Void:
+        add_trait(qty, "VoidType");
+        break;
+      case K::Bool:
+        add_trait(qty, "BoolType");
+        break;
+      case K::Long:
+      case K::ULong:
+      case K::WChar_S:
+      case K::WChar_U:
+        // Not supported: these types do not have a dependable size.
+        assert(false && "Encountered built-in type with ABI-dependent size");
+        break;
+      default:
+        // Numeric type with ABI-independent size (hopefully).
+        auto ty_size = static_cast<size_t>(
+            ast_.getTypeSizeInChars(builtin_ty).getQuantity());
+        if (builtin_ty->isSignedInteger()) {
+          add_trait(
+              qty, "ABIIndependentSizeType", "SignedIntegerType", ty_size);
+        } else if (builtin_ty->isUnsignedInteger()) {
+          add_trait(
+              qty, "ABIIndependentSizeType", "UnsignedIntegerType", ty_size);
+        } else if (builtin_ty->isFloatingPoint()) {
+          add_trait(
+              qty, "ABIIndependentSizeType", "FloatingPointType", ty_size);
+        } else {
+          assert(false && "Unsupported built-in type");
+        }
+        break;
+      }
+      break;
+    }
+
+    case TC::Typedef: { // extends Type
+      auto typedef_type = dyn_cast<TypedefType>(ty);
+      auto typedef_name_decl = typedef_type->getDecl();
+
+      do {
+        auto can_ty = qty.getCanonicalType();
+        if (!can_ty.getQualifiers().empty())
+          break; // stdint type should not have qualifiers.
+        if (can_ty->isInstantiationDependentType())
+          break; // Should not be instantiation-dependent.
+
+        auto builtin_ty = dyn_cast<BuiltinType>(can_ty);
+        if (!builtin_ty)
+          break; // Does not refer to a built-in type.
+        if (!builtin_ty->isInteger())
+          break; // Does not refer to an integral type.
+
+        auto redecl_ctx =
+            typedef_name_decl->getDeclContext()->getRedeclContext();
+        auto ns_ctx = dyn_cast<NamespaceDecl>(redecl_ctx);
+        if (ns_ctx && ns_ctx->getName() == "std")
+          redecl_ctx = ns_ctx->getDeclContext()->getRedeclContext();
+        if (!redecl_ctx->isTranslationUnit())
+          break; // Not in top-level or 'std' namespace.
+
+        do {
+          if (ast_.getTypeSize(builtin_ty) !=
+              ast_.getTypeSize(ast_.getUIntPtrType()))
+            break; // Size does not match the size of intptr_t.
+          if (ast_.getTypeAlign(builtin_ty) !=
+              ast_.getTypeAlign(ast_.getUIntPtrType()))
+            break; // Alignment does not match the size of intptr_t.
+
+          auto name = typedef_name_decl->getName();
+          if (!(name == "intptr_t" || name == "uintptr_t" ||
+                name == "ssize_t" || name == "size_t" || name == "ptrdiff_t" ||
+                name == "unsigned ptrdiff_t"))
+            break; // Name does not match a known pointer-sized type.
+
+          add_trait(qty,
+                    "PointerSizeType",
+                    builtin_ty->isSignedInteger() ? "SignedIntegerType"
+                                                  : "UnsignedIntegerType");
+          goto typedef_done;
+        } while (0);
+
+        do {
+          auto name = typedef_name_decl->getName();
+          if (!(name == "int8_t" || name == "uint8_t" || name == "int16_t" ||
+                name == "uint16_t" || name == "int32_t" || name == "uint32_t" ||
+                name == "int64_t" || name == "uint64_t"))
+            break; // Name does not match a known fixed-sized type.
+
+          add_trait(qty,
+                    "ABIIndependentSizeType",
+                    builtin_ty->isSignedInteger() ? "SignedIntegerType"
+                                                  : "UnsignedIntegerType",
+                    static_cast<size_t>(
+                        ast_.getTypeSizeInChars(builtin_ty).getQuantity()));
+          goto typedef_done;
+        } while (0);
+      } while (0);
+
+      // Just a regular typedef.
+      add_trait(qty, "TypedefType", add_decl(typedef_name_decl));
+
+    typedef_done:
+      break;
+    }
+
+    case TC::Paren: // extends Type
+      // This is sugar for a FunctionType or an alias thereof. We
+      // just step over it.
+      add_trait(
+          qty, "SameType", add_qty(dyn_cast<ParenType>(ty)->getInnerType()));
+      break;
+
+    case TC::Enum: { // extends TagType
+      auto enum_ty = dyn_cast<EnumType>(ty);
+      auto enum_decl = enum_ty->getDecl();
+      auto enum_int_qty = enum_decl->getIntegerType();
+      add_trait(qty,
+                "EnumType",
+                add_decl(enum_decl),
+                enum_int_qty.getTypePtrOrNull() ? add_qty(enum_int_qty)
+                                                : "None");
+      break;
+    }
+
+    case TC::Record: { // extends TagType
+      auto record_ty = dyn_cast<RecordType>(ty);
+      auto record_decl = record_ty->getDecl();
+
+      std::string base = make_trait("RecordType", add_decl(record_decl));
+
+      std::string record_subtype;
+      if (ty->isUnionType())
+        add_trait(qty, "UnionRecordType", base);
+      else if (ty->isStructureOrClassType())
+        add_trait(qty, "StructOrClassRecordType", base);
+      else
+        assert(false && "Unexpected record type");
+
+      break;
+    }
+
+    // Unsupported types.
+    case TC::Complex:                         // extends Type
+    case TC::BlockPointer:                    // extends Type
+    case TC::ConstantArray:                   // extends ArrayType
+    case TC::IncompleteArray:                 // extends ArrayType
+    case TC::VariableArray:                   // extends ArrayType
+    case TC::DependentSizedArray:             // extends ArrayType
+    case TC::DependentSizedExtVector:         // extends Type
+    case TC::DependentAddressSpace:           // extends Type
+    case TC::Vector:                          // extends Type
+    case TC::DependentVector:                 // extends Type
+    case TC::ExtVector:                       // extends VectorType
+    case TC::FunctionNoProto:                 // extends FunctionType
+    case TC::UnresolvedUsing:                 // extends Type
+    case TC::MacroQualified:                  // extends Type
+    case TC::Adjusted:                        // extends Type
+    case TC::Decayed:                         // extends AdjustedType
+    case TC::TypeOfExpr:                      // extends Type
+    case TC::TypeOf:                          // extends Type
+    case TC::Decltype:                        // extends Type
+    case TC::UnaryTransform:                  // extends Type
+    case TC::Elaborated:                      // extends Type
+    case TC::Attributed:                      // extends Type
+    case TC::TemplateTypeParm:                // extends Type
+    case TC::SubstTemplateTypeParm:           // extends Type
+    case TC::SubstTemplateTypeParmPack:       // extends Type
+    case TC::TemplateSpecialization:          // extends Type
+    case TC::Auto:                            // extends DeducedType
+    case TC::DeducedTemplateSpecialization:   // extends DeducedType
+    case TC::InjectedClassName:               // extends Type
+    case TC::DependentName:                   // extends Type
+    case TC::DependentTemplateSpecialization: // extends Type
+    case TC::PackExpansion:                   // extends Type
+    case TC::ObjCTypeParam:                   // extends Type
+    case TC::ObjCObject:                      // extends Type
+    case TC::ObjCInterface:                   // extends ObjCObjectType
+    case TC::ObjCObjectPointer:               // extends Type
+    case TC::Pipe:                            // extends Type
+    case TC::Atomic:                          // extends Type
+      break;
+
+    default:
+      assert(false && "Unknown type class");
+    }
 
   done:
     return make_tag("_qty", qty_id);
   }
 
+  std::string add_type(const clang::Type* ty) {
+    return add_qty(QualType(ty, 0));
+  }
+
   std::string add_decl(const Decl* decl) {
     // Only process canonical decls.
     decl = decl->getCanonicalDecl();
-    auto& traits = decl_traits[decl];
 
     // Assign id.
     auto& decl_id = decl_ids[decl];
@@ -419,27 +646,28 @@ private:
       // The trait `NamedDecl` is always added.
       std::string trait;
       if (name.empty()) {
-        // Anonymous namespace or union. Generate a name, but use NamedDeclAnon.
+        // Anonymous namespace or union. Generate a name, but use
+        // NamedDeclAnon.
         static size_t anon_counter = 0;
         auto anon_name = std::ostringstream() << "anonymous_" << ++anon_counter;
-        trait = make_trait("NamedDeclAnon", add_string(name));
+        add_trait(decl, "NamedDeclAnon", add_string(name));
       } else {
         // NameDecl has a name.
-        trait = make_trait("NamedDeclName", add_string(name));
+        add_trait(decl, "NamedDeclName", add_string(name));
       }
-      traits.emplace(trait);
     } while (0);
 
     // Add type.
     auto type_decl = dyn_cast<TypeDecl>(decl);
     if (type_decl) {
       auto qty = ast_.getTypeDeclType(type_decl);
-      traits.emplace(make_trait("TypeDecl", add_qty(qty)));
+      add_trait(decl, "TypeDecl", add_qty(qty));
     }
 
     // Add function(-like) traits.
     auto fn_decl = dyn_cast<FunctionDecl>(decl);
     if (fn_decl) {
+      std::string fn_trait;
 
       auto fn_ty = fn_decl->getFunctionType();
       auto fn_proto_ty = fn_ty->getAs<FunctionProtoType>();
@@ -450,44 +678,42 @@ private:
       for (auto& parm_var_decl : fn_decl->parameters()) {
         params.push_back(add_decl(parm_var_decl));
       }
-      traits.emplace(
-          make_trait("FunctionDecl", add_type(fn_proto_ty), pack_vec(params)));
+      fn_trait =
+          make_trait("FunctionDecl", add_type(fn_proto_ty), pack_it(params));
 
-      // Add Function result information.
-      if (!(isa<CXXConstructorDecl>(fn_decl) ||
-            isa<CXXDestructorDecl>(fn_decl) ||
-            isa<CXXConversionDecl>(fn_decl))) {
-        traits.emplace(make_trait("FunctionResult",
-                                  add_qty(fn_decl->getReturnType()),
-                                  add_qty(fn_decl->getCallResultType())));
-      } else {
-        traits.emplace(make_trait("FunctionNoResult"));
-      }
-
-      // Add This type information.
+      // Add Method information.
       auto method_decl = dyn_cast<CXXMethodDecl>(fn_decl);
-      if (method_decl && method_decl->isInstance()) {
-        traits.emplace(make_trait("FunctionInstance",
-                                  add_qty(method_decl->getThisType())));
-      } else {
-        traits.emplace(make_trait("FunctionNoInstance"));
+      if (method_decl) {
+        fn_trait = make_trait("MethodDecl", fn_trait);
+
+        if (method_decl->isInstance()) {
+          fn_trait = make_trait("InstanceMethodDecl",
+                                fn_trait,
+                                add_qty(method_decl->getThisType()));
+
+          if (method_decl->isVirtual())
+            fn_trait = make_trait("VirtualMethodDecl", fn_trait);
+
+          if (isa<CXXConstructorDecl>(fn_decl))
+            fn_trait = make_trait("ConstructorDecl", fn_trait);
+          else if (isa<CXXDestructorDecl>(fn_decl))
+            fn_trait = make_trait("DestructorDecl", fn_trait);
+          else if (isa<CXXConversionDecl>(fn_decl))
+            fn_trait = make_trait("ConversionDecl", fn_trait);
+        }
       }
 
-      // Mark special CXX methods.
-      if (isa<CXXMethodDecl>(fn_decl))
-        traits.emplace(make_trait("CXXMethodDecl"));
-      if (isa<CXXConstructorDecl>(fn_decl))
-        traits.emplace(make_trait("CXXConstructorDecl"));
-      if (isa<CXXDestructorDecl>(fn_decl))
-        traits.emplace(make_trait("CXXDestructorDecl"));
-      if (isa<CXXConversionDecl>(fn_decl))
-        traits.emplace(make_trait("CXXConversionDecl"));
+      add_trait(decl, fn_trait);
     }
 
     auto value_decl = dyn_cast<ValueDecl>(decl);
     if (value_decl) {
       auto qty = value_decl->getType();
-      add_qty(qty);
+
+      auto parm_var_decl = dyn_cast<ParmVarDecl>(decl);
+      if (parm_var_decl) {
+        add_trait(decl, "ParmVarDecl", add_qty(qty));
+      }
     }
 
   done:
@@ -506,54 +732,142 @@ private:
     return vec;
   }
 
+#define PROLOGUE                                                               \
+  struct None {};                                                              \
+                                                                               \
+  template <class... Ts>                                                       \
+  struct Pack {};                                                              \
+                                                                               \
+  struct Type {                                                                \
+    static constexpr const bool IsConst = false;                               \
+  };                                                                           \
+  template <class T>                                                           \
+  using SameType = T;                                                          \
+                                                                               \
+  template <class T>                                                           \
+  struct ConstQualifiedType : Type {                                           \
+    static constexpr const bool IsConst = true;                                \
+    using InnerType = T;                                                       \
+  };                                                                           \
+                                                                               \
+  struct VoidType : Type {};                                                   \
+  struct BoolType : Type {};                                                   \
+  struct NumericType : Type {};                                                \
+                                                                               \
+  struct IntegerType : NumericType {};                                         \
+  struct UnsignedIntegerType : IntegerType {};                                 \
+  struct SignedIntegerType : IntegerType {};                                   \
+                                                                               \
+  struct FloatingPointType : NumericType {};                                   \
+                                                                               \
+  template <class T, size_t s>                                                 \
+  struct ABIIndependentSizeType : T {                                          \
+    static constexpr const size_t size = s;                                    \
+  };                                                                           \
+  template <class T>                                                           \
+  struct PointerSizeType : T {};                                               \
+                                                                               \
+  template <class T>                                                           \
+  struct PointerType : Type {                                                  \
+    using PointeeType = T;                                                     \
+  };                                                                           \
+                                                                               \
+  template <class CT, class MT>                                                \
+  struct MemberPointerType : Type {                                            \
+    using ClassType = CT;                                                      \
+    using MemberType = MT;                                                     \
+  };                                                                           \
+                                                                               \
+  template <class T>                                                           \
+  struct ReferenceType : Type {                                                \
+    using PointeeType = T;                                                     \
+  };                                                                           \
+  template <class RT>                                                          \
+  struct LValueReferenceType : RT {};                                          \
+  template <class RT>                                                          \
+  struct RValueReferenceType : RT {};                                          \
+                                                                               \
+  template <class RT, class PTs, template <class> class MQ>                    \
+  struct FunctionProtoType {                                                   \
+    using ReturnType = RT;                                                     \
+    using ParamTypes = PTs;                                                    \
+                                                                               \
+    template <typename T>                                                      \
+    using AddMethodQualifiers = MQ<T>;                                         \
+  };                                                                           \
+                                                                               \
+  template <typename D>                                                        \
+  struct TagType : Type {                                                      \
+    using Decl = D;                                                            \
+  };                                                                           \
+                                                                               \
+  template <typename D, typename IT>                                           \
+  struct EnumType : TagType<D> {                                               \
+    using IntegerType = IT;                                                    \
+  };                                                                           \
+                                                                               \
+  template <typename D>                                                        \
+  struct RecordType : TagType<D> {};                                           \
+  template <typename RT>                                                       \
+  struct UnionRecordType : RT {};                                              \
+  template <typename RT>                                                       \
+  struct StructOrClassRecordType : RT {};                                      \
+                                                                               \
+  template <class D>                                                           \
+  struct TypedefType : Type {                                                  \
+    using Decl = D;                                                            \
+  };                                                                           \
+                                                                               \
+  template <class S>                                                           \
+  struct NamedDecl {                                                           \
+    constexpr static const char* DeclName = S::value;                          \
+  };                                                                           \
+  template <class S>                                                           \
+  struct NamedDeclName : NamedDecl<S> {};                                      \
+  template <class S>                                                           \
+  struct NamedDeclAnon : NamedDecl<S> {};                                      \
+                                                                               \
+  template <typename T>                                                        \
+  struct TypeDecl {                                                            \
+    using Type = T;                                                            \
+  };                                                                           \
+                                                                               \
+  template <class FT, class Ps>                                                \
+  struct FunctionDecl {                                                        \
+    using FunctionProtoType = FT;                                              \
+    using Params = Ps;                                                         \
+  };                                                                           \
+                                                                               \
+  template <class FD>                                                          \
+  struct MethodDecl : FD {};                                                   \
+  template <class MD, class TT>                                                \
+  struct InstanceMethodDecl : MD {                                             \
+    using ThisType = TT;                                                       \
+  };                                                                           \
+  template <class MD>                                                          \
+  struct VirtualMethodDecl : MD {};                                            \
+                                                                               \
+  template <class MD>                                                          \
+  struct ConstructorDecl : MD {};                                              \
+  template <class MD>                                                          \
+  struct DestructorDecl {};                                                    \
+  template <class MD>                                                          \
+  struct ConversionDecl {};                                                    \
+                                                                               \
+  template <typename T>                                                        \
+  struct ParmVarDecl {                                                         \
+    using Type = T;                                                            \
+  };
+
   void print_prologue(llvm::raw_ostream& out) {
-    out << "struct None {};\n"
-           "\n"
-           "template <class... Ts>\n"
-           "struct Pack {};\n"
-           "\n"
-           "template <class S>\n"
-           "struct NamedDecl {\n"
-           "  constexpr static const char* DeclName = S::value;\n"
-           "};\n"
-           "template <class S>\n"
-           "struct NamedDeclName : NamedDecl<S> {};\n"
-           "template <class S>\n"
-           "struct NamedDeclAnon : NamedDecl<S> {};\n"
-           "\n"
-           "template <typename T>\n"
-           "struct TypeDecl {\n"
-           "  using Type = T;\n"
-           "};\n"
-           "\n"
-           "template <typename F, typename P>\n"
-           "struct FunctionDecl {\n"
-           "  using FunctionProtoType = F;\n"
-           "  using Params = P;\n"
-           "};\n"
-           "\n"
-           "template <typename RT, typename CRT>\n"
-           "struct FunctionResult {\n"
-           "  using ReturnType = RT;\n"
-           "  using CallResultType = CRT;\n"
-           "};\n"
-           "struct FunctionNoResult {\n"
-           "  using ReturnType = None;\n"
-           "  using CallResultType = None;\n"
-           "};\n"
-           "\n"
-           "template <typename T>\n"
-           "struct FunctionInstance {\n"
-           "  using ThisType = T;\n"
-           "};\n"
-           "struct FunctionNoInstance {\n"
-           "  using ThisType = None;\n"
-           "};\n"
-           "\n"
-           "struct CXXMethodDecl {};\n"
-           "struct CXXConstructorDecl {};\n"
-           "struct CXXDestructorDecl {};\n"
-           "struct CXXConversionDecl {};\n";
+#define TO_STRING_HELPER(code) #code
+#define TO_STRING(code) TO_STRING_HELPER(code)
+    out << "#include <cstddef>\n"
+        << "\n"
+        << TO_STRING(PROLOGUE) << "\n"
+        << "\n";
+#undef TO_STRING_HELPER
+#undef TO_STRING
   }
 
   void print_const_strings(llvm::raw_ostream& out) {
@@ -565,13 +879,6 @@ private:
   }
 
   void print_forward_decls(llvm::raw_ostream& out) {
-    for (auto& it : sort_by_id(type_ids)) {
-      out << "struct " << make_tag("_ty", it.second) << ";  // "
-          << it.first->getTypeClassName() << " ";
-      QualType(it.first, 0).print(out, pp_);
-      out << "\n";
-    }
-
     for (auto& it : sort_by_id(qty_ids)) {
       out << "struct " << make_tag("_qty", it.second) << ";  // "
           << (it.first.isConstQualified() ? "const" : "mut") << " "
@@ -590,22 +897,33 @@ private:
     }
   }
 
-  void print_traits(llvm::raw_ostream& out) {
-    for (auto& it : sort_by_id(decl_ids)) {
-      auto trait_set = decl_traits[it.first];
+  void print_comment(llvm::raw_ostream& out, const clang::QualType qty) {
+    out << qty->getTypeClassName() << " ";
+    qty.print(out, pp_);
+  }
+  void print_comment(llvm::raw_ostream& out, const clang::Decl* decl) {
+    out << decl->getDeclKindName();
+    auto named_decl = dyn_cast<NamedDecl>(decl);
+    if (named_decl)
+      out << " " << named_decl->getNameAsString();
+  }
+
+  template <typename T>
+  void print_traits(llvm::raw_ostream& out, const T& id_map) {
+    for (auto& it : sort_by_id(id_map)) {
+      auto trait_set = traits[it.first];
       if (trait_set.empty())
         continue;
 
-      out << "struct " << make_tag("_d", it.second);
+      auto tag = make_tag(get_tag_prefix(it.first), it.second);
+      out << "struct " << tag;
+
       size_t count = 0;
       for (auto& trait_str : trait_set) {
         out << (count++ ? ", " : ": ") << trait_str;
       }
-      out << " {};";
-      out << " // " << it.first->getDeclKindName();
-      if (isa<NamedDecl>(it.first)) {
-        out << " " << dyn_cast<NamedDecl>(it.first)->getNameAsString();
-      }
+      out << " {}; // ";
+      print_comment(out, it.first);
       out << "\n";
     }
   }
@@ -615,7 +933,8 @@ public:
     print_prologue(out);
     print_const_strings(out);
     print_forward_decls(out);
-    print_traits(out);
+    print_traits(out, qty_ids);
+    print_traits(out, decl_ids);
   }
 
   void run(const MatchFinder::MatchResult& result) override {

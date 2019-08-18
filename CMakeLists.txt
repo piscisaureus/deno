@@ -57,6 +57,10 @@ endif()
 file(GLOB SOURCES_SRC src/*.cpp src/*.h)
 add_executable(gen8 ${SOURCES_SRC})
 
+set_target_properties(gen8 PROPERTIES
+  CXX_STANDARD 17
+)
+
 target_include_directories(gen8 PRIVATE
   ${LLVM_INCLUDE_DIRS}
   ${CLANG_INCLUDE_DIRS}
