@@ -415,7 +415,7 @@ private:
           pack_it(
               fn_proto_ty->getParamTypes(),
               [&](QualType param_qty) -> auto { return add_qty(param_qty); }),
-          method_quals.hasConst() ? "ConstQualifiedType" : "SameType");
+          method_quals.hasConst() ? "ConstQualifiedType" : "UnqualifiedType");
       break;
     }
 
@@ -531,8 +531,9 @@ private:
     case TC::Paren: // extends Type
       // This is sugar for a FunctionType or an alias thereof. We
       // just step over it.
-      add_trait(
-          qty, "SameType", add_qty(dyn_cast<ParenType>(ty)->getInnerType()));
+      add_trait(qty,
+                "UnqualifiedType",
+                add_qty(dyn_cast<ParenType>(ty)->getInnerType()));
       break;
 
     case TC::Enum: { // extends TagType
@@ -624,43 +625,35 @@ private:
     // Assign id.
     auto& decl_id = ast_ids[decl];
     if (decl_id > 0)
-      goto done;
+      return make_ast_tag(decl_id);
     decl_id = ast_ids.size();
     assert(decl_id > 0);
 
     // Add name if named.
+    std::string named_decl_base;
     do {
       auto named_decl = dyn_cast<NamedDecl>(decl);
       if (!named_decl)
         break;
 
       // Do not attempt for constructors and destructors.
-      if (isa<CXXConstructorDecl>(decl) || isa<CXXDestructorDecl>(decl) ||
-          isa<CXXConversionDecl>(decl))
-        break;
-
-      auto name = named_decl->getNameAsString();
+      // if (isa<CXXConstructorDecl>(decl) || isa<CXXDestructorDecl>(decl) ||
+      //    isa<CXXConversionDecl>(decl))
+      //  break;
 
       // The trait `NamedDecl` is always added.
-      std::string trait;
+      auto name = named_decl->getNameAsString();
       if (name.empty()) {
         // Anonymous namespace or union. Generate a name, but use
         // NamedDeclAnon.
         static size_t anon_counter = 0;
         auto anon_name = std::ostringstream() << "anonymous_" << ++anon_counter;
-        add_trait(decl, "NamedDeclAnon", add_string(name));
+        named_decl_base = make_trait("NamedDeclAnon", add_string(name));
       } else {
         // NameDecl has a name.
-        add_trait(decl, "NamedDeclName", add_string(name));
+        named_decl_base = make_trait("NamedDeclName", add_string(name));
       }
     } while (0);
-
-    // Add type.
-    auto type_decl = dyn_cast<TypeDecl>(decl);
-    if (type_decl) {
-      auto qty = ast_.getTypeDeclType(type_decl);
-      add_trait(decl, "TypeDecl", add_qty(qty));
-    }
 
     // Add function(-like) traits.
     auto fn_decl = dyn_cast<FunctionDecl>(decl);
@@ -676,8 +669,10 @@ private:
       for (auto& parm_var_decl : fn_decl->parameters()) {
         params.push_back(add_decl(parm_var_decl));
       }
-      fn_trait =
-          make_trait("FunctionDecl", add_type(fn_proto_ty), pack_it(params));
+      fn_trait = make_trait(
+          "FunctionDecl",
+          make_trait("TypeDecl", named_decl_base, add_type(fn_proto_ty)),
+          pack_it(params));
 
       // Add Method information.
       auto method_decl = dyn_cast<CXXMethodDecl>(fn_decl);
@@ -704,17 +699,25 @@ private:
       add_trait(decl, fn_trait);
     }
 
-    auto value_decl = dyn_cast<ValueDecl>(decl);
-    if (value_decl) {
-      auto qty = value_decl->getType();
-
-      auto parm_var_decl = dyn_cast<ParmVarDecl>(decl);
-      if (parm_var_decl) {
-        add_trait(decl, "ParmVarDecl", add_qty(qty));
-      }
+    auto typedef_name_decl = dyn_cast<TypedefNameDecl>(decl);
+    if (typedef_name_decl) {
+      add_trait(decl,
+                "TypedefNameDecl",
+                make_trait("TypeDecl",
+                           named_decl_base,
+                           add_qty(typedef_name_decl->getUnderlyingType())));
     }
 
-  done:
+    // auto value_decl = dyn_cast<ValueDecl>(decl);
+    // if (value_decl) {
+    //  auto qty = value_decl->getType();
+    //
+    //  auto parm_var_decl = dyn_cast<ParmVarDecl>(decl);
+    //  if (parm_var_decl) {
+    //    add_trait(decl, "ParmVarDecl", add_qty(qty));
+    //  }
+    //}
+
     return make_ast_tag(decl_id);
   }
 
@@ -736,8 +739,11 @@ private:
   struct Type {                                                                \
     static constexpr const bool IsConst = false;                               \
   };                                                                           \
+                                                                               \
   template <class T>                                                           \
-  using SameType = T;                                                          \
+  struct UnqualifiedType : Type {                                              \
+    using InnerType = T;                                                       \
+  };                                                                           \
                                                                                \
   template <class T>                                                           \
   struct ConstQualifiedType : Type {                                           \
@@ -783,7 +789,7 @@ private:
   struct RValueReferenceType : RT {};                                          \
                                                                                \
   template <class RT, class PTs, template <class> class MQ>                    \
-  struct FunctionProtoType {                                                   \
+  struct FunctionProtoType : Type {                                            \
     using ReturnType = RT;                                                     \
     using ParamTypes = PTs;                                                    \
                                                                                \
@@ -822,14 +828,16 @@ private:
   template <class S>                                                           \
   struct NamedDeclAnon : NamedDecl<S> {};                                      \
                                                                                \
-  template <typename T>                                                        \
-  struct TypeDecl {                                                            \
+  template <class ND, class T>                                                 \
+  struct TypeDecl : ND {                                                       \
     using Type = T;                                                            \
   };                                                                           \
                                                                                \
-  template <class FT, class Ps>                                                \
-  struct FunctionDecl {                                                        \
-    using FunctionProtoType = FT;                                              \
+  template <class TD>                                                          \
+  struct TypedefNameDecl : TD {};                                              \
+                                                                               \
+  template <class TD, class Ps>                                                \
+  struct FunctionDecl : TD {                                                   \
     using Params = Ps;                                                         \
   };                                                                           \
                                                                                \
@@ -845,9 +853,9 @@ private:
   template <class MD>                                                          \
   struct ConstructorDecl : MD {};                                              \
   template <class MD>                                                          \
-  struct DestructorDecl {};                                                    \
+  struct DestructorDecl : MD {};                                               \
   template <class MD>                                                          \
-  struct ConversionDecl {};                                                    \
+  struct ConversionDecl : MD {};                                               \
                                                                                \
   template <typename T>                                                        \
   struct ParmVarDecl {                                                         \
@@ -871,15 +879,16 @@ private:
           << " { constexpr static const char* value = \"" << it.second
           << "\"; };\n";
     }
+    out << "\n";
   }
 
   void print_comment(llvm::raw_ostream& out, const clang::QualType qty) {
-    out << qty->getTypeClassName() << " ";
+    out << qty->getTypeClassName() << "Type ";
     qty.print(out, pp_);
   }
 
   void print_comment(llvm::raw_ostream& out, const clang::Decl* decl) {
-    out << decl->getDeclKindName();
+    out << decl->getDeclKindName() << "Decl";
     auto named_decl = dyn_cast<NamedDecl>(decl);
     if (named_decl)
       out << " " << named_decl->getNameAsString();
@@ -895,27 +904,40 @@ private:
       print_comment(out, it.second);
       out << "\n";
     }
+    out << "\n";
   }
 
-  template <typename T>
-  void print_traits(llvm::raw_ostream& out, const T& id_map) {
-    for (auto& it : sort_by_id(id_map)) {
+  void print_ast_traits(llvm::raw_ostream& out) {
+    for (auto& it : sort_by_id(ast_ids)) {
       auto trait_set = ast_traits[it.second];
       if (trait_set.empty())
         continue;
 
-      auto tag = make_ast_tag(it.first);
-      out << "struct " << tag;
-
+      out << "struct " << make_ast_tag(it.first);
       size_t count = 0;
       for (auto& trait_str : trait_set) {
         out << (count++ ? ", " : ": ") << trait_str;
       }
-
       out << " {}; // ";
       print_comment(out, it.second);
       out << "\n";
     }
+    out << "\n";
+  }
+
+  void print_ast_emit_calls(llvm::raw_ostream& out) {
+    out << "#include \"emit.h\"\n";
+    out << "int main() {\n";
+    for (auto& it : sort_by_id(ast_ids)) {
+      auto trait_set = ast_traits[it.second];
+      if (trait_set.empty())
+        continue;
+
+      out << "  emit<" << make_ast_tag(it.first) << ">(); // ";
+      print_comment(out, it.second);
+      out << "\n";
+    }
+    out << "}";
   }
 
 public:
@@ -923,7 +945,8 @@ public:
     print_prologue(out);
     print_const_strings(out);
     print_forward_decls(out);
-    print_traits(out, ast_ids);
+    print_ast_traits(out);
+    print_ast_emit_calls(out);
   }
 
   void run(const MatchFinder::MatchResult& result) override {
