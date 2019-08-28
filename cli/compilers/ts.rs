@@ -165,7 +165,7 @@ fn req(
 }
 
 fn gen_hash(v: Vec<&[u8]>) -> String {
-  let mut ctx = ring::digest::Context::new(&ring::digest::SHA1);
+  let mut ctx = ring::digest::Context::new(&ring::digest::SHA256);
   for src in v.iter() {
     ctx.update(src);
   }
@@ -178,7 +178,7 @@ fn gen_hash(v: Vec<&[u8]>) -> String {
   out
 }
 
-/// Emit a SHA1 hash based on source code, deno version and TS config.
+/// Emit a SHA256 hash based on source code, deno version and TS config.
 /// Used to check if a recompilation for source code is needed.
 pub fn source_code_version_hash(
   source_code: &[u8],
