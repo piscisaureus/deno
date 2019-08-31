@@ -1491,6 +1491,8 @@ exports.WhileStmt = WhileStmt;
 
 class Type extends Node {}
 exports.Type = Type;
+class QualType extends Type {}
+exports.QualType = QualType;
 
 class BuiltinType extends Type {}
 exports.BuiltinType = BuiltinType;

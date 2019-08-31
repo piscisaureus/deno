@@ -1,4 +1,4 @@
-// clang-cl -cc1 -E -P -I../llvm -I../build/llvm/llvm/tools -E ast_class_gen.js.pp | prettier --parser babel > ast_class_gen.js
+// clang -cc1 -E -P -I../llvm -I../build/llvm/llvm/tools -E ast_class_gen.js.pp | prettier --parser babel > ast_class_gen.js
 
 class Node {}
 exports.Node = Node;
@@ -24,5 +24,6 @@ NODE(Stmt, Node)
 #include "clang/include/clang/AST/StmtNodes.inc"
 
 NODE(Type, Node)
+NODE(QualType, Type)
 #define TYPE(Name, Base) NODE(Name##Type, Base)
 #include "clang/include/clang/AST/TypeNodes.def"
