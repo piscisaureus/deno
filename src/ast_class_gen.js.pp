@@ -4,7 +4,7 @@ class Node {}
 exports.Node = Node;
   
 #define NODE(Name, Base) \
-  class Name extends Base {}; \
+  class Name extends Base { get kind() { return #Name; } }; \
   exports.Name = Name;
 
 NODE(Attr, Node)
