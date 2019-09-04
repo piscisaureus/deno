@@ -2,10 +2,13 @@
 
 class Node {}
 exports.Node = Node;
-  
+
 #define NODE(Name, Base) \
   class Name extends Base { get kind() { return #Name; } }; \
   exports.Name = Name;
+
+NODE(CXXCtorInitializer, Node);
+NODE(TemplateArgument, Node);
 
 NODE(Attr, Node)
 #define ATTR(Name) NODE(Name##Attr, Attr)

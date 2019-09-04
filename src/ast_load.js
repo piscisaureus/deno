@@ -1,17 +1,21 @@
 const assert = require("assert");
-const { readFileSync } = require("fs");
 const { inspect } = require("util");
+const { readFileSync } = require("fs");
+
 const astClass = require("./ast_class_gen.js");
 
-Object.assign(inspect.defaultOptions, { maxArrayLength: null, depth: null });
-
-const astJson = readFileSync("../ast.json", "utf8");
-const astNodeMap = new Map();
+exports.fromJsonString = fromJsonString;
+exports.fromFile = fromFile;
+exports.dump = dump;
 
 const { isArray } = Array;
 
 function isObject(value) {
   return typeof value === "object" && value !== null && !isArray(value);
+}
+
+function isString(value) {
+  return typeof value === "string";
 }
 
 function isNodeId(value) {
@@ -38,83 +42,118 @@ function merge(target, source, active = new Set()) {
   }
 }
 
-function getOrCreateNode(idOrInfo) {
-  const { id, kind, ...props } = isObject(idOrInfo)
-    ? idOrInfo
-    : isNodeId(idOrInfo)
-    ? { id: idOrInfo }
-    : assert.fail("Invalid argument", idOrInfo);
+function fromJsonString(jsonString) {
+  const astNodeMap = new Map();
 
-  if (id === "0x0") {
-    assert.deepStrictEqual(props, {});
-    return null;
-  }
+  function getOrCreateNode(idOrInfo) {
+    assert(isObject(idOrInfo) || isNodeId(idOrInfo));
+    const { kind, ...props } = isObject(idOrInfo) ? idOrInfo : { id: idOrInfo };
+    const { id } = props;
 
-  let node = astNodeMap.get(id);
-  if (!node) astNodeMap.set(id, (node = {}));
-
-  if (kind) {
-    const Class = astClass[kind];
-    assert.strictEqual(typeof Class, "function");
-    if (!(node instanceof Class)) Object.setPrototypeOf(node, Class.prototype);
-  }
-
-  merge(node, props);
-
-  return node;
-}
-
-const keyMap = new Map();
-
-function revive(key, value) {
-  if (isObject(value) && value.kind === "CompoundStmt") return;
-
-  if (isObject(value) && isNodeId(value.id)) return getOrCreateNode(value);
-
-  if (key !== "id" && isNodeId(value)) {
-    // Id reference info tracking.
-    let ids = keyMap.get(key);
-    if (!ids) keyMap.set(key, (ids = new Set()));
-    ids.add(value);
-    // End id info tracking.
-
-    return getOrCreateNode(value);
-  }
-
-  if (key === "loc" || key === "range") return;
-
-  if (isObject(value)) {
-    for (const [k, v] of Object.entries(value)) {
-      const m = /^(.*)Id/.test(k);
-      if (!m) continue;
-      const k2 = m[1];
-      assert(!(k2 in value));
-      delete value[k];
-      value[k2] = v;
+    let node;
+    if (id === "0x0") {
+      assert.deepStrictEqual(props, { id });
+      return null;
+    } else if (id !== undefined) {
+      node = astNodeMap.get(id);
+      if (node === undefined) {
+        node = {};
+        astNodeMap.set(id, node);
+      }
+    } else {
+      node = {};
     }
+
+    if (kind) {
+      const Class = astClass[kind];
+      if (!Class) console.log(kind);
+      assert.strictEqual(typeof Class, "function");
+      if (!(node instanceof Class))
+        Object.setPrototypeOf(node, Class.prototype);
+    }
+
+    merge(node, props);
+
+    return node;
   }
 
-  return value;
-}
+  function revive(_, node) {
+    if (!isObject(node) || !isString(node.kind)) return node; // Not an AST node.
 
-function dumpIdReferenceInfo() {
-  for (const [key, ids] of keyMap.entries()) {
-    const kinds = Object.create(null);
-    for (const id of ids.values()) {
-      const kind = astNodeMap.get(id).kind || "Unknown " + id;
-      if (kind in kinds) {
-        kinds[kind]++;
-      } else {
-        kinds[kind] = 1;
+    // Replace IDs by the referenced AST node.
+    // Strip Id suffix from key (e.g. parentDeclContextId), if applicable.
+    for (let [k, v] of Object.entries(node)) {
+      if (k === "id" || !isNodeId(v)) continue;
+
+      delete node[k];
+      k = k.replace(/Id$/, "");
+      v = getOrCreateNode(v);
+      node[k] = v;
+    }
+
+    // Drop uninteresting properties.
+    delete node.loc;
+    delete node.range;
+
+    // Convert node from Object to AST object.
+    node = getOrCreateNode(node);
+
+    // Register this node as the parent node of its non-type children.
+    // Notes:
+    //   'array_filler' and 'inner' arrays contain child nodes.
+    //   'lookups' contains nodes but they're not child nodes.
+    //   'bases' contains 'CXXBaseSpecifier' nodes that we currently ignore.
+    //   'args' and 'path' arrays contain non-node items.
+    if (node instanceof astClass.Decl) {
+      for (const k of ["array_filler", "inner"]) {
+        if (!isArray(node[k])) continue;
+        for (const v of node[k]) {
+          if (v === null || v instanceof astClass.Type) {
+            // Skip.
+          } else if (
+            node instanceof astClass.TemplateDecl &&
+            (v instanceof astClass.ClassTemplateSpecializationDecl ||
+              v instanceof astClass.VarTemplateSpecializationDecl)
+          ) {
+            // Skip.
+          } else {
+            assert(v.template === undefined);
+            v.parent = node;
+          }
+        }
       }
     }
-    console.log(key);
-    for (const [kind, count] of Object.entries(kinds)) {
-      console.log("  %s: %d", kind, count);
-    }
+
+    return node;
   }
+
+  return JSON.parse(jsonString, revive);
 }
 
-const ast = JSON.parse(astJson, revive);
-//dumpIdReferenceInfo()
-console.log(ast);
+function fromFile(filename) {
+  const jsonString = readFileSync(filename, "utf8");
+  const ast = fromJsonString(jsonString);
+  return ast;
+}
+
+function dump(ast) {
+  const nodeProto = astClass.Node.prototype;
+  const seen = new Set();
+  nodeProto[inspect.custom] = function(depth, options) {
+    if (seen.has(this)) return `[${this.kind}] ${this.id}`;
+    seen.add(this);
+    return this;
+  };
+  const inspectOptions = inspect.defaultOptions;
+  const originalOptions = { ...inspectOptions };
+  Object.assign(inspectOptions, { maxArrayLength: null, depth: null });
+  console.log(ast);
+  delete nodeProto[inspect.custom];
+  Object.assign(inspectOptions, originalOptions);
+}
+
+const tu = fromFile("../ast.json");
+//for (const node of tu.inner) {
+//  if (node.kind === "NamespaceDecl" && node.
+//}
+dump(tu);

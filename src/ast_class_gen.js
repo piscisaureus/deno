@@ -1,6 +1,19 @@
 class Node {}
 exports.Node = Node;
 
+class CXXCtorInitializer extends Node {
+  get kind() {
+    return "CXXCtorInitializer";
+  }
+}
+exports.CXXCtorInitializer = CXXCtorInitializer;
+class TemplateArgument extends Node {
+  get kind() {
+    return "TemplateArgument";
+  }
+}
+exports.TemplateArgument = TemplateArgument;
+
 class Attr extends Node {
   get kind() {
     return "Attr";
