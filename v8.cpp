@@ -975,5 +975,5 @@ auto allo =  pick_overload_v<void (FunctionTemplate::*)(
 #define X_CXXDestructor(f) test_fn(f);
 #define X_CXXMethod(f) test_fn(f);
 #define X_Function(f) test_fn(f);
-//#include "o2.h"
+#include "o2.h"
 }

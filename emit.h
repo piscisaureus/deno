@@ -233,3 +233,61 @@ static void emit() {
   emit3<T>(std::cout);
   std::cout << "\n";
 }
+
+
+struct Any { template <class T> Any(const T&) {} };
+//template <class T> void visit(T a, T b, T c, T d, T e, Any) { visit(a, b, c, d, e); }
+//template <class T> void visit(T a, T b, T c, T d, Any) { visit(a, b, c, d); }
+//template <class T> void visit(T a, T b, T c, Any) { visit(a, b, c); }
+//template <class T> void visit(T a, T b, Any) { visit(a, b); }
+//template <class T> void visit(T a, Any) { visit(a); }
+//void visit(Any) { std::cout << "No match\n"; }
+template <class T> void run() { return visit(T(), T()); }
+template <class Ts> void run_each() { return run_each_helper(Ts()); }
+
+template <class... Items>
+void run_each_helper(Pack<Items...>) {
+  std::cout << "  " << "visiting " << sizeof...(Items) << "\n";
+  (run<Items>(), ...);
+}
+
+void visit(Type, Any) {
+  std::cout << "A Type\n";
+}
+
+template <class T, class Fs, class Ds>
+void visit(DeclContext<Ds>, RecordDecl<T, Fs> rd) {
+  std::cout << "Record and also decl context " << rd.DeclName << "\n";
+  run_each<Ds>();
+}
+
+template <typename Ds, typename B>
+void visit(DeclContext<Ds>, TranslationUnitDecl<B>) {
+  std::cout << "This root DeclContext\n";
+  run_each<Ds>();
+}
+
+template <typename Ds, typename... NArgs>
+void visit(DeclContext<Ds>, NamedDecl<NArgs...> nd) {
+  std::cout << "Iterating DeclContext " << nd.DeclName <<  "\n";
+  run_each<Ds>();
+}
+
+template <typename Ds, typename B>
+void visit(DeclContext<Ds>, Decl<B>) {
+  std::cout << "This is just a DeclContext\n";
+  run_each<Ds>();
+}
+
+template <typename... NArgs>
+void visit2(NamedDecl<NArgs...> nd, Any) {
+  std::cout << "This is just a NamedDecl: " << nd.DeclName << "\n";
+}
+
+template <typename... NArgs>
+auto visit = &visit2<NArgs...>;
+
+
+//void visit(Any, Any) {
+//    std::cout << "Nothing\n";
+//}

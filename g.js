@@ -8,7 +8,7 @@ const isEnabled = l => !isDisabled(l);
 
 function tryOut() {
   try {
-    execFileSync(
+    const r = execFileSync(
       "clang-cl",
       [
         "/std:c++17",

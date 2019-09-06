@@ -1086,19 +1086,20 @@ public:
 
 namespace name {
 class Context;
-class Named;
+class Name;
 
 class Context {
 private:
-  std::unordered_set<const Named&> children;
+  std::unordered_set<const Name&> children;
   size_t detail = 0;
 
 public:
-  void Add(const Named& child) {
+  void Add(const Name& child) {
     children.emplace(child);
 
-    // Scan for collisions and increase detail level if necessary.
-    restart: for (;;) {
+  // Scan for collisions and increase detail level if necessary.
+  restart:
+    for (;;) {
       std::unordered_set<std::string> names;
       for (const auto& c : children) {
         auto name = GetNameOf(c);
@@ -1115,31 +1116,37 @@ public:
     }
   }
 
-  private:
-  friend Named;
-  std::string GetNameOf(const Named& child) const {
+private:
+  friend Name;
+  std::string GetNameOf(const Name& child) const {
     return child.GetNameAlternative(detail);
   }
 };
 
-class Named {
+class Name {
+public:
+  virtual std::string name() = 0;
+};
+
+
+class GlobalName: public Name {
   Context* ctx_;
 
 public:
-  std::string name() const {
-    return ctx_->GetNameOf(*this);
-  }
+  explicit GlobalName(Context* ctx) : ctx_(ctx) {}
 
-  operator std::string() const {
-    return name();
+  std::string name() const override {
+    return ctx_->GetNameOf(*this);
   }
 
 private:
   friend Context;
-  virtual std::string GetNameAlternative(size_t detail) const;
+  virtual std::string GetNameAlternative(size_t detail) const = 0;
 };
 
-class NamedContext : public Named, public Context {};
+class GlobalName: public Name {
+
+};
 
 } // namespace name
 
