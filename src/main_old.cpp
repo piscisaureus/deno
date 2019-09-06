@@ -644,13 +644,14 @@ private:
 
   void merge_decl_contexts() {
     for (const auto& it : decl_contexts_) {
-      add_trait(dyn_cast<Decl>(it.first),
-                "DeclContext",
-                pack_it(it.second, [&](const clang::Decl* child_decl) -> auto {
-                  auto ast_id = ast_ids[child_decl];
-                  assert(ast_id > 0);
-                  return make_ast_tag(ast_id);
-                }));
+      add_trait(
+                 dyn_cast<Decl>(it.first),
+                 "DeclContext",
+                 pack_it(it.second, [&](const clang::Decl* child_decl) -> auto {
+                   auto ast_id = ast_ids[child_decl];
+                   assert(ast_id > 0);
+                   return make_ast_tag(ast_id);
+                 }));
     }
   }
 
@@ -1083,65 +1084,6 @@ public:
     add_decl(decl);
   }
 };
-
-namespace name {
-class Context;
-class Named;
-
-class Context {
-private:
-  std::unordered_set<const Named&> children;
-  size_t detail = 0;
-
-public:
-  void Add(const Named& child) {
-    children.emplace(child);
-
-    // Scan for collisions and increase detail level if necessary.
-    restart: for (;;) {
-      std::unordered_set<std::string> names;
-      for (const auto& c : children) {
-        auto name = GetNameOf(c);
-        if (names.count(name) > 0) {
-          // Collision found: increase detail level and restart scan.
-          detail++;
-          goto restart;
-        }
-        names.emplace(name);
-      }
-
-      // No collisions found.
-      break;
-    }
-  }
-
-  private:
-  friend Named;
-  std::string GetNameOf(const Named& child) const {
-    return child.GetNameAlternative(detail);
-  }
-};
-
-class Named {
-  Context* ctx_;
-
-public:
-  std::string name() const {
-    return ctx_->GetNameOf(*this);
-  }
-
-  operator std::string() const {
-    return name();
-  }
-
-private:
-  friend Context;
-  virtual std::string GetNameAlternative(size_t detail) const;
-};
-
-class NamedContext : public Named, public Context {};
-
-} // namespace name
 
 class ASTConsumerImpl : public ASTConsumer {
 
