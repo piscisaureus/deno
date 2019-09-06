@@ -1124,18 +1124,12 @@ private:
 };
 
 class Name {
-public:
-  virtual std::string name() = 0;
-};
-
-
-class GlobalName: public Name {
   Context* ctx_;
 
 public:
-  explicit GlobalName(Context* ctx) : ctx_(ctx) {}
+  explicit Name(Context* ctx) : ctx_(ctx) {}
 
-  std::string name() const override {
+  std::string name() const {
     return ctx_->GetNameOf(*this);
   }
 
@@ -1144,9 +1138,11 @@ private:
   virtual std::string GetNameAlternative(size_t detail) const = 0;
 };
 
-class GlobalName: public Name {
-
+class NamedContext : public Name, public Context {
+  explicit NamedContext(Context* ctx) : Name(ctx) {}
 };
+
+class GlobalName : public Name {};
 
 } // namespace name
 
