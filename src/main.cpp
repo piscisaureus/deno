@@ -1087,6 +1087,8 @@ public:
 namespace name {
 class Context;
 class Name;
+class GlobalContext;
+class GlobalName;
 
 class Context {
 private:
@@ -1127,7 +1129,9 @@ class Name {
   Context* ctx_;
 
 public:
-  explicit Name(Context* ctx) : ctx_(ctx) {}
+  explicit Name(Context* ctx) : ctx_(ctx) {
+    ctx->Add(*this);
+  }
 
   std::string name() const {
     return ctx_->GetNameOf(*this);
@@ -1138,11 +1142,43 @@ private:
   virtual std::string GetNameAlternative(size_t detail) const = 0;
 };
 
-class NamedContext : public Name, public Context {
-  explicit NamedContext(Context* ctx) : Name(ctx) {}
+class GlobalContext : public Context {
+private:
+  friend class GlobalName;
+  friend class GlobalNamedContext;
+
+  virtual std::string separator() const = 0;
+  virtual std::string prefix() const {
+    return "";
+  }
 };
 
-class GlobalName : public Name {};
+class GlobalName : public Name {
+  GlobalContext* ctx_;
+
+public:
+  GlobalName(GlobalContext* ctx) : Name(ctx), ctx_(ctx) {}
+
+  std::string qualifiedName() const {
+    return ctx_->prefix() + name();
+  }
+
+protected:
+  GlobalContext* context() const {
+    return ctx_;
+  }
+};
+
+class GlobalNamedContext : public GlobalName, public GlobalContext {
+public:
+  std::string separator() const override {
+    return context()->separator();
+  }
+
+  std::string prefix() const override {
+    return qualifiedName() + separator();
+  }
+};
 
 } // namespace name
 
