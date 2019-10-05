@@ -61,14 +61,6 @@ InspectorClient::InspectorClient(Local<Context> context,
   context_.Reset(isolate_, context);
 }
 
-void InspectorClient::runMessageLoopOnPause(int context_group_id) {
-  // TODO(mtharrison): Needs protection for nested loop?
-  terminated_ = false;
-  while (!terminated_) {
-    deno_->inspector_block_recv_(deno_->user_data_);
-  }
-}
-
 v8_inspector::V8InspectorSession* InspectorClient::GetSession(
     Local<Context> context) {
   InspectorClient* inspector_client = static_cast<InspectorClient*>(

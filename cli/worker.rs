@@ -316,16 +316,16 @@ impl Worker {
     let isolate_clone = isolate.clone();
     let rx = inspector.handle.rx.clone();
 
-    std::thread::spawn(move || loop {
-      {
-        let message = { rx.lock().unwrap().try_recv() };
-
-        if let Ok(msg) = message {
-          isolate_clone.lock().unwrap().inspector_message(msg);
-        }
+    std::thread::spawn(move || {
+      eprintln!("start pump thread");
+      let locked_rx = rx.lock().unwrap();
+      eprintln!("rx locked");
+      while let Ok(msg) = locked_rx.recv() {
+        eprintln!("rx msx pre-send {:?}", &msg);
+        isolate_clone.lock().unwrap().inspector_message(msg);
+        eprintln!("rx msx post-send");
       }
-
-      std::thread::sleep(std::time::Duration::from_millis(5));
+      eprintln!("exit pump thread");
     });
 
     Self {

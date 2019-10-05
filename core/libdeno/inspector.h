@@ -2,7 +2,10 @@
 #ifndef INSPECTOR_H_
 #define INSPECTOR_H_
 
+#include <condition_variable>
+#include <iostream>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <utility>
 
@@ -47,9 +50,26 @@ class InspectorClient : public v8_inspector::V8InspectorClient {
   InspectorClient(Local<Context> context, deno::DenoIsolate* deno_);
   ~InspectorClient() override = default;
 
-  void runMessageLoopOnPause(int context_group_id) override;
+  void runMessageLoopOnPause(int context_group_id) {
+    std::cerr << "pause\n";
+    std::unique_lock<std::mutex> guard(pause_mutex_);
+    std::cerr << "pause -- locked\n";
+    paused_ = true;
 
-  void quitMessageLoopOnPause() override { terminated_ = true; }
+    v8::Unlocker unlock_isolate(isolate_);
+
+    pause_cv_.wait(guard, [&] { return !paused_; });
+    std::cerr << "pause -- ended\n";
+  }
+
+  void quitMessageLoopOnPause() override {
+    std::cerr << "end pause\n";
+    std::unique_lock<std::mutex> guard(pause_mutex_);
+    std::cerr << "end pause -- locked\n";
+    paused_ = false;
+    pause_cv_.notify_all();
+    std::cerr << "end pause -- notified\n";
+  }
 
   static v8_inspector::V8InspectorSession* GetSession(Local<Context> context);
 
@@ -61,8 +81,10 @@ class InspectorClient : public v8_inspector::V8InspectorClient {
   std::unique_ptr<v8_inspector::V8Inspector::Channel> channel_;
   Global<Context> context_;
   Isolate* isolate_;
-  bool terminated_;
-  bool running_nested_loop_;
+
+  bool paused_;
+  std::mutex pause_mutex_;
+  std::condition_variable pause_cv_;
 };
 
 class DispatchOnInspectorBackendTask : public v8::Task {
