@@ -13,6 +13,7 @@ mod module_specifier;
 mod modules;
 mod ops;
 mod shared_queue;
+pub mod v8;
 
 pub use crate::any_error::*;
 pub use crate::flags::v8_set_flags;

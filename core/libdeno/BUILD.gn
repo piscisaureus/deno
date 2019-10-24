@@ -62,6 +62,14 @@ v8_source_set("libdeno") {
     "internal.h",
     "modules.cc",
   ]
+
+  # V8 binding sources.
+  sources += [
+    "../v8/inspector/channel.cpp",
+    "../v8/inspector/client.cpp",
+    "../v8/platform/task.cpp",
+    "../v8/string_buffer.cpp",
+  ]
   deps = [
     ":v8",
   ]
