@@ -128,13 +128,9 @@ impl DenoIsolate {
     isolate.set_host_import_module_dynamically_callback(
       host_import_module_dynamically_callback,
     );
-    let self_box = unsafe {
-      let self_box = Box::new(self);
-      let self_ptr = Box::into_raw(self_box);
-      isolate.set_data(0, self_ptr as *mut c_void);
-      Box::from_raw(self_ptr)
-    };
-    self_box.isolate_ = Some(isolate);
+    let self_ptr: *mut Self = self;
+    unsafe { isolate.set_data(0, self_ptr as *mut c_void) };
+    self.isolate_ = Some(isolate);
   }
 
   pub fn register_module(
