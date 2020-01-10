@@ -6,3 +6,8 @@
 	url = https://github.com/microsoft/TypeScript.git
 	fetchRecurseSubmodules = false
 	shallow = true
+[submodule "rusty_v8"]
+	path = rusty_v8
+	fetchRecurseSubmodules = true
+	url = https://github.com/denoland/rusty_v8.git
+	shallow = true

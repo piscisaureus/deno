@@ -2,6 +2,7 @@
 members = [
   "cli",
   "core",
+  "rusty_v8",
   "tools/hyper_hello",
   "deno_typescript",
   "test_plugin"
