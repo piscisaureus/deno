@@ -157,7 +157,7 @@ fn main() {
     filename: "http_bench.js",
   });
 
-  let isolate = deno_core::Isolate::new(startup_data, false);
+  let mut isolate = deno_core::Isolate::new(startup_data, false);
   isolate.register_op("listen", http_op(op_listen));
   isolate.register_op("accept", http_op(op_accept));
   isolate.register_op("read", http_op(op_read));
@@ -184,7 +184,7 @@ fn main() {
     .enable_io()
     .build()
     .expect("Unable to create tokio runtime");
-  let result = runtime.block_on(isolate.boxed());
+  let result = runtime.block_on(isolate.as_fut());
   js_check(result);
 }
 

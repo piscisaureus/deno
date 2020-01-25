@@ -107,11 +107,12 @@ impl Worker {
     let worker = self.clone();
 
     let mut isolate = self.isolate.lock().await;
-    let id = isolate.load_module(&specifier, maybe_code).await?;
+
+    let id = isolate.load_module1(&specifier, maybe_code).await?;
     worker.state.global_state.progress.done();
 
     if !is_prefetch {
-      return isolate.mod_evaluate(id);
+      return isolate.mod_evaluate1(id);
     }
 
     Ok(())

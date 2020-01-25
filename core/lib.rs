@@ -2,6 +2,8 @@
 #![deny(warnings)]
 
 #[macro_use]
+extern crate derive_deref;
+#[macro_use]
 extern crate log;
 extern crate futures;
 extern crate libc;
@@ -23,6 +25,7 @@ mod ops;
 mod plugins;
 mod resources;
 mod shared_queue;
+mod v8_future;
 
 use rusty_v8 as v8;
 
@@ -36,6 +39,7 @@ pub use crate::modules::*;
 pub use crate::ops::*;
 pub use crate::plugins::*;
 pub use crate::resources::*;
+pub use crate::v8_future::*;
 
 pub fn v8_version() -> &'static str {
   v8::V8::get_version()

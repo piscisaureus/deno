@@ -449,7 +449,7 @@ impl fmt::Display for Deps {
   }
 }
 
-#[cfg(test)]
+#[cfg(test_disabled)]
 mod tests {
   use super::*;
   use crate::es_isolate::EsIsolate;

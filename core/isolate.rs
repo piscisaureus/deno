@@ -14,6 +14,8 @@ use crate::js_errors::V8Exception;
 use crate::ops::*;
 use crate::shared_queue::SharedQueue;
 use crate::shared_queue::RECOMMENDED_SIZE;
+use crate::v8_future::V8Future;
+use crate::v8_future::V8PollScope;
 use futures::future::FutureExt;
 use futures::future::TryFutureExt;
 use futures::stream::select;
@@ -25,7 +27,6 @@ use std::collections::HashMap;
 use std::convert::From;
 use std::error::Error;
 use std::fmt;
-use std::future::Future;
 use std::ops::{Deref, DerefMut};
 use std::option::Option;
 use std::pin::Pin;
@@ -193,8 +194,7 @@ impl Drop for Isolate {
     // Clear persistent handles we own.
     {
       let mut locker = v8::Locker::new(&isolate);
-      let mut hs = v8::HandleScope::new(locker.enter());
-      let scope = hs.enter();
+      let scope = locker.enter();
       // </Boilerplate>
       self.global_context.reset(scope);
       self.shared_ab.reset(scope);
@@ -633,20 +633,25 @@ impl Isolate {
   }
 }
 
-impl Future for Isolate {
+impl V8Future for Isolate {
   type Output = Result<(), ErrBox>;
 
-  fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+  fn v8_isolate(&self) -> *const v8::Isolate {
+    &**self.v8_isolate.as_ref().unwrap()
+  }
+
+  fn v8_context(&self) -> &v8::Global<v8::Context> {
+    &self.global_context
+  }
+
+  fn v8_poll(
+    self: Pin<&mut Self>,
+    scope: &mut V8PollScope,
+    cx: &mut Context,
+  ) -> Poll<Self::Output> {
     let inner = self.get_mut();
     inner.waker.register(cx.waker());
     inner.shared_init();
-
-    let mut locker = v8::Locker::new(&*inner.v8_isolate.as_mut().unwrap());
-    let mut hs = v8::HandleScope::new(locker.enter());
-    let scope = hs.enter();
-    let context = inner.global_context.get(scope).unwrap();
-    let mut cs = v8::ContextScope::new(scope, context);
-    let scope = cs.enter();
 
     inner.check_promise_exceptions(scope)?;
 
@@ -730,7 +735,9 @@ pub fn js_check<T>(r: Result<T, ErrBox>) -> T {
 #[cfg(test)]
 pub mod tests {
   use super::*;
+  use crate::v8_future::AsFut;
   use futures::future::lazy;
+  use std::future::Future;
   use std::ops::FnOnce;
   use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -883,7 +890,7 @@ pub mod tests {
          "#,
       ));
       assert_eq!(dispatch_count.load(Ordering::Relaxed), 1);
-      assert!(match isolate.poll_unpin(cx) {
+      assert!(match isolate.as_fut().poll_unpin(cx) {
         Poll::Ready(Ok(_)) => true,
         _ => false,
       });
@@ -897,14 +904,14 @@ pub mod tests {
          "#,
       ));
       assert_eq!(dispatch_count.load(Ordering::Relaxed), 2);
-      assert!(match isolate.poll_unpin(cx) {
+      assert!(match isolate.as_fut().poll_unpin(cx) {
         Poll::Ready(Ok(_)) => true,
         _ => false,
       });
       js_check(isolate.execute("check3.js", "assert(nrecv == 2)"));
       assert_eq!(dispatch_count.load(Ordering::Relaxed), 2);
       // We are idle, so the next poll should be the last.
-      assert!(match isolate.poll_unpin(cx) {
+      assert!(match isolate.as_fut().poll_unpin(cx) {
         Poll::Ready(Ok(_)) => true,
         _ => false,
       });
@@ -929,7 +936,7 @@ pub mod tests {
       assert_eq!(dispatch_count.load(Ordering::Relaxed), 1);
       // The above op never finish, but isolate can finish
       // because the op is an unreffed async op.
-      assert!(match isolate.poll_unpin(cx) {
+      assert!(match isolate.as_fut().poll_unpin(cx) {
         Poll::Ready(Ok(_)) => true,
         _ => false,
       });
@@ -1058,7 +1065,7 @@ pub mod tests {
          "#,
       ));
       assert_eq!(dispatch_count.load(Ordering::Relaxed), 1);
-      assert!(match isolate.poll_unpin(cx) {
+      assert!(match isolate.as_fut().poll_unpin(cx) {
         Poll::Ready(Ok(_)) => true,
         _ => false,
       });
@@ -1089,7 +1096,7 @@ pub mod tests {
          "#,
       ));
       assert_eq!(dispatch_count.load(Ordering::Relaxed), 1);
-      poll_until_ready(&mut isolate, 3).unwrap();
+      poll_until_ready(isolate.as_fut(), 3).unwrap();
       js_check(isolate.execute("check.js", "assert(asyncRecv == 1);"));
     });
   }
@@ -1120,7 +1127,7 @@ pub mod tests {
          "#,
       ));
       assert_eq!(dispatch_count.load(Ordering::Relaxed), 2);
-      poll_until_ready(&mut isolate, 3).unwrap();
+      poll_until_ready(isolate.as_fut(), 3).unwrap();
       js_check(isolate.execute("check.js", "assert(asyncRecv == 2);"));
     });
   }
@@ -1141,7 +1148,7 @@ pub mod tests {
           assert(String(thrown) === "TypeError: Unknown op id: 100");
          "#,
       ));
-      if let Poll::Ready(Err(_)) = isolate.poll_unpin(&mut cx) {
+      if let Poll::Ready(Err(_)) = isolate.as_fut().poll_unpin(&mut cx) {
         unreachable!();
       }
     });
@@ -1157,7 +1164,7 @@ pub mod tests {
           include_str!("shared_queue_test.js"),
         ),
       );
-      if let Poll::Ready(Err(_)) = isolate.poll_unpin(&mut cx) {
+      if let Poll::Ready(Err(_)) = isolate.as_fut().poll_unpin(&mut cx) {
         unreachable!();
       }
     });
