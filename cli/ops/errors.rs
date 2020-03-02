@@ -35,7 +35,7 @@ fn op_apply_source_map(
 
   let mut mappings_map: CachedMaps = HashMap::new();
   let (orig_filename, orig_line, orig_column) = get_orig_position(
-    args.filename,
+    &args.filename,
     args.line.into(),
     args.column.into(),
     &mut mappings_map,

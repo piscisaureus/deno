@@ -23,8 +23,6 @@ use futures::Future;
 use libc::c_void;
 use std::collections::HashMap;
 use std::convert::From;
-use std::error::Error;
-use std::fmt;
 use std::mem::forget;
 use std::ops::{Deref, DerefMut};
 use std::option::Option;
@@ -603,14 +601,6 @@ fn async_op_response<'s>(
   }
 }
 
-pub(crate) fn attach_handle_to_error(
-  scope: &mut impl v8::InIsolate,
-  err: ErrBox,
-  handle: v8::Local<v8::Value>,
-) -> ErrBox {
-  ErrWithV8Handle::new(scope, err, handle).into()
-}
-
 pub(crate) fn exception_to_err_result<'s, T>(
   scope: &mut impl v8::ToLocal<'s>,
   exception: v8::Local<v8::Value>,
@@ -1123,44 +1113,5 @@ pub mod tests {
     let startup_data = StartupData::OwnedSnapshot(snapshot);
     let mut isolate2 = Isolate::new(startup_data, false);
     js_check(isolate2.execute("check.js", "if (a != 3) throw Error('x')"));
-  }
-}
-
-// TODO(piscisaureus): rusty_v8 should implement the Error trait on
-// values of type v8::Global<T>.
-pub struct ErrWithV8Handle {
-  err: ErrBox,
-  handle: v8::Global<v8::Value>,
-}
-
-impl ErrWithV8Handle {
-  pub fn new(
-    scope: &mut impl v8::InIsolate,
-    err: ErrBox,
-    handle: v8::Local<v8::Value>,
-  ) -> Self {
-    let handle = v8::Global::new_from(scope, handle);
-    Self { err, handle }
-  }
-
-  pub fn get_handle(&self) -> &v8::Global<v8::Value> {
-    &self.handle
-  }
-}
-
-unsafe impl Send for ErrWithV8Handle {}
-unsafe impl Sync for ErrWithV8Handle {}
-
-impl Error for ErrWithV8Handle {}
-
-impl fmt::Display for ErrWithV8Handle {
-  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-    self.err.fmt(f)
-  }
-}
-
-impl fmt::Debug for ErrWithV8Handle {
-  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-    self.err.fmt(f)
   }
 }

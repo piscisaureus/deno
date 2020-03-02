@@ -19,8 +19,8 @@ use std::fmt;
 /// A `JSError` represents an exception coming from V8, with stack frames and
 /// line numbers. The deno_cli crate defines another `JSError` type, which wraps
 /// the one defined here, that adds source map support and colorful formatting.  
-#[derive(Debug, PartialEq, Clone)]
 pub struct JSError {
+  pub exception: v8::Global<v8::Value>,
   pub message: String,
   pub source_line: Option<String>,
   pub script_resource_name: Option<String>,
@@ -58,6 +58,7 @@ impl JSError {
     let msg = v8::Exception::create_message(scope, exception);
 
     Self {
+      exception: v8::Global::new_from(scope, exception),
       message: msg.get(scope).to_rust_string_lossy(scope),
       script_resource_name: msg
         .get_script_resource_name(scope)
@@ -105,7 +106,33 @@ impl JSError {
   }
 }
 
+// TODO(piscisaureus): Evaluate whether this is actually safe or not.
+// Likely, `v8::Global<T>` could safely implement `Send` and `Sync` since
+// their internals cannot be accessed without converting the global handle to a
+// local handle first, which requires the caller to provide a scope object.
+unsafe impl Send for JSError {}
+unsafe impl Sync for JSError {}
+
 impl Error for JSError {}
+impl Eq for JSError {}
+
+impl PartialEq for JSError {
+  fn eq(&self, other: &Self) -> bool {
+    self.message.eq(&other.message)
+      && self.source_line.eq(&other.source_line)
+      && self.script_resource_name.eq(&other.script_resource_name)
+      && self.line_number.eq(&other.line_number)
+      && self.start_column.eq(&other.start_column)
+      && self.end_column.eq(&other.end_column)
+      && self.frames.eq(&other.frames)
+  }
+}
+
+impl fmt::Debug for JSError {
+  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    <Self as fmt::Display>::fmt(self, f)
+  }
+}
 
 fn format_source_loc(
   script_name: &str,
@@ -176,6 +203,7 @@ mod tests {
   #[test]
   fn js_error_to_string() {
     let js_error = JSError {
+      exception: v8::Global::new(),
       message: "Error: foo bar".to_string(),
       source_line: None,
       script_resource_name: None,

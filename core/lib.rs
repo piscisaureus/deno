@@ -21,8 +21,6 @@ mod plugins;
 mod resources;
 mod shared_queue;
 
-use rusty_v8 as v8;
-
 pub use crate::any_error::*;
 pub use crate::es_isolate::*;
 pub use crate::flags::v8_set_flags;
@@ -33,6 +31,7 @@ pub use crate::modules::*;
 pub use crate::ops::*;
 pub use crate::plugins::*;
 pub use crate::resources::*;
+pub use rusty_v8 as v8;
 
 pub fn v8_version() -> &'static str {
   v8::V8::get_version()

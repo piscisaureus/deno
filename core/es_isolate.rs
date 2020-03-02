@@ -9,7 +9,6 @@ use rusty_v8 as v8;
 use crate::any_error::ErrBox;
 use crate::bindings;
 use crate::futures::FutureExt;
-use crate::ErrWithV8Handle;
 use futures::ready;
 use futures::stream::FuturesUnordered;
 use futures::stream::StreamExt;
@@ -25,16 +24,16 @@ use std::rc::Rc;
 use std::task::Context;
 use std::task::Poll;
 
-use crate::isolate::attach_handle_to_error;
-use crate::isolate::exception_to_err_result;
-use crate::isolate::Isolate;
-use crate::isolate::StartupData;
-use crate::module_specifier::ModuleSpecifier;
-use crate::modules::LoadState;
-use crate::modules::ModuleLoader;
-use crate::modules::ModuleSource;
-use crate::modules::Modules;
-use crate::modules::RecursiveModuleLoad;
+use crate::exception_to_err_result;
+use crate::Isolate;
+use crate::JSError;
+use crate::LoadState;
+use crate::ModuleLoader;
+use crate::ModuleSource;
+use crate::ModuleSpecifier;
+use crate::Modules;
+use crate::RecursiveModuleLoad;
+use crate::StartupData;
 
 pub type ModuleId = i32;
 pub type DynImportId = i32;
@@ -255,7 +254,6 @@ impl EsIsolate {
       v8::ModuleStatus::Errored => {
         let exception = module.get_exception();
         exception_to_err_result(scope, exception, js_error_create_fn)
-          .map_err(|err| attach_handle_to_error(scope, err, exception))
       }
       other => panic!("Unexpected module status {:?}", other),
     }
@@ -316,8 +314,8 @@ impl EsIsolate {
     resolver_handle.reset(scope);
 
     let exception = err
-      .downcast_ref::<ErrWithV8Handle>()
-      .and_then(|err| err.get_handle().get(scope))
+      .downcast_ref::<JSError>()
+      .and_then(|err| err.exception.get(scope))
       .unwrap_or_else(|| {
         let message = err.to_string();
         let message = v8::String::new(scope, &message).unwrap();

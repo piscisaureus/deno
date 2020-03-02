@@ -170,7 +170,7 @@ impl JSError {
     core_js_error: deno_core::JSError,
     source_map_getter: &impl SourceMapGetter,
   ) -> ErrBox {
-    let core_js_error = apply_source_map(&core_js_error, source_map_getter);
+    let core_js_error = apply_source_map(core_js_error, source_map_getter);
     let js_error = Self(core_js_error);
     ErrBox::from(js_error)
   }
@@ -252,10 +252,12 @@ impl Error for JSError {}
 mod tests {
   use super::*;
   use crate::colors::strip_ansi_codes;
+  use deno_core::v8;
 
   #[test]
   fn js_error_to_string() {
     let core_js_error = deno_core::JSError {
+      exception: v8::Global::new(),
       message: "Error: foo bar".to_string(),
       source_line: None,
       script_resource_name: None,

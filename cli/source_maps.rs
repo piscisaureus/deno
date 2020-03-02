@@ -90,20 +90,20 @@ fn builtin_source_map(script_name: &str) -> Option<Vec<u8>> {
 /// names and line/column numbers point to the location in the original source,
 /// rather than the transpiled source code.
 pub fn apply_source_map<G: SourceMapGetter>(
-  js_error: &deno_core::JSError,
+  js_error: deno_core::JSError,
   getter: &G,
 ) -> deno_core::JSError {
   let mut mappings_map: CachedMaps = HashMap::new();
 
-  let mut frames = Vec::<JSStackFrame>::new();
-  for frame in &js_error.frames {
-    let f = frame_apply_source_map(&frame, &mut mappings_map, getter);
-    frames.push(f);
-  }
+  let frames = js_error
+    .frames
+    .into_iter()
+    .map(|frame| frame_apply_source_map(frame, &mut mappings_map, getter))
+    .collect::<Vec<_>>();
 
   let (script_resource_name, line_number, start_column) =
     get_maybe_orig_position(
-      js_error.script_resource_name.clone(),
+      js_error.script_resource_name.as_ref().map(|s| s.as_str()),
       js_error.line_number,
       js_error.start_column,
       &mut mappings_map,
@@ -129,15 +129,16 @@ pub fn apply_source_map<G: SourceMapGetter>(
       if js_error.source_line.is_some() && script_resource_name.is_some() =>
     {
       getter.get_source_line(
-        &js_error.script_resource_name.clone().unwrap(),
+        js_error.script_resource_name.as_ref().unwrap(),
         ln as usize,
       )
     }
-    _ => js_error.source_line.clone(),
+    _ => js_error.source_line,
   };
 
   deno_core::JSError {
-    message: js_error.message.clone(),
+    exception: js_error.exception,
+    message: js_error.message,
     source_line,
     script_resource_name,
     line_number,
@@ -148,12 +149,12 @@ pub fn apply_source_map<G: SourceMapGetter>(
 }
 
 fn frame_apply_source_map<G: SourceMapGetter>(
-  frame: &JSStackFrame,
+  frame: JSStackFrame,
   mappings_map: &mut CachedMaps,
   getter: &G,
 ) -> JSStackFrame {
   let (script_name, line_number, column) = get_orig_position(
-    frame.script_name.to_string(),
+    &frame.script_name,
     frame.line_number,
     frame.column,
     mappings_map,
@@ -162,7 +163,7 @@ fn frame_apply_source_map<G: SourceMapGetter>(
 
   JSStackFrame {
     script_name,
-    function_name: frame.function_name.clone(),
+    function_name: frame.function_name,
     line_number,
     column,
     is_eval: frame.is_eval,
@@ -171,7 +172,7 @@ fn frame_apply_source_map<G: SourceMapGetter>(
 }
 
 fn get_maybe_orig_position<G: SourceMapGetter>(
-  script_name: Option<String>,
+  script_name: Option<&str>,
   line_number: Option<i64>,
   column: Option<i64>,
   mappings_map: &mut CachedMaps,
@@ -193,36 +194,32 @@ fn get_maybe_orig_position<G: SourceMapGetter>(
 }
 
 pub fn get_orig_position<G: SourceMapGetter>(
-  script_name: String,
+  script_name: &str,
   line_number: i64,
   column: i64,
   mappings_map: &mut CachedMaps,
   getter: &G,
 ) -> (String, i64, i64) {
-  let maybe_sm = get_mappings(&script_name, mappings_map, getter);
-  let default_pos = (script_name, line_number, column);
-
-  match maybe_sm {
-    None => default_pos,
-    Some(sm) => match sm.mappings.original_location_for(
-      line_number as u32,
-      column as u32,
-      Bias::default(),
-    ) {
-      None => default_pos,
-      Some(mapping) => match &mapping.original {
-        None => default_pos,
-        Some(original) => {
-          let orig_source = sm.sources[original.source as usize].clone();
+  get_mappings(script_name, mappings_map, getter)
+    .as_ref()
+    .and_then(|source_map| {
+      source_map
+        .mappings
+        .original_location_for(
+          line_number as u32,
+          column as u32,
+          Bias::default(),
+        )
+        .and_then(|mapping| mapping.original.as_ref())
+        .map(|original| {
           (
-            orig_source,
+            source_map.sources[original.source as usize].clone(),
             i64::from(original.original_line),
             i64::from(original.original_column),
           )
-        }
-      },
-    },
-  }
+        })
+    })
+    .unwrap_or_else(|| (script_name.to_owned(), line_number, column))
 }
 
 fn get_mappings<'a, G: SourceMapGetter>(
@@ -251,6 +248,7 @@ fn parse_map_string<G: SourceMapGetter>(
 #[cfg(test)]
 mod tests {
   use super::*;
+  use deno_core::v8;
 
   struct MockSourceMapGetter {}
 
@@ -294,6 +292,7 @@ mod tests {
   #[test]
   fn apply_source_map_1() {
     let core_js_error = deno_core::JSError {
+      exception: v8::Global::new(),
       message: "Error: foo bar".to_string(),
       source_line: None,
       script_resource_name: None,
@@ -328,8 +327,9 @@ mod tests {
       ],
     };
     let getter = MockSourceMapGetter {};
-    let actual = apply_source_map(&core_js_error, &getter);
+    let actual = apply_source_map(core_js_error, &getter);
     let expected = deno_core::JSError {
+      exception: v8::Global::new(),
       message: "Error: foo bar".to_string(),
       source_line: None,
       script_resource_name: None,
@@ -368,7 +368,8 @@ mod tests {
 
   #[test]
   fn apply_source_map_2() {
-    let e = deno_core::JSError {
+    let core_js_error = deno_core::JSError {
+      exception: v8::Global::new(),
       message: "TypeError: baz".to_string(),
       source_line: None,
       script_resource_name: None,
@@ -385,7 +386,7 @@ mod tests {
       }],
     };
     let getter = MockSourceMapGetter {};
-    let actual = apply_source_map(&e, &getter);
+    let actual = apply_source_map(core_js_error, &getter);
     assert_eq!(actual.message, "TypeError: baz");
     // Because this is accessing the live bundle, this test might be more fragile
     assert_eq!(actual.frames.len(), 1);
@@ -394,7 +395,8 @@ mod tests {
 
   #[test]
   fn apply_source_map_line() {
-    let e = deno_core::JSError {
+    let core_js_error = deno_core::JSError {
+      exception: v8::Global::new(),
       message: "TypeError: baz".to_string(),
       source_line: Some("foo".to_string()),
       script_resource_name: Some("foo_bar.ts".to_string()),
@@ -404,7 +406,7 @@ mod tests {
       frames: vec![],
     };
     let getter = MockSourceMapGetter {};
-    let actual = apply_source_map(&e, &getter);
+    let actual = apply_source_map(core_js_error, &getter);
     assert_eq!(actual.source_line, Some("console.log('foo');".to_string()));
   }
 
