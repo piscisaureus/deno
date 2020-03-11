@@ -1,5 +1,4 @@
 use std::borrow::Borrow;
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::future::Future;
 use std::hash::Hash;
@@ -8,7 +7,6 @@ use std::pin::Pin;
 use std::rc::Rc;
 
 use futures::future::Shared;
-use futures::future::TryFuture;
 use futures::FutureExt;
 use futures::TryFutureExt;
 use rusty_v8 as v8;
@@ -18,7 +16,6 @@ use crate::bindings::module_origin;
 use crate::modules::ModuleSource as LegacyModuleSource;
 use crate::ErrBox;
 use crate::ModuleLoader;
-use crate::ModuleSpecifier;
 
 pub enum ImportError {
   Rust(ErrBox),
@@ -27,19 +24,31 @@ pub enum ImportError {
 
 pub type ImportResult<T> = Result<Rc<T>, Rc<ImportError>>;
 
+#[derive(Clone)]
 pub struct Module {
   // URL after resolving the import specifier to an absolute URL, but without
   // taking into any HTTP redirects.
   resolved_url: Url,
   source: ModuleSourceFuture,
-  compiled: ModuleCompiledFuture,
+  // Future that resolves to the global v8::Module handle of the module after
+  // compiling the source code. This future becomes ready after the module
+  // has just been compiled; it may not be instantiated or evaluated yet.
+  handle: ModuleHandleFuture,
+  // Future that resolves to a Vec<Url> containing the URLs of dependencies
+  // imported by this module.
+  import_urls: ModuleImportUrlsFuture,
 }
 
 type ModuleSourceFuture =
   Shared<Pin<Box<dyn Future<Output = ImportResult<ModuleSource>>>>>;
 
-type ModuleCompiledFuture =
+type ModuleHandleFuture =
   Shared<Pin<Box<dyn Future<Output = ImportResult<v8::Global<v8::Module>>>>>>;
+
+type ModuleImportUrlsFuture = futures::future::Shared<
+  Pin<Box<dyn Future<Output = ImportResult<Vec<Url>>>>>,
+>;
+
 impl Borrow<Url> for Module {
   fn borrow(&self) -> &Url {
     &self.resolved_url
@@ -69,7 +78,7 @@ pub struct ModuleSource {
   // relative URLs, the fetched URL will be used as the basis for their
   // resolution.
   fetched_url: Url,
-  // JavaScript source code that will be compiled by V8.
+  // JavaScript source code that will be handle by V8.
   js_source_code: String,
 }
 
@@ -116,11 +125,14 @@ impl ModuleImporter {
   ) -> Module {
     let source =
       Self::new_module_source_future(loader, resolved_url, is_dyn_import);
-    let compiled = Self::new_module_compiled_future(loader, &source);
+    let handle = Self::new_module_handle_future(loader, &source);
+    let import_urls =
+      Self::new_module_import_urls_future(loader, &source, &handle);
     Module {
       resolved_url: resolved_url.clone(),
       source,
-      compiled,
+      handle,
+      import_urls,
     }
   }
 
@@ -142,10 +154,10 @@ impl ModuleImporter {
       .shared()
   }
 
-  fn new_module_compiled_future(
+  fn new_module_handle_future(
     loader: &Rc<dyn ModuleLoader>,
     source: &ModuleSourceFuture,
-  ) -> ModuleCompiledFuture {
+  ) -> ModuleHandleFuture {
     let loader = loader.clone();
     let source = source.clone();
 
@@ -177,6 +189,46 @@ impl ModuleImporter {
         .ok_or_else(|| tc.exception().unwrap())
         .map_err(|exception| v8::Global::new_from(scope, exception))
         .map_err(ImportError::JS)
+        .map_err(Rc::new)
+    }
+    .boxed_local()
+    .shared()
+  }
+
+  fn new_module_import_urls_future(
+    loader: &Rc<dyn ModuleLoader>,
+    source: &ModuleSourceFuture,
+    handle: &ModuleHandleFuture,
+  ) -> ModuleImportUrlsFuture {
+    let loader = loader.clone();
+    let source = source.clone();
+    let handle = handle.clone();
+
+    async move {
+      let handle = handle.await?;
+      let source = source.await?;
+
+      #[allow(clippy::transmute_ptr_to_ptr)]
+      #[allow(mutable_transmutes)]
+      let isolate: &mut v8::OwnedIsolate =
+        unsafe { std::mem::transmute(loader.get_isolate()) };
+
+      let mut hs = v8::HandleScope::new(isolate);
+      let scope = hs.enter();
+
+      let handle = handle.get(scope).unwrap();
+      let referrer = source.fetched_url.as_str();
+
+      (0..handle.get_module_requests_length())
+        .map(|i| {
+          let specifier =
+            handle.get_module_request(i).to_rust_string_lossy(scope);
+          let url: Url = loader.resolve(&specifier, referrer, false)?.into();
+          Ok(url)
+        })
+        .collect::<Result<Vec<Url>, ErrBox>>()
+        .map(Rc::new)
+        .map_err(ImportError::Rust)
         .map_err(Rc::new)
     }
     .boxed_local()
