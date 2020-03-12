@@ -31,6 +31,7 @@ pub use crate::isolate::*;
 pub use crate::js_errors::*;
 pub use crate::module_importer::*;
 pub use crate::module_specifier::*;
+pub use crate::modules::ModuleSource;
 pub use crate::modules::*;
 pub use crate::ops::*;
 pub use crate::plugins::*;

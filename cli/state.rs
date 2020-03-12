@@ -9,7 +9,6 @@ use crate::ops::JsonOp;
 use crate::ops::MinimalOp;
 use crate::permissions::DenoPermissions;
 use crate::worker::WorkerHandle;
-use deno_core::v8;
 use deno_core::Buf;
 use deno_core::CoreOp;
 use deno_core::ErrBox;

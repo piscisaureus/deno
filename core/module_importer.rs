@@ -6,7 +6,6 @@ use std::collections::HashSet;
 use std::future::Future;
 use std::hash::Hash;
 use std::hash::Hasher;
-use std::ops::Deref;
 use std::pin::Pin;
 use std::rc::Rc;
 
