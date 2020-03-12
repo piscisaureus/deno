@@ -268,27 +268,23 @@ impl ModuleImporter {
     deps_urls: &ModuleDepsUrlsFuture,
   ) -> ModuleDepsCompiledRecursivelyFuture {
     let cache = self.clone();
-    let deps_urls = deps_urls.clone();
-
-    async move {
-      let deps_urls = deps_urls.await?;
-
-      let deps_compiled = deps_urls
-        .iter()
-        .map(|url| {
-          cache
-            .modules()
-            .get(url)
-            .unwrap()
-            .deps_compiled_recursively
-            .clone()
-        })
-        .collect::<FuturesUnordered<_>>()
-        .fold(Ok(()), |acc, r| async move { acc.and(r) });
-
-      unimplemented!()
-    }
-    .boxed_local()
-    .shared()
+    deps_urls
+      .clone()
+      .and_then(move |dep_urls| {
+        dep_urls
+          .iter()
+          .map(|dep_url| {
+            cache
+              .modules()
+              .get(dep_url)
+              .unwrap()
+              .deps_compiled_recursively
+              .clone()
+          })
+          .collect::<FuturesUnordered<_>>()
+          .fold(Ok(()), |acc, r| async move { acc.and(r) })
+      })
+      .boxed_local()
+      .shared()
   }
 }
