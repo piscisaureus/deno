@@ -1,13 +1,19 @@
 use std::borrow::Borrow;
+use std::cell::Ref;
+use std::cell::RefCell;
+use std::cell::RefMut;
 use std::collections::HashSet;
 use std::future::Future;
 use std::hash::Hash;
 use std::hash::Hasher;
+use std::ops::Deref;
 use std::pin::Pin;
 use std::rc::Rc;
 
 use futures::future::Shared;
+use futures::stream::FuturesUnordered;
 use futures::FutureExt;
+use futures::StreamExt;
 use futures::TryFutureExt;
 use rusty_v8 as v8;
 use url::Url;
@@ -36,7 +42,10 @@ pub struct Module {
   handle: ModuleHandleFuture,
   // Future that resolves to a Vec<Url> containing the URLs of dependencies
   // imported by this module.
-  import_urls: ModuleImportUrlsFuture,
+  deps_urls: ModuleDepsUrlsFuture,
+  // Future that resolves when the source for all dependencies has been fetched
+  // and compiled, so that their v8::Module handle is in the cache.
+  deps_compiled_recursively: ModuleDepsCompiledRecursivelyFuture,
 }
 
 type ModuleSourceFuture =
@@ -45,9 +54,11 @@ type ModuleSourceFuture =
 type ModuleHandleFuture =
   Shared<Pin<Box<dyn Future<Output = ImportResult<v8::Global<v8::Module>>>>>>;
 
-type ModuleImportUrlsFuture = futures::future::Shared<
-  Pin<Box<dyn Future<Output = ImportResult<Vec<Url>>>>>,
->;
+type ModuleDepsUrlsFuture =
+  Shared<Pin<Box<dyn Future<Output = ImportResult<Vec<Url>>>>>>;
+
+type ModuleDepsCompiledRecursivelyFuture =
+  Shared<Pin<Box<dyn Future<Output = Result<(), Rc<ImportError>>>>>>;
 
 impl Borrow<Url> for Module {
   fn borrow(&self) -> &Url {
@@ -91,60 +102,76 @@ impl From<LegacyModuleSource> for ModuleSource {
   }
 }
 
-pub struct ModuleImporter {
+pub struct ModuleImporterInner {
   loader: Rc<dyn ModuleLoader>,
   modules: HashSet<Module>,
 }
 
+#[derive(Clone)]
+pub struct ModuleImporter(Rc<RefCell<ModuleImporterInner>>);
+
 impl ModuleImporter {
   pub fn new(loader: Rc<dyn ModuleLoader>) -> Self {
-    Self {
+    Self(Rc::new(RefCell::new(ModuleImporterInner {
       loader,
       modules: HashSet::new(),
-    }
+    })))
   }
 
   // The `is_dyn_import` flag is forwarded to the module loader if the module's
   // source hasn't been loaded yet. If the module already exists in the module
   // set, it is ignored.
-  pub fn get(&mut self, resolved_url: &Url, is_dyn_import: bool) -> &Module {
+  pub fn get<'a>(
+    &'a self,
+    resolved_url: &Url,
+    is_dyn_import: bool,
+  ) -> Ref<'a, Module> {
     // Note: future versions of Rust will likely implement a method like
     // `get_or_insert_with()` or `get_or_insert_owned()` on HashSet. It would
     // be more efficient to use these when they become available.
-    if !self.modules.contains(resolved_url) {
-      let module = Self::new_module(&self.loader, resolved_url, is_dyn_import);
-      self.modules.insert(module);
+    if self.modules().contains(resolved_url) {
+      let module = self.new_module(resolved_url, is_dyn_import);
+      self.modules().insert(module);
     }
-    self.modules.get(resolved_url).unwrap()
+
+    Ref::map(RefCell::borrow(&self.0), |inner| {
+      inner.modules.get(resolved_url).unwrap()
+    })
   }
 
-  pub fn new_module(
-    loader: &Rc<dyn ModuleLoader>,
-    resolved_url: &Url,
-    is_dyn_import: bool,
-  ) -> Module {
-    let source =
-      Self::new_module_source_future(loader, resolved_url, is_dyn_import);
-    let handle = Self::new_module_handle_future(loader, &source);
-    let import_urls =
-      Self::new_module_import_urls_future(loader, &source, &handle);
+  pub fn new_module(&self, resolved_url: &Url, is_dyn_import: bool) -> Module {
+    let source = self.new_module_source_future(resolved_url, is_dyn_import);
+    let handle = self.new_module_handle_future(&source);
+    let deps_urls = self.new_module_deps_urls_future(&source, &handle);
+    let deps_compiled_recursively =
+      self.new_module_deps_compiled_recursively_future(&deps_urls);
+
     Module {
       resolved_url: resolved_url.clone(),
       source,
       handle,
-      import_urls,
+      deps_urls,
+      deps_compiled_recursively,
     }
   }
 
+  fn loader(&self) -> Ref<Rc<dyn ModuleLoader>> {
+    Ref::map(RefCell::borrow(&self.0), |inner| &inner.loader)
+  }
+
+  fn modules(&self) -> RefMut<HashSet<Module>> {
+    RefMut::map(RefCell::borrow_mut(&self.0), |inner| &mut inner.modules)
+  }
+
   fn new_module_source_future(
-    loader: &Rc<dyn ModuleLoader>,
+    &self,
     resolved_url: &Url,
     is_dyn_import: bool,
   ) -> ModuleSourceFuture {
-    let loader = loader.clone();
     let module_specifier = resolved_url.clone().into();
 
-    loader
+    self
+      .loader()
       .load(&module_specifier, None, is_dyn_import)
       .map_ok(ModuleSource::from)
       .map_ok(Rc::new)
@@ -155,10 +182,10 @@ impl ModuleImporter {
   }
 
   fn new_module_handle_future(
-    loader: &Rc<dyn ModuleLoader>,
+    &self,
     source: &ModuleSourceFuture,
   ) -> ModuleHandleFuture {
-    let loader = loader.clone();
+    let cache = self.clone();
     let source = source.clone();
 
     async move {
@@ -167,7 +194,7 @@ impl ModuleImporter {
       #[allow(clippy::transmute_ptr_to_ptr)]
       #[allow(mutable_transmutes)]
       let isolate: &mut v8::OwnedIsolate =
-        unsafe { std::mem::transmute(loader.get_isolate()) };
+        unsafe { std::mem::transmute(cache.loader().get_isolate()) };
 
       let mut hs = v8::HandleScope::new(isolate);
       let scope = hs.enter();
@@ -195,12 +222,12 @@ impl ModuleImporter {
     .shared()
   }
 
-  fn new_module_import_urls_future(
-    loader: &Rc<dyn ModuleLoader>,
+  fn new_module_deps_urls_future(
+    &self,
     source: &ModuleSourceFuture,
     handle: &ModuleHandleFuture,
-  ) -> ModuleImportUrlsFuture {
-    let loader = loader.clone();
+  ) -> ModuleDepsUrlsFuture {
+    let cache = self.clone();
     let source = source.clone();
     let handle = handle.clone();
 
@@ -211,7 +238,7 @@ impl ModuleImporter {
       #[allow(clippy::transmute_ptr_to_ptr)]
       #[allow(mutable_transmutes)]
       let isolate: &mut v8::OwnedIsolate =
-        unsafe { std::mem::transmute(loader.get_isolate()) };
+        unsafe { std::mem::transmute(cache.loader().get_isolate()) };
 
       let mut hs = v8::HandleScope::new(isolate);
       let scope = hs.enter();
@@ -223,13 +250,43 @@ impl ModuleImporter {
         .map(|i| {
           let specifier =
             handle.get_module_request(i).to_rust_string_lossy(scope);
-          let url: Url = loader.resolve(&specifier, referrer, false)?.into();
+          let url: Url =
+            cache.loader().resolve(&specifier, referrer, false)?.into();
           Ok(url)
         })
         .collect::<Result<Vec<Url>, ErrBox>>()
         .map(Rc::new)
         .map_err(ImportError::Rust)
         .map_err(Rc::new)
+    }
+    .boxed_local()
+    .shared()
+  }
+
+  fn new_module_deps_compiled_recursively_future(
+    &self,
+    deps_urls: &ModuleDepsUrlsFuture,
+  ) -> ModuleDepsCompiledRecursivelyFuture {
+    let cache = self.clone();
+    let deps_urls = deps_urls.clone();
+
+    async move {
+      let deps_urls = deps_urls.await?;
+
+      let deps_compiled = deps_urls
+        .iter()
+        .map(|url| {
+          cache
+            .modules()
+            .get(url)
+            .unwrap()
+            .deps_compiled_recursively
+            .clone()
+        })
+        .collect::<FuturesUnordered<_>>()
+        .fold(Ok(()), |acc, r| async move { acc.and(r) });
+
+      unimplemented!()
     }
     .boxed_local()
     .shared()
