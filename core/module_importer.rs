@@ -3,10 +3,12 @@ use std::cell::Ref;
 use std::cell::RefCell;
 use std::cell::RefMut;
 use std::collections::HashSet;
+use std::ffi::c_void;
 use std::future::Future;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::pin::Pin;
+use std::ptr::null_mut;
 use std::rc::Rc;
 
 use futures::future::Shared;
@@ -58,6 +60,9 @@ type ModuleDepsUrlsFuture =
 
 type ModuleDepsCompiledRecursivelyFuture =
   Shared<Pin<Box<dyn Future<Output = Result<(), Rc<ImportError>>>>>>;
+
+type ModuleEvaluationFuture =
+  Shared<Pin<Box<dyn Future<Output = ImportResult<v8::Global<v8::Module>>>>>>;
 
 impl Borrow<Url> for Module {
   fn borrow(&self) -> &Url {
@@ -285,5 +290,81 @@ impl ModuleImporter {
       })
       .boxed_local()
       .shared()
+  }
+
+  const ACTIVE_IMPORTER_KEY: u32 = 2;
+
+  fn new_module_evaluation_future(
+    &self,
+    handle: &ModuleHandleFuture,
+    deps_compiled_recursively: &ModuleDepsCompiledRecursivelyFuture,
+  ) -> ModuleEvaluationFuture {
+    let cache = self.clone();
+    let handle = handle.clone();
+    let deps_compiled_recursively = deps_compiled_recursively.clone();
+
+    async {
+      let handle = handle.await?;
+      let deps_compiled_recursively = deps_compiled_recursively.await?;
+
+      let context = cache.loader().get_context();
+      #[allow(clippy::transmute_ptr_to_ptr)]
+      #[allow(mutable_transmutes)]
+      let isolate: &mut v8::OwnedIsolate =
+        unsafe { std::mem::transmute(cache.loader().get_isolate()) };
+      let mut hs = v8::HandleScope::new(isolate);
+      let scope = hs.enter();
+
+      let handle = handle.get(scope).unwrap();
+      let context = context.get(scope).unwrap();
+
+      unsafe {
+        assert_eq!(
+          scope.isolate().get_data(Self::ACTIVE_IMPORTER_KEY),
+          null_mut()
+        );
+        scope.isolate().set_data(
+          Self::ACTIVE_IMPORTER_KEY,
+          &cache as *const _ as *mut ModuleImporter as *mut c_void,
+        );
+      }
+
+      let r = handle
+        .instantiate_module(context, Self::resolve_callback)
+        .unwrap();
+      assert_eq!(r, true);
+
+      unsafe {
+        scope
+          .isolate()
+          .set_data(Self::ACTIVE_IMPORTER_KEY, null_mut());
+      }
+
+    
+      unimplemented!();
+    }
+    .boxed_local()
+    .shared()
+  }
+
+  fn resolve_callback<'s>(
+    context: v8::Local<'s, v8::Context>,
+    specifier: v8::Local<'s, v8::String>,
+    referrer: v8::Local<'s, v8::Module>,
+  ) -> Option<v8::Local<'s, v8::Module>> {
+    let mut scope = v8::CallbackScope::new_escapable(context);
+    let mut scope = v8::EscapableHandleScope::new(scope.enter());
+    let scope = scope.enter();
+
+    let cache = unsafe {
+        &*(scope.isolate().get_data(Self::ACTIVE_IMPORTER_KEY) as *const _ as *const ModuleImporter)
+    };
+    let specifier =
+    specifier.to_rust_string_lossy(scope);
+    let referrer = referrer
+  let url: Url =
+    cache.loader().resolve(&specifier, referrer, false)?.into();
+
+    unimplemented!();
   }
 }
