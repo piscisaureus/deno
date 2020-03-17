@@ -8,4 +8,4 @@ members = [
 ]
 
 [replace]
-"rusty_v8:0.3.4" = { path = 'd:/v8rs' }
+"rusty_v8:0.3.6" = { path = 'd:/v8rs' }

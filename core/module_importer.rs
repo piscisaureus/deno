@@ -108,7 +108,10 @@ impl From<LegacyModuleSource> for ModuleSource {
 
 pub struct ModuleImporterInner {
   loader: Rc<dyn ModuleLoader>,
-  modules: HashSet<Module>,
+  modules_by_resolved_url: HashSet<Module>,
+  // TODO(piscisaureus): Use a HashMap instead of a Vec. This requires rusty_v8
+  // to implement Eq and Hash for `Global<Module>`.
+  fetched_urls_by_handle: Vec<(v8::Global<v8::Module>, Url)>,
 }
 
 #[derive(Clone)]
@@ -118,7 +121,8 @@ impl ModuleImporter {
   pub fn new(loader: Rc<dyn ModuleLoader>) -> Self {
     Self(Rc::new(RefCell::new(ModuleImporterInner {
       loader,
-      modules: HashSet::new(),
+      modules_by_resolved_url: HashSet::new(),
+      fetched_urls_by_handle: Vec::new(),
     })))
   }
 
@@ -133,13 +137,13 @@ impl ModuleImporter {
     // Note: future versions of Rust will likely implement a method like
     // `get_or_insert_with()` or `get_or_insert_owned()` on HashSet. It would
     // be more efficient to use these when they become available.
-    if self.modules().contains(resolved_url) {
+    if self.modules_by_resolved_url().contains(resolved_url) {
       let module = self.new_module(resolved_url, is_dyn_import);
-      self.modules().insert(module);
+      self.modules_by_resolved_url().insert(module);
     }
 
     Ref::map(RefCell::borrow(&self.0), |inner| {
-      inner.modules.get(resolved_url).unwrap()
+      inner.modules_by_resolved_url.get(resolved_url).unwrap()
     })
   }
 
@@ -163,8 +167,10 @@ impl ModuleImporter {
     Ref::map(RefCell::borrow(&self.0), |inner| &inner.loader)
   }
 
-  fn modules(&self) -> RefMut<HashSet<Module>> {
-    RefMut::map(RefCell::borrow_mut(&self.0), |inner| &mut inner.modules)
+  fn modules_by_resolved_url(&self) -> RefMut<HashSet<Module>> {
+    RefMut::map(RefCell::borrow_mut(&self.0), |inner| {
+      &mut inner.modules_by_resolved_url
+    })
   }
 
   fn new_module_source_future(
@@ -279,7 +285,7 @@ impl ModuleImporter {
           .iter()
           .map(|dep_url| {
             cache
-              .modules()
+              .modules_by_resolved_url()
               .get(dep_url)
               .unwrap()
               .deps_compiled_recursively
@@ -340,7 +346,6 @@ impl ModuleImporter {
           .set_data(Self::ACTIVE_IMPORTER_KEY, null_mut());
       }
 
-    
       unimplemented!();
     }
     .boxed_local()
@@ -357,13 +362,12 @@ impl ModuleImporter {
     let scope = scope.enter();
 
     let cache = unsafe {
-        &*(scope.isolate().get_data(Self::ACTIVE_IMPORTER_KEY) as *const _ as *const ModuleImporter)
+      &*(scope.isolate().get_data(Self::ACTIVE_IMPORTER_KEY) as *const _
+        as *const ModuleImporter)
     };
-    let specifier =
-    specifier.to_rust_string_lossy(scope);
-    let referrer = referrer
-  let url: Url =
-    cache.loader().resolve(&specifier, referrer, false)?.into();
+    let specifier = specifier.to_rust_string_lossy(scope);
+    let referrer = unimplemented!();
+    let url: Url = cache.loader().resolve(&specifier, referrer, false)?.into();
 
     unimplemented!();
   }
