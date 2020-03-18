@@ -6,6 +6,3 @@ members = [
   "deno_typescript",
   "test_plugin"
 ]
-
-[replace]
-"rusty_v8:0.3.6" = { path = 'd:/v8rs' }
