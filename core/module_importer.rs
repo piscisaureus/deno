@@ -29,7 +29,37 @@ pub enum ImportError {
   JS(v8::Global<v8::Value>),
 }
 
+impl ImportError {
+  pub fn as_js_exception<'s>(
+    &self,
+    scope: &mut impl v8::ToLocal<'s>,
+  ) -> v8::Local<'s, v8::Value> {
+    match self {
+      Self::Rust(err) => {
+        let message = v8::String::new(scope, &err.to_string()).unwrap();
+        v8::Exception::type_error(scope, message)
+      }
+      Self::JS(handle) => handle.get(scope).unwrap(),
+    }
+  }
+}
+
 pub type ImportResult<T> = Result<Rc<T>, Rc<ImportError>>;
+
+type ModuleSourceFuture =
+  Shared<Pin<Box<dyn Future<Output = ImportResult<ModuleSource>>>>>;
+
+type ModuleHandleFuture =
+  Shared<Pin<Box<dyn Future<Output = ImportResult<v8::Global<v8::Module>>>>>>;
+
+type ModuleDepsUrlsFuture =
+  Shared<Pin<Box<dyn Future<Output = ImportResult<Vec<Url>>>>>>;
+
+type ModuleDepsCompiledRecursivelyFuture =
+  Shared<Pin<Box<dyn Future<Output = Result<(), Rc<ImportError>>>>>>;
+
+type ModuleEvaluationResultFuture =
+  Shared<Pin<Box<dyn Future<Output = ImportResult<v8::Global<v8::Module>>>>>>;
 
 #[derive(Clone)]
 pub struct Module {
@@ -50,21 +80,6 @@ pub struct Module {
   // Future that resolves to the result of evaluating the module.
   evaluation_result: ModuleEvaluationResultFuture,
 }
-
-type ModuleSourceFuture =
-  Shared<Pin<Box<dyn Future<Output = ImportResult<ModuleSource>>>>>;
-
-type ModuleHandleFuture =
-  Shared<Pin<Box<dyn Future<Output = ImportResult<v8::Global<v8::Module>>>>>>;
-
-type ModuleDepsUrlsFuture =
-  Shared<Pin<Box<dyn Future<Output = ImportResult<Vec<Url>>>>>>;
-
-type ModuleDepsCompiledRecursivelyFuture =
-  Shared<Pin<Box<dyn Future<Output = Result<(), Rc<ImportError>>>>>>;
-
-type ModuleEvaluationResultFuture =
-  Shared<Pin<Box<dyn Future<Output = ImportResult<v8::Global<v8::Module>>>>>>;
 
 impl Borrow<Url> for Module {
   fn borrow(&self) -> &Url {
@@ -136,7 +151,7 @@ impl ModuleImporter {
   // The `is_dyn_import` flag is forwarded to the module loader if the module's
   // source hasn't been loaded yet. If the module already exists in the module
   // set, it is ignored.
-  pub fn get<'a>(
+  pub fn get_or_create_module<'a>(
     &'a self,
     resolved_url: &Url,
     is_dyn_import: bool,
@@ -145,7 +160,7 @@ impl ModuleImporter {
     // `get_or_insert_with()` or `get_or_insert_owned()` on HashSet. It would
     // be more efficient to use these when they become available.
     if self.modules_by_resolved_url().contains(resolved_url) {
-      let module = self.new_module(resolved_url, is_dyn_import);
+      let module = self.create_module(resolved_url, is_dyn_import);
       self.modules_by_resolved_url().insert(module);
     }
 
@@ -154,17 +169,21 @@ impl ModuleImporter {
     })
   }
 
-  pub fn new_module(&self, resolved_url: &Url, is_dyn_import: bool) -> Module {
-    let source = self.new_module_source_future(resolved_url, is_dyn_import);
-    let handle = self.new_module_handle_future(&source);
-    let deps_urls = self.new_module_deps_urls_future(&source, &handle);
+  fn create_module(&self, resolved_url: &Url, is_dyn_import: bool) -> Module {
+    let resolved_url = resolved_url.clone();
+
+    let source = self.create_module_source_future(&resolved_url, is_dyn_import);
+    let handle = self.create_module_handle_future(&source);
+    let deps_urls = self.create_module_deps_urls_future(&source, &handle);
     let deps_compiled_recursively =
-      self.new_module_deps_compiled_recursively_future(&deps_urls);
-    let evaluation_result = self
-      .new_module_evaluation_result_future(&handle, &deps_compiled_recursively);
+      self.create_module_deps_compiled_recursively_future(&deps_urls);
+    let evaluation_result = self.create_module_evaluation_result_future(
+      &handle,
+      &deps_compiled_recursively,
+    );
 
     Module {
-      resolved_url: resolved_url.clone(),
+      resolved_url,
       source,
       handle,
       deps_urls,
@@ -189,7 +208,7 @@ impl ModuleImporter {
     })
   }
 
-  fn new_module_source_future(
+  fn create_module_source_future(
     &self,
     resolved_url: &Url,
     is_dyn_import: bool,
@@ -207,7 +226,7 @@ impl ModuleImporter {
       .shared()
   }
 
-  fn new_module_handle_future(
+  fn create_module_handle_future(
     &self,
     source: &ModuleSourceFuture,
   ) -> ModuleHandleFuture {
@@ -258,7 +277,7 @@ impl ModuleImporter {
     .shared()
   }
 
-  fn new_module_deps_urls_future(
+  fn create_module_deps_urls_future(
     &self,
     source: &ModuleSourceFuture,
     handle: &ModuleHandleFuture,
@@ -299,7 +318,7 @@ impl ModuleImporter {
     .shared()
   }
 
-  fn new_module_deps_compiled_recursively_future(
+  fn create_module_deps_compiled_recursively_future(
     &self,
     deps_urls: &ModuleDepsUrlsFuture,
   ) -> ModuleDepsCompiledRecursivelyFuture {
@@ -326,7 +345,7 @@ impl ModuleImporter {
 
   const ACTIVE_IMPORTER_KEY: u32 = 2;
 
-  fn new_module_evaluation_result_future(
+  fn create_module_evaluation_result_future(
     &self,
     handle: &ModuleHandleFuture,
     deps_compiled_recursively: &ModuleDepsCompiledRecursivelyFuture,
