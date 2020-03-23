@@ -47,6 +47,8 @@ pub struct Module {
   // Future that resolves when the source for all dependencies has been fetched
   // and compiled, so that their v8::Module handle is in the cache.
   deps_compiled_recursively: ModuleDepsCompiledRecursivelyFuture,
+  // Future that resolves to the result of evaluating the module.
+  evaluation_result: ModuleEvaluationResultFuture,
 }
 
 type ModuleSourceFuture =
@@ -61,7 +63,7 @@ type ModuleDepsUrlsFuture =
 type ModuleDepsCompiledRecursivelyFuture =
   Shared<Pin<Box<dyn Future<Output = Result<(), Rc<ImportError>>>>>>;
 
-type ModuleEvaluationFuture =
+type ModuleEvaluationResultFuture =
   Shared<Pin<Box<dyn Future<Output = ImportResult<v8::Global<v8::Module>>>>>>;
 
 impl Borrow<Url> for Module {
@@ -106,12 +108,17 @@ impl From<LegacyModuleSource> for ModuleSource {
   }
 }
 
+struct ModuleSourceByHandleEntry {
+  pub handle: Rc<v8::Global<v8::Module>>,
+  pub source: Rc<ModuleSource>,
+}
+
 pub struct ModuleImporterInner {
   loader: Rc<dyn ModuleLoader>,
   modules_by_resolved_url: HashSet<Module>,
   // TODO(piscisaureus): Use a HashMap instead of a Vec. This requires rusty_v8
   // to implement Eq and Hash for `Global<Module>`.
-  fetched_urls_by_handle: Vec<(v8::Global<v8::Module>, Url)>,
+  module_sources_by_handle: Vec<ModuleSourceByHandleEntry>,
 }
 
 #[derive(Clone)]
@@ -122,7 +129,7 @@ impl ModuleImporter {
     Self(Rc::new(RefCell::new(ModuleImporterInner {
       loader,
       modules_by_resolved_url: HashSet::new(),
-      fetched_urls_by_handle: Vec::new(),
+      module_sources_by_handle: Vec::new(),
     })))
   }
 
@@ -153,6 +160,8 @@ impl ModuleImporter {
     let deps_urls = self.new_module_deps_urls_future(&source, &handle);
     let deps_compiled_recursively =
       self.new_module_deps_compiled_recursively_future(&deps_urls);
+    let evaluation_result = self
+      .new_module_evaluation_result_future(&handle, &deps_compiled_recursively);
 
     Module {
       resolved_url: resolved_url.clone(),
@@ -160,6 +169,7 @@ impl ModuleImporter {
       handle,
       deps_urls,
       deps_compiled_recursively,
+      evaluation_result,
     }
   }
 
@@ -170,6 +180,12 @@ impl ModuleImporter {
   fn modules_by_resolved_url(&self) -> RefMut<HashSet<Module>> {
     RefMut::map(RefCell::borrow_mut(&self.0), |inner| {
       &mut inner.modules_by_resolved_url
+    })
+  }
+
+  fn module_sources_by_handle(&self) -> RefMut<Vec<ModuleSourceByHandleEntry>> {
+    RefMut::map(RefCell::borrow_mut(&self.0), |inner| {
+      &mut inner.module_sources_by_handle
     })
   }
 
@@ -214,19 +230,29 @@ impl ModuleImporter {
       let js_source_code =
         v8::String::new(scope, &source.js_source_code).unwrap();
 
-      let origin = module_origin(scope, resource_name);
-      let source = v8::script_compiler::Source::new(js_source_code, &origin);
+      let v8_origin = module_origin(scope, resource_name);
+      let v8_source =
+        v8::script_compiler::Source::new(js_source_code, &v8_origin);
 
       let mut try_catch = v8::TryCatch::new(scope);
       let tc = try_catch.enter();
 
-      v8::script_compiler::compile_module(scope, source)
-        .map(|module| v8::Global::new_from(scope, module))
+      let handle = v8::script_compiler::compile_module(scope, v8_source)
+        .map(|handle| v8::Global::new_from(scope, handle))
         .map(Rc::new)
         .ok_or_else(|| tc.exception().unwrap())
         .map_err(|exception| v8::Global::new_from(scope, exception))
         .map_err(ImportError::JS)
-        .map_err(Rc::new)
+        .map_err(Rc::new)?;
+
+      cache
+        .module_sources_by_handle()
+        .push(ModuleSourceByHandleEntry {
+          handle: handle.clone(),
+          source,
+        });
+
+      Ok(handle)
     }
     .boxed_local()
     .shared()
@@ -300,18 +326,18 @@ impl ModuleImporter {
 
   const ACTIVE_IMPORTER_KEY: u32 = 2;
 
-  fn new_module_evaluation_future(
+  fn new_module_evaluation_result_future(
     &self,
     handle: &ModuleHandleFuture,
     deps_compiled_recursively: &ModuleDepsCompiledRecursivelyFuture,
-  ) -> ModuleEvaluationFuture {
+  ) -> ModuleEvaluationResultFuture {
     let cache = self.clone();
     let handle = handle.clone();
     let deps_compiled_recursively = deps_compiled_recursively.clone();
 
-    async {
+    async move {
       let handle = handle.await?;
-      let deps_compiled_recursively = deps_compiled_recursively.await?;
+      deps_compiled_recursively.await?;
 
       let context = cache.loader().get_context();
       #[allow(clippy::transmute_ptr_to_ptr)]
@@ -321,7 +347,7 @@ impl ModuleImporter {
       let mut hs = v8::HandleScope::new(isolate);
       let scope = hs.enter();
 
-      let handle = handle.get(scope).unwrap();
+      let mut handle = handle.get(scope).unwrap();
       let context = context.get(scope).unwrap();
 
       unsafe {
@@ -365,10 +391,31 @@ impl ModuleImporter {
       &*(scope.isolate().get_data(Self::ACTIVE_IMPORTER_KEY) as *const _
         as *const ModuleImporter)
     };
-    let specifier = specifier.to_rust_string_lossy(scope);
-    let referrer = unimplemented!();
-    let url: Url = cache.loader().resolve(&specifier, referrer, false)?.into();
 
-    unimplemented!();
+    let specifier_str = &specifier.to_rust_string_lossy(scope);
+
+    let referrer_source = cache
+      .module_sources_by_handle()
+      .iter()
+      .find(|entry| entry.handle.get(scope).unwrap() == referrer)
+      .map(|entry| entry.source.clone())
+      .unwrap();
+    let referrer_str = referrer_source.fetched_url.as_str();
+
+    let resolved_url: Url = cache
+      .loader()
+      .resolve(specifier_str, referrer_str, false)
+      .unwrap()
+      .into();
+
+    let handle = cache
+      .modules_by_resolved_url()
+      .get(&resolved_url)
+      .and_then(|module| module.handle.peek())
+      .and_then(|result| result.clone().ok())
+      .and_then(|handle| handle.get(scope))
+      .unwrap();
+
+    Some(scope.escape(handle))
   }
 }
