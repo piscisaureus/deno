@@ -68,6 +68,14 @@ pub trait ModuleLoader {
     maybe_referrer: Option<ModuleSpecifier>,
     is_dyn_import: bool,
   ) -> Pin<Box<ModuleSourceFuture>>;
+
+  fn get_isolate(&self) -> &v8::OwnedIsolate {
+    unimplemented!();
+  }
+
+  fn get_context(&self) -> v8::Global<v8::Context> {
+    unimplemented!();
+  }
 }
 
 #[derive(Debug, Eq, PartialEq)]
