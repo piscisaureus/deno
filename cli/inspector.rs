@@ -737,6 +737,7 @@ impl DenoInspectorSession {
         .map_ok(move |msg| {
           let msg = msg.as_bytes();
           let msg = v8::inspector::StringView::from(msg);
+          eprintln!("< {}", &msg);
           unsafe { &mut *self_ptr }.dispatch_protocol_message(&msg);
         })
         .try_collect::<()>()
@@ -752,6 +753,7 @@ impl DenoInspectorSession {
 
   fn send_to_websocket(&self, msg: v8::UniquePtr<v8::inspector::StringBuffer>) {
     let msg = msg.unwrap().string().to_string();
+    eprintln!("> {}", &msg);
     let msg = ws::Message::text(msg);
     let _ = self.websocket_tx.unbounded_send(msg);
   }
