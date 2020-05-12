@@ -191,7 +191,7 @@ async fn server(
   let json_version_route = warp::path!("json" / "version").map(|| {
     warp::reply::json(&json!({
       "Browser": format!("Deno/{}", crate::version::DENO),
-      "Protocol-Version": "1.3",
+      "Protocol-Version": "1.2",
       "V8-Version": crate::version::v8(),
     }))
   });
@@ -374,7 +374,6 @@ impl DenoInspector {
   pub fn new(
     isolate: &mut deno_core::CoreIsolate,
     host: SocketAddr,
-    wait_for_debugger: bool,
   ) -> Box<Self> {
     let deno_core::CoreIsolate {
       v8_isolate,
@@ -406,7 +405,7 @@ impl DenoInspector {
         v8::inspector::V8Inspector::create(scope, unsafe { &mut *self_ptr });
 
       let sessions = InspectorSessions::new(self_ptr, new_websocket_rx);
-      let flags = InspectorFlags::new(wait_for_debugger);
+      let flags = InspectorFlags::new();
       let waker = InspectorWaker::new(scope.isolate().thread_safe_handle());
 
       Self {
@@ -474,7 +473,7 @@ impl DenoInspector {
                 &mut self.flags.borrow_mut().waiting_for_session,
                 false,
               ) {
-                session.break_on_first_statement();
+                session.break_on_next_statement();
               }
               sessions.established.push(session);
             }
@@ -547,6 +546,17 @@ impl DenoInspector {
       };
     }
   }
+
+  pub fn wait_for_session_and_break_on_next_statement(&mut self) {
+    if let Some(session) = self.sessions.get_mut().established.iter_mut().next()
+    {
+      // There already is a fully established debugger client connection.
+      session.break_on_next_statement();
+    } else {
+      // Wait for a debugger client to connect first.
+      self.flags.get_mut().waiting_for_session = true;
+    }
+  }
 }
 
 #[derive(Default)]
@@ -557,11 +567,8 @@ struct InspectorFlags {
 }
 
 impl InspectorFlags {
-  fn new(waiting_for_session: bool) -> RefCell<Self> {
-    let self_ = Self {
-      waiting_for_session,
-      ..Default::default()
-    };
+  fn new() -> RefCell<Self> {
+    let self_ = Self::default();
     RefCell::new(self_)
   }
 }
@@ -734,6 +741,7 @@ impl DenoInspectorSession {
         .map_ok(move |msg| {
           let msg = msg.as_bytes();
           let msg = v8::inspector::StringView::from(msg);
+          eprintln!("< {}", msg);
           unsafe { &mut *self_ptr }.dispatch_protocol_message(msg);
         })
         .try_collect::<()>()
@@ -749,11 +757,12 @@ impl DenoInspectorSession {
 
   fn send_to_websocket(&self, msg: v8::UniquePtr<v8::inspector::StringBuffer>) {
     let msg = msg.unwrap().string().to_string();
+    eprintln!("> {}", msg);
     let msg = ws::Message::text(msg);
     let _ = self.websocket_tx.unbounded_send(msg);
   }
 
-  pub fn break_on_first_statement(&mut self) {
+  pub fn break_on_next_statement(&mut self) {
     let reason = v8::inspector::StringView::from(&b"debugCommand"[..]);
     let detail = v8::inspector::StringView::empty();
     self.schedule_pause_on_next_statement(reason, detail);

@@ -238,6 +238,9 @@ impl EsIsolate {
     let module = info.handle.get(scope).expect("Empty module handle");
     let mut status = module.get_status();
     if status == v8::ModuleStatus::Instantiated {
+      eprintln!("{:?} {:?}", info.main, info.name);
+      self.loader.before_evaluate();
+
       // IMPORTANT: Top-level-await is enabled, which means that return value
       // of module evaluation is a promise.
       //

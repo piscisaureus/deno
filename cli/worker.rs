@@ -13,6 +13,7 @@ use futures::channel::mpsc;
 use futures::future::FutureExt;
 use futures::stream::StreamExt;
 use futures::task::AtomicWaker;
+use std::cell::RefMut;
 use std::env;
 use std::future::Future;
 use std::ops::Deref;
@@ -92,7 +93,6 @@ pub struct Worker {
   pub waker: AtomicWaker,
   pub(crate) internal_channels: WorkerChannelsInternal,
   external_channels: WorkerHandle,
-  pub(crate) inspector: Option<Box<DenoInspector>>,
 }
 
 impl Worker {
@@ -104,16 +104,19 @@ impl Worker {
 
     let inspect = global_state.flags.inspect.as_ref();
     let inspect_brk = global_state.flags.inspect_brk.as_ref();
-    let inspector = inspect
+    let (inspector_host, break_on_first_statement) = inspect
       .or(inspect_brk)
-      .and_then(|host| match state.borrow().debug_type {
+      .and_then(|&host| match state.borrow().debug_type {
         DebugType::Main if inspect_brk.is_some() => Some((host, true)),
         DebugType::Main | DebugType::Dependent => Some((host, false)),
         DebugType::Internal => None,
       })
-      .map(|(host, wait_for_debugger)| {
-        DenoInspector::new(&mut isolate, *host, wait_for_debugger)
-      });
+      .map(|(host, brk)| (Some(host), brk))
+      .unwrap_or_default();
+
+    state.borrow_mut().inspector =
+      inspector_host.map(|host| DenoInspector::new(&mut isolate, host));
+    state.borrow_mut().break_on_first_statement = break_on_first_statement;
 
     isolate.set_js_error_create_fn(move |core_js_error| {
       JSError::create(core_js_error, &global_state.ts_compiler)
@@ -128,7 +131,6 @@ impl Worker {
       waker: AtomicWaker::new(),
       internal_channels,
       external_channels,
-      inspector,
     }
   }
 
@@ -184,13 +186,18 @@ impl Worker {
   pub fn thread_safe_handle(&self) -> WorkerHandle {
     self.external_channels.clone()
   }
+
+  fn inspector(&self) -> RefMut<Option<Box<DenoInspector>>> {
+    let state = self.state.borrow_mut();
+    RefMut::map(state, |s| &mut s.inspector)
+  }
 }
 
 impl Drop for Worker {
   fn drop(&mut self) {
     // The Isolate object must outlive the Inspector object, but this is
     // currently not enforced by the type system.
-    self.inspector.take();
+    self.inspector().take();
   }
 }
 
@@ -200,7 +207,7 @@ impl Future for Worker {
   fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
     let inner = self.get_mut();
 
-    if let Some(deno_inspector) = inner.inspector.as_mut() {
+    if let Some(deno_inspector) = inner.inspector().as_mut() {
       // We always poll the inspector if it exists.
       let _ = deno_inspector.poll_unpin(cx);
     }

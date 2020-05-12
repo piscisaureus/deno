@@ -94,6 +94,8 @@ pub trait ModuleLoader {
   ) -> Pin<Box<dyn Future<Output = Result<(), ErrBox>>>> {
     async { Ok(()) }.boxed_local()
   }
+
+  fn before_evaluate(&self) {}
 }
 
 #[derive(Debug, Eq, PartialEq)]

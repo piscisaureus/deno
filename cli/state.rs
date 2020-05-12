@@ -3,6 +3,7 @@ use crate::file_fetcher::SourceFileFetcher;
 use crate::global_state::GlobalState;
 use crate::global_timer::GlobalTimer;
 use crate::import_map::ImportMap;
+use crate::inspector::DenoInspector;
 use crate::metrics::Metrics;
 use crate::op_error::OpError;
 use crate::ops::JsonOp;
@@ -24,6 +25,7 @@ use rand::SeedableRng;
 use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::mem::take;
 use std::ops::Deref;
 use std::path::Path;
 use std::pin::Pin;
@@ -31,6 +33,7 @@ use std::rc::Rc;
 use std::str;
 use std::thread::JoinHandle;
 use std::time::Instant;
+
 #[derive(Copy, Clone, Eq, PartialEq)]
 pub enum DebugType {
   /// Can be debugged, will wait for debugger when --inspect-brk given.
@@ -68,6 +71,8 @@ pub struct StateInner {
   pub target_lib: TargetLib,
   pub debug_type: DebugType,
   pub is_main: bool,
+  pub inspector: Option<Box<DenoInspector>>,
+  pub break_on_first_statement: bool,
 }
 
 impl State {
@@ -362,6 +367,14 @@ impl ModuleLoader for State {
 
     async { Ok(()) }.boxed_local()
   }
+
+  fn before_evaluate(&self) {
+    let mut state = self.borrow_mut();
+    if take(&mut state.break_on_first_statement) {
+      let inspector = state.inspector.as_deref_mut().unwrap();
+      inspector.wait_for_session_and_break_on_next_statement();
+    }
+  }
 }
 
 impl State {
@@ -408,6 +421,8 @@ impl State {
       target_lib: TargetLib::Main,
       debug_type,
       is_main: true,
+      inspector: None,
+      break_on_first_statement: false,
     }));
 
     Ok(Self(state))
@@ -444,6 +459,8 @@ impl State {
       target_lib: TargetLib::Worker,
       debug_type: DebugType::Dependent,
       is_main: false,
+      inspector: None,
+      break_on_first_statement: false,
     }));
 
     Ok(Self(state))
