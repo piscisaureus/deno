@@ -425,9 +425,6 @@ impl DenoInspector {
     self_.context_created(context, Self::CONTEXT_GROUP_ID, context_name);
 
     // Register this inspector with the server thread.
-    // Note: poll_sessions() might block if we need to wait for a
-    // debugger front-end to connect. Therefore the server thread must to be
-    // nofified *before* polling.
     InspectorServer::register_inspector(info);
 
     // Poll the session handler so we will get notified whenever there is
@@ -468,14 +465,9 @@ impl DenoInspector {
             replace(&mut self.flags.borrow_mut().session_handshake_done, false);
           match poll_result {
             Poll::Pending if handshake_done => {
-              let mut session = sessions.handshake.take().unwrap();
-              if replace(
-                &mut self.flags.borrow_mut().waiting_for_session,
-                false,
-              ) {
-                session.break_on_next_statement();
-              }
+              let session = sessions.handshake.take().unwrap();
               sessions.established.push(session);
+              take(&mut self.flags.borrow_mut().waiting_for_session);
             }
             Poll::Ready(_) => sessions.handshake = None,
             Poll::Pending => break,
@@ -548,13 +540,16 @@ impl DenoInspector {
   }
 
   pub fn wait_for_session_and_break_on_next_statement(&mut self) {
-    if let Some(session) = self.sessions.get_mut().established.iter_mut().next()
-    {
-      // There already is a fully established debugger client connection.
-      session.break_on_next_statement();
-    } else {
-      // Wait for a debugger client to connect first.
-      self.flags.get_mut().waiting_for_session = true;
+    // Check whether there already is a fully established debugge client
+    // connection. If so, schedule
+    loop {
+      match self.sessions.get_mut().established.iter_mut().next() {
+        Some(session) => break session.break_on_next_statement(),
+        None => {
+          self.flags.get_mut().waiting_for_session = true;
+          self.poll_sessions(None).unwrap();
+        }
+      };
     }
   }
 }
