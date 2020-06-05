@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt;
 use std::future::Future;
+use std::ops::Deref;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::atomic::AtomicI32;
@@ -284,7 +285,7 @@ pub struct ModuleInfo {
 }
 
 /// A symbolic module entity.
-enum SymbolicModule {
+pub(crate) enum SymbolicModule {
   /// This module is an alias to another module.
   /// This is useful such that multiple names could point to
   /// the same underlying module (particularly due to redirects).
@@ -295,7 +296,7 @@ enum SymbolicModule {
 
 #[derive(Default)]
 /// Alias-able module name map
-struct ModuleNameMap {
+pub(crate) struct ModuleNameMap {
   inner: HashMap<String, SymbolicModule>,
 }
 
@@ -347,11 +348,18 @@ impl ModuleNameMap {
   }
 }
 
+impl Deref for ModuleNameMap {
+  type Target = HashMap<String, SymbolicModule>;
+  fn deref(&self) -> &Self::Target {
+    &self.inner
+  }
+}
+
 /// A collection of JS modules.
 #[derive(Default)]
 pub struct Modules {
   pub(crate) info: HashMap<ModuleId, ModuleInfo>,
-  by_name: ModuleNameMap,
+  pub(crate) by_name: ModuleNameMap,
 }
 
 impl Modules {

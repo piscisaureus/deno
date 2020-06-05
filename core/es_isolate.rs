@@ -10,6 +10,7 @@ use crate::bindings;
 use crate::errors::ErrBox;
 use crate::errors::ErrWithV8Handle;
 use crate::futures::FutureExt;
+use crate::modules::SymbolicModule;
 use futures::ready;
 use futures::stream::FuturesUnordered;
 use futures::stream::StreamExt;
@@ -573,6 +574,69 @@ impl EsIsolate {
 
     let root_id = load.root_module_id.expect("Root module id empty");
     self.mod_instantiate(root_id).map(|_| root_id)
+  }
+
+  fn save_module_index_to_global(&mut self) {
+    let state_rc = Self::state(self);
+    let state = state_rc.borrow();
+
+    let core_state_rc = CoreIsolate::state(self);
+    let core_state = core_state_rc.borrow();
+
+    let mut hs = v8::HandleScope::new(&mut self.0);
+    let scope = hs.enter();
+
+    let context = core_state.global_context.get(scope).unwrap();
+    let mut cs = v8::ContextScope::new(scope, context);
+    let scope = cs.enter();
+
+    let js_global = context.global(scope);
+    let js_null: v8::Local<v8::Value> = v8::null(scope).into();
+
+    let js_alias_key = v8::String::new(scope, "alias").unwrap().into();
+    let js_namespace_key = v8::String::new(scope, "namespace").unwrap().into();
+
+    let modules_by_name = &state.modules.by_name;
+    let modules_by_id = &state.modules.info;
+
+    let (js_module_urls, js_module_infos): (Vec<_>, Vec<_>) = modules_by_name
+      .iter()
+      .map(
+        |(url, alias_or_id)| -> (v8::Local<v8::Name>, v8::Local<v8::Value>) {
+          let js_url = v8::String::new(scope, url).unwrap();
+          let js_module_info =
+            v8::Object::with_prototype_and_properties(scope, js_null, &[], &[]);
+          match alias_or_id {
+            SymbolicModule::Alias(alias) => {
+              let js_alias = v8::String::new(scope, &alias).unwrap();
+              js_module_info
+                .set(context, js_alias_key, js_alias.into())
+                .unwrap();
+            }
+            SymbolicModule::Mod(id) => {
+              let js_module = modules_by_id[id].handle.get(scope).unwrap();
+              let js_namespace = js_module.get_module_namespace();
+              js_module_info.set(context, js_namespace_key, js_namespace);
+            }
+          }
+          (js_url.into(), js_module_info.into())
+        },
+      )
+      .unzip();
+
+    let js_module_index_key = v8::String::new(scope, "module_index").unwrap();
+    let js_module_index = v8::Object::with_prototype_and_properties(
+      scope,
+      js_null,
+      &*js_module_urls,
+      &*js_module_infos,
+    );
+    js_global.set(context, js_module_index_key.into(), js_module_index.into());
+  }
+
+  pub fn snapshot(&mut self) -> v8::StartupData {
+    self.save_module_index_to_global();
+    CoreIsolate::snapshot(self)
   }
 
   pub fn state(isolate: &v8::Isolate) -> Rc<RefCell<EsIsolateState>> {
