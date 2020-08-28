@@ -10,8 +10,11 @@ exclude = [
   "std/hash/_wasm"
 ]
 
+[profile.dev]
+debug = 1
 
-[profile.release]
-codegen-units = 1
-lto = true
-opt-level = 'z' # Optimize for size
+[profile.test]
+debug = 1
+
+[patch.crates-io]
+rusty_v8 = { path = './rusty_v8' }

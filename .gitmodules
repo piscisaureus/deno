@@ -4,3 +4,6 @@
 [submodule "std/wasi/testdata"]
 	path = std/wasi/testdata
 	url = https://github.com/khronosproject/wasi-test-suite.git
+[submodule "rusty_v8"]
+	path = rusty_v8
+	url = https://github.com/denoland/rusty_v8.git
