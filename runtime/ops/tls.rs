@@ -1,11 +1,10 @@
 // Copyright 2018-2021 the Deno authors. All rights reserved. MIT license.
 
-use super::io::TcpStreamResource;
-use super::io::TlsClientStreamResource;
-use super::io::TlsServerStreamResource;
-use super::net::IpAddr;
-use super::net::OpAddr;
-use super::net::OpConn;
+use crate::ops::io::TcpStreamResource;
+use crate::ops::io::TlsStreamResource;
+use crate::ops::net::IpAddr;
+use crate::ops::net::OpAddr;
+use crate::ops::net::OpConn;
 use crate::permissions::Permissions;
 use crate::resolve_addr::resolve_addr;
 use crate::resolve_addr::resolve_addr_sync;
@@ -14,6 +13,13 @@ use deno_core::error::bad_resource_id;
 use deno_core::error::custom_error;
 use deno_core::error::generic_error;
 use deno_core::error::AnyError;
+use deno_core::futures::ready;
+use deno_core::futures::task::AtomicWaker;
+use deno_core::futures::task::Context;
+use deno_core::futures::task::Poll;
+use deno_core::futures::task::RawWaker;
+use deno_core::futures::task::RawWakerVTable;
+use deno_core::futures::task::Waker;
 use deno_core::AsyncRefCell;
 use deno_core::CancelHandle;
 use deno_core::CancelTryFuture;
@@ -22,27 +28,36 @@ use deno_core::RcRef;
 use deno_core::Resource;
 use deno_core::ResourceId;
 use deno_core::ZeroCopyBuf;
+use io::Read;
+use io::Write;
 use serde::Deserialize;
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::From;
 use std::fs::File;
+use std::io;
 use std::io::BufReader;
+use std::io::ErrorKind;
+use std::mem::MaybeUninit;
 use std::path::Path;
+use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::Weak;
+use tokio::io::AsyncRead;
+use tokio::io::AsyncWrite;
+use tokio::io::ReadBuf;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
-use tokio_rustls::{rustls::ClientConfig, TlsConnector};
-use tokio_rustls::{
-  rustls::{
-    internal::pemfile::{certs, pkcs8_private_keys, rsa_private_keys},
-    Certificate, NoClientAuth, PrivateKey, ServerConfig, StoresClientSessions,
-  },
-  TlsAcceptor,
+use tokio_rustls::rustls::{
+  internal::pemfile::{certs, pkcs8_private_keys, rsa_private_keys},
+  Certificate, NoClientAuth, PrivateKey, ServerConfig, Session,
+  StoresClientSessions,
 };
+use tokio_rustls::{client, server, TlsAcceptor};
+use tokio_rustls::{rustls::ClientConfig, TlsConnector};
 use webpki::DNSNameRef;
 
 lazy_static::lazy_static! {
@@ -67,6 +82,362 @@ impl StoresClientSessions for ClientSessionMemoryCache {
     }
     sessions.insert(key, value);
     true
+  }
+}
+
+pub struct TlsStream {
+  inner: TlsStreamInner,
+}
+
+pub struct TlsReader {
+  shared: Arc<Shared>,
+}
+
+pub struct TlsWriter {
+  shared: Arc<Shared>,
+}
+
+impl TlsStream {
+  fn new<S: Session + 'static>(socket: TcpStream, session: S) -> Self {
+    let inner = TlsStreamInner::new(socket, session);
+    Self { inner }
+  }
+
+  pub fn into_split(self) -> (TlsReader, TlsWriter) {
+    let Self { inner } = self;
+    let shared = Shared::new(inner);
+    let rd = TlsReader {
+      shared: shared.clone(),
+    };
+    let wr = TlsWriter { shared };
+    (rd, wr)
+  }
+}
+
+impl TlsReader {
+  pub fn unsplit(self, wr: TlsWriter) -> TlsStream {
+    assert!(Arc::ptr_eq(&self.shared, &wr.shared));
+    let Self { shared } = self;
+    let Shared { inner, .. } = Arc::try_unwrap(shared)
+      .unwrap_or_else(|_| panic!("Arc::<Shared>::try_unwrap() failed"));
+    let inner = Mutex::into_inner(inner).unwrap_or_else(|_| {
+      panic!("Mutex::<TlsStreamInner>::into_inner() failed")
+    });
+    TlsStream { inner }
+  }
+}
+
+impl From<client::TlsStream<TcpStream>> for TlsStream {
+  fn from(s: client::TlsStream<TcpStream>) -> Self {
+    let (socket, session) = s.into_inner();
+    Self::new(socket, session)
+  }
+}
+
+impl From<server::TlsStream<TcpStream>> for TlsStream {
+  fn from(s: server::TlsStream<TcpStream>) -> Self {
+    let (socket, session) = s.into_inner();
+    Self::new(socket, session)
+  }
+}
+
+impl AsyncRead for TlsStream {
+  fn poll_read(
+    mut self: Pin<&mut Self>,
+    cx: &mut Context<'_>,
+    buf: &mut ReadBuf<'_>,
+  ) -> Poll<io::Result<()>> {
+    self.inner.poll_read(cx, buf)
+  }
+}
+
+impl AsyncRead for TlsReader {
+  fn poll_read(
+    self: Pin<&mut Self>,
+    cx: &mut Context<'_>,
+    buf: &mut ReadBuf<'_>,
+  ) -> Poll<io::Result<()>> {
+    eprintln!("poll_read()...");
+    let r = self
+      .shared
+      .poll_rd_with(cx, move |inner, cx| inner.poll_read(cx, buf));
+    eprintln!("poll_read(): {:?}", r);
+    r
+  }
+}
+
+impl AsyncWrite for TlsStream {
+  fn poll_write(
+    mut self: Pin<&mut Self>,
+    cx: &mut Context<'_>,
+    buf: &[u8],
+  ) -> Poll<io::Result<usize>> {
+    self.inner.poll_write(cx, buf)
+  }
+
+  fn poll_flush(
+    self: Pin<&mut Self>,
+    _cx: &mut Context<'_>,
+  ) -> Poll<io::Result<()>> {
+    Poll::Ready(Ok(()))
+  }
+
+  fn poll_shutdown(
+    self: Pin<&mut Self>,
+    _cx: &mut Context<'_>,
+  ) -> Poll<io::Result<()>> {
+    Poll::Ready(Ok(()))
+  }
+}
+
+impl AsyncWrite for TlsWriter {
+  fn poll_write(
+    self: Pin<&mut Self>,
+    cx: &mut Context<'_>,
+    buf: &[u8],
+  ) -> Poll<io::Result<usize>> {
+    eprintln!("poll_write()...");
+    let r = self
+      .shared
+      .poll_wr_with(cx, move |inner, cx| inner.poll_write(cx, buf));
+    eprintln!("poll_write(): {:?}", r);
+    r
+  }
+
+  fn poll_flush(
+    self: Pin<&mut Self>,
+    _cx: &mut Context<'_>,
+  ) -> Poll<io::Result<()>> {
+    Poll::Ready(Ok(()))
+  }
+
+  fn poll_shutdown(
+    self: Pin<&mut Self>,
+    _cx: &mut Context<'_>,
+  ) -> Poll<io::Result<()>> {
+    Poll::Ready(Ok(()))
+  }
+}
+
+struct TlsStreamInner {
+  session: Box<dyn Session>,
+  socket: TcpStream,
+}
+
+impl TlsStreamInner {
+  fn new<S: Session + 'static>(socket: TcpStream, session: S) -> Self {
+    let session = Box::new(session) as Box<dyn Session>;
+    Self { socket, session }
+  }
+
+  fn poll_read(
+    &mut self,
+    cx: &mut Context<'_>,
+    buf: &mut ReadBuf<'_>,
+  ) -> Poll<io::Result<()>> {
+    ready!(self.poll_io(cx, true, false))?;
+
+    let buf_slice = unsafe {
+      &mut *(buf.unfilled_mut() as *mut [MaybeUninit<u8>] as *mut [u8])
+    };
+
+    let result = match self.session.read(buf_slice) {
+      Ok(0) => unreachable!(),
+      Ok(bytes_read) => {
+        unsafe { buf.assume_init(bytes_read) };
+        buf.advance(bytes_read);
+        Ok(())
+      }
+      // Rustls `read()` returns `ConnectionAborted` when it receives a
+      // `CloseNotify` alert,; this indicates a graceful close.
+      Err(err) if err.kind() == ErrorKind::ConnectionAborted => Ok(()),
+      Err(err) => Err(err),
+    };
+    Poll::Ready(result)
+  }
+
+  fn poll_write(
+    &mut self,
+    cx: &mut Context<'_>,
+    buf: &[u8],
+  ) -> Poll<io::Result<usize>> {
+    ready!(self.poll_io(cx, false, true))?;
+
+    let result = match self.session.write(buf) {
+      Ok(0) => unreachable!(),
+      Ok(bytes_written) => {
+        // We try to flush as much as we can - but on a best-effort basis.
+        ready!(self.poll_io(cx, false, true))?;
+        Ok(bytes_written)
+      }
+      Err(err) => Err(err),
+    };
+    Poll::Ready(result)
+  }
+
+  #[allow(clippy::try_err)]
+  fn poll_io(
+    &mut self,
+    cx: &mut Context<'_>,
+    for_reading: bool,
+    for_writing: bool,
+  ) -> Poll<io::Result<()>> {
+    let mut socket_is_readable = true;
+    let mut socket_is_writable = true;
+
+    loop {
+      while self.session.wants_write() && socket_is_writable {
+        let mut wrapper = StdIoTraitWrapper(&mut self.socket);
+        match self.session.write_tls(&mut wrapper) {
+          Ok(_) => {}
+          Err(err) if err.kind() == ErrorKind::WouldBlock => {
+            socket_is_writable = false;
+            break;
+          }
+          Err(err) => Err(err)?,
+        }
+      }
+
+      while self.session.wants_read() && socket_is_readable {
+        let mut wrapper = StdIoTraitWrapper(&mut self.socket);
+        match self.session.read_tls(&mut wrapper) {
+          Ok(_) => {}
+          Err(err) if err.kind() == ErrorKind::WouldBlock => {
+            socket_is_readable = false;
+            break;
+          }
+          Err(err) => Err(err)?,
+        }
+
+        match self.session.process_new_packets() {
+          Ok(_) => {}
+          Err(err) => Err(io::Error::new(ErrorKind::InvalidData, err))?,
+        }
+      }
+
+      if for_reading
+        && !self.session.is_handshaking()
+        && !self.session.wants_read()
+      {
+        break;
+      }
+
+      if for_writing
+        && !self.session.is_handshaking()
+        && !self.session.wants_write()
+      {
+        break;
+      }
+
+      if self.session.wants_read() && !socket_is_readable {
+        ready!(self.socket.poll_read_ready(cx))?;
+        socket_is_readable = true;
+      }
+      if self.session.wants_write() && !socket_is_writable {
+        ready!(self.socket.poll_write_ready(cx))?;
+        socket_is_writable = true;
+      }
+    }
+
+    Poll::Ready(Ok(()))
+  }
+}
+
+struct Shared {
+  inner: Mutex<TlsStreamInner>,
+  rd_waker: AtomicWaker,
+  wr_waker: AtomicWaker,
+}
+
+impl Shared {
+  fn new(inner: TlsStreamInner) -> Arc<Self> {
+    let self_ = Self {
+      inner: Mutex::new(inner),
+      rd_waker: AtomicWaker::new(),
+      wr_waker: AtomicWaker::new(),
+    };
+    Arc::new(self_)
+  }
+
+  fn poll_rd_with<R>(
+    self: &Arc<Self>,
+    cx: &mut Context<'_>,
+    mut f: impl FnMut(&mut TlsStreamInner, &mut Context<'_>) -> R,
+  ) -> R {
+    self.rd_waker.register(cx.waker());
+    let shared_waker = self.new_waker();
+    let mut cx = Context::from_waker(&shared_waker);
+    let mut inner = self.inner.lock().unwrap();
+    f(&mut inner, &mut cx)
+  }
+
+  fn poll_wr_with<R>(
+    self: &Arc<Self>,
+    cx: &mut Context<'_>,
+    mut f: impl FnMut(&mut TlsStreamInner, &mut Context<'_>) -> R,
+  ) -> R {
+    self.wr_waker.register(cx.waker());
+    let shared_waker = self.new_waker();
+    let mut cx = Context::from_waker(&shared_waker);
+    let mut inner = self.inner.lock().unwrap();
+    f(&mut inner, &mut cx)
+  }
+
+  const WAKER_VTABLE: RawWakerVTable = RawWakerVTable::new(
+    Self::clone_waker,
+    Self::wake_waker,
+    Self::wake_waker_by_ref,
+    Self::drop_waker,
+  );
+
+  fn new_waker(self: &Arc<Self>) -> Waker {
+    let self_weak = Arc::downgrade(self);
+    let self_ptr = self_weak.into_raw() as *const ();
+    let raw_waker = RawWaker::new(self_ptr, &Self::WAKER_VTABLE);
+    unsafe { Waker::from_raw(raw_waker) }
+  }
+
+  fn clone_waker(self_ptr: *const ()) -> RawWaker {
+    let self_weak = unsafe { Weak::from_raw(self_ptr as *const Self) };
+    self_weak.clone().into_raw();
+    self_weak.into_raw();
+    RawWaker::new(self_ptr, &Self::WAKER_VTABLE)
+  }
+
+  fn wake_waker(self_ptr: *const ()) {
+    Self::wake_waker_by_ref(self_ptr);
+    Self::drop_waker(self_ptr);
+  }
+
+  fn wake_waker_by_ref(self_ptr: *const ()) {
+    let self_weak = unsafe { Weak::from_raw(self_ptr as *const Self) };
+    if let Some(self_arc) = Weak::upgrade(&self_weak) {
+      self_arc.rd_waker.wake();
+      self_arc.wr_waker.wake();
+    }
+    self_weak.into_raw();
+  }
+
+  fn drop_waker(self_ptr: *const ()) {
+    let _ = unsafe { Weak::from_raw(self_ptr as *const Self) };
+  }
+}
+
+struct StdIoTraitWrapper<'a, T>(&'a mut T);
+
+impl Read for StdIoTraitWrapper<'_, TcpStream> {
+  fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+    self.0.try_read(buf)
+  }
+}
+
+impl Write for StdIoTraitWrapper<'_, TcpStream> {
+  fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+    self.0.try_write(buf)
+  }
+
+  fn flush(&mut self) -> io::Result<()> {
+    Ok(())
   }
 }
 
@@ -145,9 +516,9 @@ async fn op_start_tls(
 
   let rid = {
     let mut state_ = state.borrow_mut();
-    state_
-      .resource_table
-      .add(TlsClientStreamResource::from(tls_stream))
+    state_.resource_table.add(TlsStreamResource::new(
+      TlsStream::from(tls_stream).into_split(),
+    ))
   };
   Ok(OpConn {
     rid,
@@ -205,9 +576,9 @@ async fn op_connect_tls(
   let tls_stream = tls_connector.connect(dnsname, tcp_stream).await?;
   let rid = {
     let mut state_ = state.borrow_mut();
-    state_
-      .resource_table
-      .add(TlsClientStreamResource::from(tls_stream))
+    state_.resource_table.add(TlsStreamResource::new(
+      TlsStream::from(tls_stream).into_split(),
+    ))
   };
   Ok(OpConn {
     rid,
@@ -392,9 +763,9 @@ async fn op_accept_tls(
 
   let rid = {
     let mut state_ = state.borrow_mut();
-    state_
-      .resource_table
-      .add(TlsServerStreamResource::from(tls_stream))
+    state_.resource_table.add(TlsStreamResource::new(
+      TlsStream::from(tls_stream).into_split(),
+    ))
   };
 
   Ok(OpConn {
