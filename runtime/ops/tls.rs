@@ -261,9 +261,7 @@ impl AsyncRead for TlsStream {
   ) -> Poll<io::Result<()>> {
     ready!(self.poll_io(cx, true, false))?;
 
-    let buf_slice = unsafe {
-      &mut *(buf.unfilled_mut() as *mut [MaybeUninit<u8>] as *mut [u8])
-    };
+    let buf_slice = unsafe { transmute(buf.unfilled_mut()) };
 
     match self.tls.read(buf_slice) {
       Ok(bytes_read) => {
