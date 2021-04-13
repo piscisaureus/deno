@@ -167,12 +167,12 @@ impl TlsStream {
     Self::new(tcp, tls)
   }
 
-  fn into_split(self) -> (TlsStreamReader, TlsStreamWriter) {
+  fn into_split(self) -> (ReadHalf, WriteHalf) {
     let shared = Shared::new(self);
-    let rd = TlsStreamReader {
+    let rd = ReadHalf {
       shared: shared.clone(),
     };
-    let wr = TlsStreamWriter { shared };
+    let wr = WriteHalf { shared };
     (rd, wr)
   }
 
@@ -332,12 +332,12 @@ impl AsyncWrite for TlsStream {
   }
 }
 
-pub struct TlsStreamReader {
+pub struct ReadHalf {
   shared: Arc<Shared>,
 }
 
-impl TlsStreamReader {
-  pub fn reunite(self, wr: TlsStreamWriter) -> TlsStream {
+impl ReadHalf {
+  pub fn reunite(self, wr: WriteHalf) -> TlsStream {
     assert!(Arc::ptr_eq(&self.shared, &wr.shared));
     let Self { shared } = self;
     drop(wr); // Drop `wr` so only 1 strong reference to `shared` remains.
@@ -348,7 +348,7 @@ impl TlsStreamReader {
   }
 }
 
-impl AsyncRead for TlsStreamReader {
+impl AsyncRead for ReadHalf {
   fn poll_read(
     self: Pin<&mut Self>,
     cx: &mut Context<'_>,
@@ -360,11 +360,11 @@ impl AsyncRead for TlsStreamReader {
   }
 }
 
-pub struct TlsStreamWriter {
+pub struct WriteHalf {
   shared: Arc<Shared>,
 }
 
-impl AsyncWrite for TlsStreamWriter {
+impl AsyncWrite for WriteHalf {
   fn poll_write(
     self: Pin<&mut Self>,
     cx: &mut Context<'_>,
