@@ -324,7 +324,8 @@ impl Resource for TcpStreamResource {
   }
 }
 
-pub type TlsStreamResource = FullDuplexResource<tls::TlsReader, tls::TlsWriter>;
+pub type TlsStreamResource =
+  FullDuplexResource<tls::TlsStreamReader, tls::TlsStreamWriter>;
 
 impl Resource for TlsStreamResource {
   fn name(&self) -> Cow<str> {

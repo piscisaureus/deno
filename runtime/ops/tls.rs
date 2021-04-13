@@ -96,12 +96,12 @@ impl TlsStream {
     Self { socket, session }
   }
 
-  pub fn into_split(self) -> (TlsReader, TlsWriter) {
+  pub fn into_split(self) -> (TlsStreamReader, TlsStreamWriter) {
     let shared = Shared::new(self);
-    let rd = TlsReader {
+    let rd = TlsStreamReader {
       shared: shared.clone(),
     };
-    let wr = TlsWriter { shared };
+    let wr = TlsStreamWriter { shared };
     (rd, wr)
   }
 
@@ -119,7 +119,7 @@ impl TlsStream {
 
     loop {
       while self.session.wants_write() && socket_is_writable {
-        let mut wrapper = StdIoTraitWrapper(&mut self.socket);
+        let mut wrapper = ImplementWriteTrait(&mut self.socket);
         match self.session.write_tls(&mut wrapper) {
           Ok(_) => {}
           Err(err) if err.kind() == ErrorKind::WouldBlock => {
@@ -131,7 +131,7 @@ impl TlsStream {
       }
 
       while self.session.wants_read() && socket_is_readable {
-        let mut wrapper = StdIoTraitWrapper(&mut self.socket);
+        let mut wrapper = ImplementReadTrait(&mut self.socket);
         match self.session.read_tls(&mut wrapper) {
           Ok(_) => {}
           Err(err) if err.kind() == ErrorKind::WouldBlock => {
@@ -254,10 +254,11 @@ impl AsyncWrite for TlsStream {
   }
 
   fn poll_shutdown(
-    self: Pin<&mut Self>,
-    _cx: &mut Context<'_>,
+    mut self: Pin<&mut Self>,
+    cx: &mut Context<'_>,
   ) -> Poll<io::Result<()>> {
-    todo!()
+    ready!(self.poll_io(cx, false, true))?;
+    Poll::Ready(Ok(())) // Not implemented.
   }
 }
 
@@ -275,27 +276,23 @@ impl From<server::TlsStream<TcpStream>> for TlsStream {
   }
 }
 
-pub struct TlsReader {
+pub struct TlsStreamReader {
   shared: Arc<Shared>,
 }
 
-pub struct TlsWriter {
-  shared: Arc<Shared>,
-}
-
-impl TlsReader {
-  pub fn unsplit(self, wr: TlsWriter) -> TlsStream {
+impl TlsStreamReader {
+  pub fn unsplit(self, wr: TlsStreamWriter) -> TlsStream {
     assert!(Arc::ptr_eq(&self.shared, &wr.shared));
     let Self { shared } = self;
     drop(wr); // Drop `wr.shared` so only 1 strong reference to it remains.
-    let Shared { inner, .. } = Arc::try_unwrap(shared)
+    let Shared { stream, .. } = Arc::try_unwrap(shared)
       .unwrap_or_else(|_| panic!("Arc::<Shared>::try_unwrap() failed"));
-    Mutex::into_inner(inner)
+    Mutex::into_inner(stream)
       .unwrap_or_else(|_| panic!("Mutex::<TlsStream>::into_inner() failed"))
   }
 }
 
-impl AsyncRead for TlsReader {
+impl AsyncRead for TlsStreamReader {
   fn poll_read(
     self: Pin<&mut Self>,
     cx: &mut Context<'_>,
@@ -304,13 +301,17 @@ impl AsyncRead for TlsReader {
     eprintln!("poll_read()...");
     let r = self
       .shared
-      .poll_rd_with(cx, move |inner, cx| inner.poll_read(cx, buf));
+      .poll_rd_with(cx, move |stream, cx| stream.poll_read(cx, buf));
     eprintln!("poll_read(): {:?}", r);
     r
   }
 }
 
-impl AsyncWrite for TlsWriter {
+pub struct TlsStreamWriter {
+  shared: Arc<Shared>,
+}
+
+impl AsyncWrite for TlsStreamWriter {
   fn poll_write(
     self: Pin<&mut Self>,
     cx: &mut Context<'_>,
@@ -319,36 +320,40 @@ impl AsyncWrite for TlsWriter {
     eprintln!("poll_write()...");
     let r = self
       .shared
-      .poll_wr_with(cx, move |inner, cx| inner.poll_write(cx, buf));
+      .poll_wr_with(cx, move |stream, cx| stream.poll_write(cx, buf));
     eprintln!("poll_write(): {:?}", r);
     r
   }
 
   fn poll_flush(
     self: Pin<&mut Self>,
-    _cx: &mut Context<'_>,
+    cx: &mut Context<'_>,
   ) -> Poll<io::Result<()>> {
-    Poll::Ready(Ok(()))
+    self
+      .shared
+      .poll_wr_with(cx, |stream, cx| stream.poll_flush(cx))
   }
 
   fn poll_shutdown(
     self: Pin<&mut Self>,
-    _cx: &mut Context<'_>,
+    cx: &mut Context<'_>,
   ) -> Poll<io::Result<()>> {
-    Poll::Ready(Ok(()))
+    self
+      .shared
+      .poll_wr_with(cx, |stream, cx| stream.poll_shutdown(cx))
   }
 }
 
 struct Shared {
-  inner: Mutex<TlsStream>,
+  stream: Mutex<TlsStream>,
   rd_waker: AtomicWaker,
   wr_waker: AtomicWaker,
 }
 
 impl Shared {
-  fn new(inner: TlsStream) -> Arc<Self> {
+  fn new(stream: TlsStream) -> Arc<Self> {
     let self_ = Self {
-      inner: Mutex::new(inner),
+      stream: Mutex::new(stream),
       rd_waker: AtomicWaker::new(),
       wr_waker: AtomicWaker::new(),
     };
@@ -363,8 +368,8 @@ impl Shared {
     self.rd_waker.register(cx.waker());
     let shared_waker = self.new_waker();
     let mut cx = Context::from_waker(&shared_waker);
-    let mut inner = self.inner.lock().unwrap();
-    f(Pin::new(&mut inner), &mut cx)
+    let mut stream = self.stream.lock().unwrap();
+    f(Pin::new(&mut stream), &mut cx)
   }
 
   fn poll_wr_with<R>(
@@ -375,8 +380,8 @@ impl Shared {
     self.wr_waker.register(cx.waker());
     let shared_waker = self.new_waker();
     let mut cx = Context::from_waker(&shared_waker);
-    let mut inner = self.inner.lock().unwrap();
-    f(Pin::new(&mut inner), &mut cx)
+    let mut stream = self.stream.lock().unwrap();
+    f(Pin::new(&mut stream), &mut cx)
   }
 
   const WAKER_VTABLE: RawWakerVTable = RawWakerVTable::new(
@@ -395,8 +400,9 @@ impl Shared {
 
   fn clone_waker(self_ptr: *const ()) -> RawWaker {
     let self_weak = unsafe { Weak::from_raw(self_ptr as *const Self) };
-    self_weak.clone().into_raw();
-    self_weak.into_raw();
+    let ptr1 = self_weak.clone().into_raw();
+    let ptr2 = self_weak.into_raw();
+    assert!(ptr1 == ptr2);
     RawWaker::new(self_ptr, &Self::WAKER_VTABLE)
   }
 
@@ -419,15 +425,17 @@ impl Shared {
   }
 }
 
-struct StdIoTraitWrapper<'a, T>(&'a mut T);
+struct ImplementReadTrait<'a, T>(&'a mut T);
 
-impl Read for StdIoTraitWrapper<'_, TcpStream> {
+impl Read for ImplementReadTrait<'_, TcpStream> {
   fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
     self.0.try_read(buf)
   }
 }
 
-impl Write for StdIoTraitWrapper<'_, TcpStream> {
+struct ImplementWriteTrait<'a, T>(&'a mut T);
+
+impl Write for ImplementWriteTrait<'_, TcpStream> {
   fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
     self.0.try_write(buf)
   }
