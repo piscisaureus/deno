@@ -5894,7 +5894,7 @@ console.log("finish");
 
 #[tokio::test]
 async fn listen_tls_alpn() {
-  let child = util::deno_cmd()
+  let mut child = util::deno_cmd()
     .current_dir(util::root_path())
     .arg("run")
     .arg("--unstable")
@@ -5906,7 +5906,7 @@ async fn listen_tls_alpn() {
     .stdout(std::process::Stdio::piped())
     .spawn()
     .unwrap();
-  let mut stdout = child.stdout.unwrap();
+  let stdout = child.stdout.as_mut().unwrap();
   let mut buffer = [0; 5];
   let read = stdout.read(&mut buffer).unwrap();
   assert_eq!(read, 5);
@@ -5930,11 +5930,14 @@ async fn listen_tls_alpn() {
 
   let alpn = session.get_alpn_protocol().unwrap();
   assert_eq!(std::str::from_utf8(alpn).unwrap(), "foobar");
+
+  child.kill().unwrap();
+  child.wait().unwrap();
 }
 
 #[tokio::test]
 async fn listen_tls_alpn_fail() {
-  let child = util::deno_cmd()
+  let mut child = util::deno_cmd()
     .current_dir(util::root_path())
     .arg("run")
     .arg("--unstable")
@@ -5946,7 +5949,7 @@ async fn listen_tls_alpn_fail() {
     .stdout(std::process::Stdio::piped())
     .spawn()
     .unwrap();
-  let mut stdout = child.stdout.unwrap();
+  let stdout = child.stdout.as_mut().unwrap();
   let mut buffer = [0; 5];
   let read = stdout.read(&mut buffer).unwrap();
   assert_eq!(read, 5);
@@ -5969,4 +5972,7 @@ async fn listen_tls_alpn_fail() {
   let (_, session) = tls_stream.get_ref();
 
   assert!(session.get_alpn_protocol().is_none());
+
+  child.kill().unwrap();
+  child.wait().unwrap();
 }

@@ -188,8 +188,8 @@ impl TlsStream {
     // Initially, assume that the TCP stream is both readable and writable. If
     // it isn't `read/write_tls()` will fail with `WouldBlock`, to which we'll
     // respond by polling for read readiness or write readiness.
-    let mut tcp_read_ready = self.rd_shut != Shut::TcpShut;
-    let mut tcp_write_ready = self.wr_shut != Shut::TcpShut;
+    let mut tcp_read_ready = true;
+    let mut tcp_write_ready = true;
 
     loop {
       while tcp_write_ready && self.tls.wants_write() {
@@ -199,24 +199,25 @@ impl TlsStream {
           Err(err) if err.kind() == ErrorKind::WouldBlock => {
             match self.tcp.poll_write_ready(cx) {
               Ready(result) => result?,
-              Pending => {
-                tcp_write_ready = false;
-                break;
-              }
+              Pending => tcp_write_ready = false,
             }
           }
           Err(err) => return Ready(Err(err)),
         }
       }
 
-      while tcp_read_ready && self.tls.wants_read() {
+      while tcp_read_ready
+        && self.tls.wants_read()
+        && self.rd_shut != Shut::TcpShut
+      {
         let mut wrapper = ImplementReadTrait(&mut self.tcp);
         match self.tls.read_tls(&mut wrapper) {
-          Ok(0) => {
-            self.rd_shut = Shut::TcpShut;
-            tcp_read_ready = false;
-            break;
+          Ok(0) if self.tls.is_handshaking() => {
+            let err =
+              io::Error::new(ErrorKind::UnexpectedEof, "tls handshake eof");
+            return Ready(Err(err));
           }
+          Ok(0) => self.rd_shut = Shut::TcpShut,
           Ok(_) => match self.tls.process_new_packets() {
             Ok(_) => {}
             Err(err) => {
@@ -227,10 +228,7 @@ impl TlsStream {
           Err(err) if err.kind() == ErrorKind::WouldBlock => {
             match self.tcp.poll_read_ready(cx) {
               Ready(result) => result?,
-              Pending => {
-                tcp_read_ready = false;
-                break;
-              }
+              Pending => tcp_read_ready = false,
             }
           }
           Err(err) => return Ready(Err(err)),
@@ -247,11 +245,7 @@ impl TlsStream {
       {
         return Ready(Ok(()));
       }
-
-      if for_writing
-        && !self.tls.is_handshaking()
-        && (!self.tls.wants_write() || self.wr_shut == Shut::TcpShut)
-      {
+      if for_writing && !self.tls.is_handshaking() && !self.tls.wants_write() {
         return Ready(Ok(()));
       }
 
@@ -273,7 +267,6 @@ impl AsyncRead for TlsStream {
     };
 
     match self.tls.read(buf_slice) {
-      Ok(0) => unreachable!(),
       Ok(bytes_read) => {
         unsafe { buf.assume_init(bytes_read) };
         buf.advance(bytes_read);
@@ -820,18 +813,16 @@ async fn op_accept_tls(
   let tcp_listener = RcRef::map(&resource, |r| &r.tcp_listener)
     .try_borrow_mut()
     .ok_or_else(|| custom_error("Busy", "Another accept task is ongoing"))?;
-  let (tcp_stream, remote_addr) = tcp_listener
-    .accept()
-    .try_or_cancel(cancel_handle)
-    .await
-    .map_err(|e| {
-      // FIXME(bartlomieju): compatibility with current JS implementation
-      if let std::io::ErrorKind::Interrupted = e.kind() {
-        bad_resource("Listener has been closed")
-      } else {
-        e.into()
+
+  let (tcp_stream, remote_addr) =
+    match tcp_listener.accept().try_or_cancel(&cancel_handle).await {
+      Ok(tuple) => tuple,
+      Err(err) if err.kind() == ErrorKind::Interrupted => {
+        // FIXME(bartlomieju): compatibility with current JS implementation.
+        return Err(bad_resource("Listener has been closed"));
       }
-    })?;
+      Err(err) => return Err(err.into()),
+    };
 
   let local_addr = tcp_stream.local_addr()?;
 
