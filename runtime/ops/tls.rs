@@ -546,6 +546,9 @@ async fn op_start_tls(
     }
   }
 
+  let hostname_dns = DNSNameRef::try_from_ascii_str(hostname)
+    .map_err(|_| invalid_hostname(hostname))?;
+
   let resource_rc = state
     .borrow_mut()
     .resource_table
@@ -571,10 +574,7 @@ async fn op_start_tls(
   }
   let tls_config = Arc::new(tls_config);
 
-  let hostname = DNSNameRef::try_from_ascii_str(hostname)
-    .map_err(|_| invalid_hostname(hostname))?;
-
-  let tls_stream = TlsStream::new_client(tcp_stream, &tls_config, hostname);
+  let tls_stream = TlsStream::new_client(tcp_stream, &tls_config, hostname_dns);
 
   let rid = {
     let mut state_ = state.borrow_mut();
@@ -618,6 +618,9 @@ async fn op_connect_tls(
     }
   }
 
+  let hostname_dns = DNSNameRef::try_from_ascii_str(hostname)
+    .map_err(|_| invalid_hostname(hostname))?;
+
   let connect_addr = resolve_addr(hostname, port)
     .await?
     .next()
@@ -638,10 +641,7 @@ async fn op_connect_tls(
   }
   let tls_config = Arc::new(tls_config);
 
-  let hostname = DNSNameRef::try_from_ascii_str(hostname)
-    .map_err(|_| invalid_hostname(hostname))?;
-
-  let tls_stream = TlsStream::new_client(tcp_stream, &tls_config, hostname);
+  let tls_stream = TlsStream::new_client(tcp_stream, &tls_config, hostname_dns);
 
   let rid = {
     let mut state_ = state.borrow_mut();
