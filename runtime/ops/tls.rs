@@ -30,6 +30,7 @@ use deno_core::ResourceId;
 use deno_core::ZeroCopyBuf;
 use io::Read;
 use io::Write;
+use log::debug;
 use serde::Deserialize;
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -85,15 +86,30 @@ impl StoresClientSessions for ClientSessionMemoryCache {
   }
 }
 
+#[allow(clippy::enum_variant_names)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum Shut {
+  Open,
+  TlsShut,
+  TcpShut,
+}
+
 pub struct TlsStream {
   session: Box<dyn Session>,
   socket: TcpStream,
+  rd_shut: Shut,
+  wr_shut: Shut,
 }
 
 impl TlsStream {
   pub fn new<S: Session + 'static>(socket: TcpStream, session: S) -> Self {
     let session = Box::new(session) as Box<dyn Session>;
-    Self { socket, session }
+    Self {
+      socket,
+      session,
+      rd_shut: Shut::Open,
+      wr_shut: Shut::Open,
+    }
   }
 
   pub fn into_split(self) -> (TlsStreamReader, TlsStreamWriter) {
@@ -105,92 +121,103 @@ impl TlsStream {
     (rd, wr)
   }
 
-  #[allow(clippy::try_err)]
   fn poll_io(
     &mut self,
     cx: &mut Context<'_>,
     for_reading: bool,
     for_writing: bool,
   ) -> Poll<io::Result<()>> {
+    use Poll::*;
+
     assert!((for_reading && !for_writing) || (!for_reading && for_writing));
 
-    let mut socket_is_readable = true;
-    let mut socket_is_writable = true;
+    // Initially, assume that the TCP stream is both readable and writable. If
+    // it isn't `read/write_tls()` will fail with `WouldBlock`, to which we'll
+    // respond by polling for read readiness or write readiness.
+    let mut socket_is_readable = self.rd_shut != Shut::TcpShut;
+    let mut socket_is_writable = self.wr_shut != Shut::TcpShut;
 
     loop {
-      while self.session.wants_write() && socket_is_writable {
+      debug!(
+        "rd: {:?} {:?} {:?} {:?}",
+        for_reading,
+        self.session.wants_read(),
+        socket_is_readable,
+        self.rd_shut,
+      );
+      debug!(
+        "wr: {:?} {:?} {:?} {:?}",
+        for_writing,
+        self.session.wants_write(),
+        socket_is_writable,
+        self.wr_shut,
+      );
+
+      while socket_is_writable && self.session.wants_write() {
         let mut wrapper = ImplementWriteTrait(&mut self.socket);
         match self.session.write_tls(&mut wrapper) {
           Ok(_) => {}
           Err(err) if err.kind() == ErrorKind::WouldBlock => {
-            socket_is_writable = false;
-            break;
+            match self.socket.poll_write_ready(cx) {
+              Ready(result) => result?,
+              Pending => {
+                socket_is_writable = false;
+                break;
+              }
+            }
           }
-          Err(err) => Err(err)?,
+          Err(err) => return Ready(Err(err)),
         }
       }
 
-      while self.session.wants_read() && socket_is_readable {
+      while socket_is_readable && self.session.wants_read() {
         let mut wrapper = ImplementReadTrait(&mut self.socket);
         match self.session.read_tls(&mut wrapper) {
-          Ok(_) => {}
-          Err(err) if err.kind() == ErrorKind::WouldBlock => {
+          Ok(0) => {
+            self.rd_shut = Shut::TcpShut;
             socket_is_readable = false;
             break;
           }
-          Err(err) => Err(err)?,
-        }
-
-        match self.session.process_new_packets() {
-          Ok(_) => {}
-          Err(err) => Err(io::Error::new(ErrorKind::InvalidData, err))?,
+          Ok(_) => match self.session.process_new_packets() {
+            Ok(_) => {}
+            Err(err) => {
+              let err = io::Error::new(ErrorKind::InvalidData, err);
+              return Ready(Err(err));
+            }
+          },
+          Err(err) if err.kind() == ErrorKind::WouldBlock => {
+            match self.socket.poll_read_ready(cx) {
+              Ready(result) => result?,
+              Pending => {
+                socket_is_readable = false;
+                break;
+              }
+            }
+          }
+          Err(err) => return Ready(Err(err)),
         }
       }
 
-      if self.session.wants_write() && socket_is_writable {
+      if socket_is_writable && self.session.wants_write() {
         continue;
       }
 
       if for_reading
         && !self.session.is_handshaking()
-        && !self.session.wants_read()
+        && (!self.session.wants_read() || self.rd_shut == Shut::TcpShut)
       {
-        break;
+        return Ready(Ok(()));
       }
 
       if for_writing
         && !self.session.is_handshaking()
-        && !self.session.wants_write()
+        && (!self.session.wants_write() || self.wr_shut == Shut::TcpShut)
       {
-        break;
+        return Ready(Ok(()));
       }
 
-      let mut can_continue = false;
-
-      if self.session.wants_read() && !socket_is_readable {
-        if let Poll::Ready(result) = self.socket.poll_read_ready(cx) {
-          result?;
-          socket_is_readable = true;
-          can_continue = true;
-        }
-      }
-
-      if self.session.wants_write() && !socket_is_writable {
-        if let Poll::Ready(result) = self.socket.poll_write_ready(cx) {
-          result?;
-          socket_is_writable = true;
-          can_continue = true;
-        }
-      }
-
-      if can_continue {
-        continue;
-      }
-
-      return Poll::Pending;
+      return Pending;
     }
-
-    Poll::Ready(Ok(()))
   }
 }
 
@@ -213,9 +240,13 @@ impl AsyncRead for TlsStream {
         buf.advance(bytes_read);
         Ok(())
       }
-      // Rustls `read()` returns `ConnectionAborted` when it receives a
-      // `CloseNotify` alert,; this indicates a graceful close.
-      Err(err) if err.kind() == ErrorKind::ConnectionAborted => Ok(()),
+      Err(err) if err.kind() == ErrorKind::ConnectionAborted => {
+        // Rustls `read()` returns `ConnectionAborted` when it receives a
+        // `CloseNotify` alert; this indicates that the other end of the line
+        // has initiated a graceful shutdown at the TLS level.
+        self.rd_shut = Shut::TlsShut;
+        Ok(())
+      }
       Err(err) => Err(err),
     };
     Poll::Ready(result)
@@ -257,8 +288,24 @@ impl AsyncWrite for TlsStream {
     mut self: Pin<&mut Self>,
     cx: &mut Context<'_>,
   ) -> Poll<io::Result<()>> {
-    ready!(self.poll_io(cx, false, true))?;
-    Poll::Ready(Ok(())) // Not implemented.
+    loop {
+      match self.wr_shut {
+        Shut::Open => {
+          ready!(self.poll_io(cx, false, true))?;
+          self.session.send_close_notify();
+          self.wr_shut = Shut::TlsShut;
+        }
+        Shut::TlsShut => {
+          ready!(self.poll_io(cx, false, true))?;
+          ready!(Pin::new(&mut self.socket).poll_shutdown(cx))?;
+          self.wr_shut = Shut::TcpShut;
+        }
+        Shut::TcpShut => {
+          ready!(self.poll_io(cx, false, true))?;
+          return Poll::Ready(Ok(()));
+        }
+      }
+    }
   }
 }
 
@@ -284,7 +331,7 @@ impl TlsStreamReader {
   pub fn unsplit(self, wr: TlsStreamWriter) -> TlsStream {
     assert!(Arc::ptr_eq(&self.shared, &wr.shared));
     let Self { shared } = self;
-    drop(wr); // Drop `wr.shared` so only 1 strong reference to it remains.
+    drop(wr); // Drop `wr` so only 1 strong reference to `shared` remains.
     let Shared { stream, .. } = Arc::try_unwrap(shared)
       .unwrap_or_else(|_| panic!("Arc::<Shared>::try_unwrap() failed"));
     Mutex::into_inner(stream)
@@ -298,11 +345,11 @@ impl AsyncRead for TlsStreamReader {
     cx: &mut Context<'_>,
     buf: &mut ReadBuf<'_>,
   ) -> Poll<io::Result<()>> {
-    eprintln!("poll_read()...");
+    debug!("poll_read()...");
     let r = self
       .shared
       .poll_rd_with(cx, move |stream, cx| stream.poll_read(cx, buf));
-    eprintln!("poll_read(): {:?}", r);
+    debug!("poll_read(): {:?}", r);
     r
   }
 }
@@ -317,11 +364,11 @@ impl AsyncWrite for TlsStreamWriter {
     cx: &mut Context<'_>,
     buf: &[u8],
   ) -> Poll<io::Result<usize>> {
-    eprintln!("poll_write()...");
+    debug!("poll_write()...");
     let r = self
       .shared
       .poll_wr_with(cx, move |stream, cx| stream.poll_write(cx, buf));
-    eprintln!("poll_write(): {:?}", r);
+    debug!("poll_write(): {:?}", r);
     r
   }
 
@@ -338,9 +385,12 @@ impl AsyncWrite for TlsStreamWriter {
     self: Pin<&mut Self>,
     cx: &mut Context<'_>,
   ) -> Poll<io::Result<()>> {
-    self
+    debug!("poll_shutdown()...");
+    let r = self
       .shared
-      .poll_wr_with(cx, |stream, cx| stream.poll_shutdown(cx))
+      .poll_wr_with(cx, |stream, cx| stream.poll_shutdown(cx));
+    debug!("poll_shutdown(): {:?}", r);
+    r
   }
 }
 
