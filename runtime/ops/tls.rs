@@ -138,12 +138,7 @@ pub struct TlsStream {
 }
 
 impl TlsStream {
-  fn new<S>(tcp: TcpStream, tls: S) -> Self
-  where
-    S: 'static,
-    TlsSession: From<S>,
-  {
-    let tls = TlsSession::from(tls);
+  fn new(tcp: TcpStream, tls: TlsSession) -> Self {
     Self {
       tcp,
       tls,
