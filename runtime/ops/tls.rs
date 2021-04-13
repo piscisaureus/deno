@@ -122,6 +122,12 @@ impl From<ServerSession> for TlsSession {
   }
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum Flow {
+  Read,
+  Write,
+}
+
 #[allow(clippy::enum_variant_names)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum Shut {
@@ -173,11 +179,8 @@ impl TlsStream {
   fn poll_io(
     &mut self,
     cx: &mut Context<'_>,
-    for_reading: bool,
-    for_writing: bool,
+    flow: Flow,
   ) -> Poll<io::Result<()>> {
-    assert!((for_reading && !for_writing) || (!for_reading && for_writing));
-
     // Initially, assume that the TCP stream is both readable and writable. If
     // this turns out not to be the case, `read_tls` or `write_tls()` will fail
     // with `WouldBlock`; only then do we arrange to be asynchronously notified
@@ -233,17 +236,15 @@ impl TlsStream {
         continue;
       }
 
-      if for_reading
-        && !self.tls.is_handshaking()
-        && (!self.tls.wants_read() || self.rd_shut == Shut::TcpShut)
-      {
-        return Poll::Ready(Ok(()));
-      }
-      if for_writing && !self.tls.is_handshaking() && !self.tls.wants_write() {
-        return Poll::Ready(Ok(()));
-      }
-
-      return Poll::Pending;
+      let poll_again = match flow {
+        _ if self.tls.is_handshaking() => true,
+        Flow::Read => self.tls.wants_read() && self.rd_shut != Shut::TcpShut,
+        Flow::Write => self.tls.wants_write(),
+      };
+      return match poll_again {
+        false => Poll::Ready(Ok(())),
+        true => Poll::Pending,
+      };
     }
   }
 }
@@ -254,7 +255,7 @@ impl AsyncRead for TlsStream {
     cx: &mut Context<'_>,
     buf: &mut ReadBuf<'_>,
   ) -> Poll<io::Result<()>> {
-    ready!(self.poll_io(cx, true, false))?;
+    ready!(self.poll_io(cx, Flow::Read))?;
 
     let buf_slice =
       unsafe { &mut *(buf.unfilled_mut() as *mut [MaybeUninit<u8>] as *mut _) };
@@ -283,7 +284,7 @@ impl AsyncWrite for TlsStream {
     cx: &mut Context<'_>,
     buf: &[u8],
   ) -> Poll<io::Result<usize>> {
-    ready!(self.poll_io(cx, false, true))?;
+    ready!(self.poll_io(cx, Flow::Write))?;
 
     match self.tls.write(buf) {
       Ok(0) => unreachable!(),
@@ -291,7 +292,7 @@ impl AsyncWrite for TlsStream {
         // We try to flush as much as we can, but since we have already handed
         // off some bytes to rustls we can't return `Poll::Pending()` any more,
         // as this would indicate to the caller that it should try again.
-        let _ = self.poll_io(cx, false, true)?;
+        let _ = self.poll_io(cx, Flow::Write)?;
         Poll::Ready(Ok(bytes_written))
       }
       Err(err) => Poll::Ready(Err(err)),
@@ -302,7 +303,7 @@ impl AsyncWrite for TlsStream {
     mut self: Pin<&mut Self>,
     cx: &mut Context<'_>,
   ) -> Poll<io::Result<()>> {
-    ready!(self.poll_io(cx, false, true))?;
+    ready!(self.poll_io(cx, Flow::Write))?;
     // The underlying TCP stream does not need to be flushed.
     Poll::Ready(Ok(()))
   }
@@ -314,12 +315,12 @@ impl AsyncWrite for TlsStream {
     loop {
       match self.wr_shut {
         Shut::Open => {
-          ready!(self.poll_io(cx, false, true))?;
+          ready!(self.poll_io(cx, Flow::Write))?;
           self.tls.send_close_notify();
           self.wr_shut = Shut::TlsShut;
         }
         Shut::TlsShut => {
-          ready!(self.poll_io(cx, false, true))?;
+          ready!(self.poll_io(cx, Flow::Write))?;
           ready!(Pin::new(&mut self.tcp).poll_shutdown(cx))?;
           self.wr_shut = Shut::TcpShut;
         }
@@ -355,7 +356,7 @@ impl AsyncRead for TlsStreamReader {
   ) -> Poll<io::Result<()>> {
     self
       .shared
-      .poll_rd_with(cx, move |tls_stream, cx| tls_stream.poll_read(cx, buf))
+      .poll_flow_with(cx, Flow::Read, move |tls, cx| tls.poll_read(cx, buf))
   }
 }
 
@@ -371,7 +372,7 @@ impl AsyncWrite for TlsStreamWriter {
   ) -> Poll<io::Result<usize>> {
     self
       .shared
-      .poll_wr_with(cx, move |tls_stream, cx| tls_stream.poll_write(cx, buf))
+      .poll_flow_with(cx, Flow::Write, move |tls, cx| tls.poll_write(cx, buf))
   }
 
   fn poll_flush(
@@ -380,7 +381,7 @@ impl AsyncWrite for TlsStreamWriter {
   ) -> Poll<io::Result<()>> {
     self
       .shared
-      .poll_wr_with(cx, |tls_stream, cx| tls_stream.poll_flush(cx))
+      .poll_flow_with(cx, Flow::Write, |tls, cx| tls.poll_flush(cx))
   }
 
   fn poll_shutdown(
@@ -389,7 +390,7 @@ impl AsyncWrite for TlsStreamWriter {
   ) -> Poll<io::Result<()>> {
     self
       .shared
-      .poll_wr_with(cx, |tls_stream, cx| tls_stream.poll_shutdown(cx))
+      .poll_flow_with(cx, Flow::Write, |tls, cx| tls.poll_shutdown(cx))
   }
 }
 
@@ -409,24 +410,16 @@ impl Shared {
     Arc::new(self_)
   }
 
-  fn poll_rd_with<R>(
+  fn poll_flow_with<R>(
     self: &Arc<Self>,
     cx: &mut Context<'_>,
+    flow: Flow,
     mut f: impl FnMut(Pin<&mut TlsStream>, &mut Context<'_>) -> R,
   ) -> R {
-    self.rd_waker.register(cx.waker());
-    let shared_waker = self.new_waker();
-    let mut cx = Context::from_waker(&shared_waker);
-    let mut tls_stream = self.tls_stream.lock().unwrap();
-    f(Pin::new(&mut tls_stream), &mut cx)
-  }
-
-  fn poll_wr_with<R>(
-    self: &Arc<Self>,
-    cx: &mut Context<'_>,
-    mut f: impl FnMut(Pin<&mut TlsStream>, &mut Context<'_>) -> R,
-  ) -> R {
-    self.wr_waker.register(cx.waker());
+    match flow {
+      Flow::Read => self.rd_waker.register(cx.waker()),
+      Flow::Write => self.wr_waker.register(cx.waker()),
+    }
     let shared_waker = self.new_waker();
     let mut cx = Context::from_waker(&shared_waker);
     let mut tls_stream = self.tls_stream.lock().unwrap();
@@ -568,7 +561,8 @@ async fn op_start_tls(
   }
   let tls_config = Arc::new(tls_config);
 
-  let tls_stream = TlsStream::new_client(tcp_stream, &tls_config, hostname_dns);
+  let tls_stream =
+    TlsStream::new_client_side(tcp_stream, &tls_config, hostname_dns);
 
   let rid = {
     let mut state_ = state.borrow_mut();
