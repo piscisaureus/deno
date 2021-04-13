@@ -161,7 +161,7 @@ impl TlsStream {
     Self::new(tcp, tls)
   }
 
-  pub fn into_split(self) -> (TlsStreamReader, TlsStreamWriter) {
+  fn into_split(self) -> (TlsStreamReader, TlsStreamWriter) {
     let shared = Shared::new(self);
     let rd = TlsStreamReader {
       shared: shared.clone(),
