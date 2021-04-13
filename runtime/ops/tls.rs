@@ -571,7 +571,8 @@ async fn op_start_tls(
   }
   let tls_config = Arc::new(tls_config);
 
-  let hostname = DNSNameRef::try_from_ascii_str(hostname)?;
+  let hostname = DNSNameRef::try_from_ascii_str(hostname)
+    .map_err(|_| invalid_hostname(hostname))?;
 
   let tls_stream = TlsStream::new_client(tcp_stream, &tls_config, hostname);
 
@@ -637,7 +638,8 @@ async fn op_connect_tls(
   }
   let tls_config = Arc::new(tls_config);
 
-  let hostname = DNSNameRef::try_from_ascii_str(hostname)?;
+  let hostname = DNSNameRef::try_from_ascii_str(hostname)
+    .map_err(|_| invalid_hostname(hostname))?;
 
   let tls_stream = TlsStream::new_client(tcp_stream, &tls_config, hostname);
 
@@ -674,6 +676,10 @@ fn load_certs(path: &str) -> Result<Vec<Certificate>, AnyError> {
   }
 
   Ok(certs)
+}
+
+fn invalid_hostname(hostname: &str) -> AnyError {
+  custom_error("TypeError", format!("invalid hostname: '{}'", hostname))
 }
 
 fn key_decode_err() -> AnyError {

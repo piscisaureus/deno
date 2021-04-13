@@ -161,7 +161,7 @@ where
 
       let tls_connector = TlsConnector::from(Arc::new(config));
       let dnsname =
-        DNSNameRef::try_from_ascii_str(&domain).expect("Invalid DNS lookup");
+        DNSNameRef::try_from_ascii_str(&domain).expect("invalid hostname");
       let tls_socket = tls_connector.connect(dnsname, tcp_socket).await?;
       MaybeTlsStream::Rustls(tls_socket)
     }
