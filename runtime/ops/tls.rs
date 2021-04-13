@@ -268,8 +268,8 @@ impl AsyncRead for TlsStream {
       }
       Err(err) if err.kind() == ErrorKind::ConnectionAborted => {
         // Rustls `read()` returns `ConnectionAborted` when it receives a
-        // `CloseNotify` alert; this indicates that the other end of the line
-        // has initiated a graceful shutdown at the TLS level.
+        // `CloseNotify` alert; this indicates that the remote end of the
+        // connection has initiated a graceful shutdown at the TLS level.
         self.rd_shut = Shut::TlsShut;
         Poll::Ready(Ok(()))
       }
@@ -340,7 +340,7 @@ impl ReadHalf {
   pub fn reunite(self, wr: WriteHalf) -> TlsStream {
     assert!(Arc::ptr_eq(&self.shared, &wr.shared));
     let Self { shared } = self;
-    drop(wr); // Drop `wr` so only 1 strong reference to `shared` remains.
+    drop(wr); // Drop `wr`, so only one strong reference to `shared` remains.
     let Shared { tls_stream, .. } = Arc::try_unwrap(shared)
       .unwrap_or_else(|_| panic!("Arc::<Shared>::try_unwrap() failed"));
     Mutex::into_inner(tls_stream)
@@ -420,8 +420,10 @@ impl Shared {
       Flow::Read => self.rd_waker.register(cx.waker()),
       Flow::Write => self.wr_waker.register(cx.waker()),
     }
+
     let shared_waker = self.new_waker();
     let mut cx = Context::from_waker(&shared_waker);
+
     let mut tls_stream = self.tls_stream.lock().unwrap();
     f(Pin::new(&mut tls_stream), &mut cx)
   }
