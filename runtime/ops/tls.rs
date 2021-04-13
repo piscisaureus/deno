@@ -147,7 +147,7 @@ impl TlsStream {
     }
   }
 
-  fn new_client(
+  fn new_client_side(
     tcp: TcpStream,
     tls_config: &Arc<ClientConfig>,
     hostname: DNSNameRef,
@@ -156,7 +156,7 @@ impl TlsStream {
     Self::new(tcp, tls)
   }
 
-  fn new_server(tcp: TcpStream, tls_config: &Arc<ServerConfig>) -> Self {
+  fn new_server_side(tcp: TcpStream, tls_config: &Arc<ServerConfig>) -> Self {
     let tls = TlsSession::Server(ServerSession::new(tls_config));
     Self::new(tcp, tls)
   }
@@ -635,7 +635,8 @@ async fn op_connect_tls(
   }
   let tls_config = Arc::new(tls_config);
 
-  let tls_stream = TlsStream::new_client(tcp_stream, &tls_config, hostname_dns);
+  let tls_stream =
+    TlsStream::new_client_side(tcp_stream, &tls_config, hostname_dns);
 
   let rid = {
     let mut state_ = state.borrow_mut();
@@ -824,7 +825,7 @@ async fn op_accept_tls(
 
   let local_addr = tcp_stream.local_addr()?;
 
-  let tls_stream = TlsStream::new_server(tcp_stream, &resource.tls_config);
+  let tls_stream = TlsStream::new_server_side(tcp_stream, &resource.tls_config);
 
   let rid = {
     let mut state_ = state.borrow_mut();
