@@ -39,7 +39,7 @@ use std::fs::File;
 use std::io;
 use std::io::BufReader;
 use std::io::ErrorKind;
-use std::mem::MaybeUninit;
+use std::mem::transmute;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::path::Path;
@@ -261,7 +261,7 @@ impl AsyncRead for TlsStream {
   ) -> Poll<io::Result<()>> {
     ready!(self.poll_io(cx, true, false))?;
 
-    let buf_slice = unsafe { transmute(buf.unfilled_mut()) };
+    let buf_slice: &mut [u8] = unsafe { transmute(buf.unfilled_mut()) };
 
     match self.tls.read(buf_slice) {
       Ok(bytes_read) => {
