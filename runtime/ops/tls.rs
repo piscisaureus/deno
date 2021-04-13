@@ -181,13 +181,12 @@ impl TlsStream {
     for_reading: bool,
     for_writing: bool,
   ) -> Poll<io::Result<()>> {
-    use Poll::*;
-
     assert!((for_reading && !for_writing) || (!for_reading && for_writing));
 
     // Initially, assume that the TCP stream is both readable and writable. If
-    // it isn't `read/write_tls()` will fail with `WouldBlock`, to which we'll
-    // respond by polling for read readiness or write readiness.
+    // this turns out not to be the case, `read_tls` or `write_tls()` will fail
+    // with `WouldBlock`; only then do we arrange to be asynchronously notified
+    // of read/write.
     let mut tcp_read_ready = true;
     let mut tcp_write_ready = true;
 
@@ -198,11 +197,11 @@ impl TlsStream {
           Ok(_) => {}
           Err(err) if err.kind() == ErrorKind::WouldBlock => {
             match self.tcp.poll_write_ready(cx) {
-              Ready(result) => result?,
-              Pending => tcp_write_ready = false,
+              Poll::Ready(result) => result?,
+              Poll::Pending => tcp_write_ready = false,
             }
           }
-          Err(err) => return Ready(Err(err)),
+          Err(err) => return Poll::Ready(Err(err)),
         }
       }
 
@@ -215,23 +214,23 @@ impl TlsStream {
           Ok(0) if self.tls.is_handshaking() => {
             let err =
               io::Error::new(ErrorKind::UnexpectedEof, "tls handshake eof");
-            return Ready(Err(err));
+            return Poll::Ready(Err(err));
           }
           Ok(0) => self.rd_shut = Shut::TcpShut,
           Ok(_) => match self.tls.process_new_packets() {
             Ok(_) => {}
             Err(err) => {
               let err = io::Error::new(ErrorKind::InvalidData, err);
-              return Ready(Err(err));
+              return Poll::Ready(Err(err));
             }
           },
           Err(err) if err.kind() == ErrorKind::WouldBlock => {
             match self.tcp.poll_read_ready(cx) {
-              Ready(result) => result?,
-              Pending => tcp_read_ready = false,
+              Poll::Ready(result) => result?,
+              Poll::Pending => tcp_read_ready = false,
             }
           }
-          Err(err) => return Ready(Err(err)),
+          Err(err) => return Poll::Ready(Err(err)),
         }
       }
 
@@ -243,13 +242,13 @@ impl TlsStream {
         && !self.tls.is_handshaking()
         && (!self.tls.wants_read() || self.rd_shut == Shut::TcpShut)
       {
-        return Ready(Ok(()));
+        return Poll::Ready(Ok(()));
       }
       if for_writing && !self.tls.is_handshaking() && !self.tls.wants_write() {
-        return Ready(Ok(()));
+        return Poll::Ready(Ok(()));
       }
 
-      return Pending;
+      return Poll::Pending;
     }
   }
 }
@@ -298,7 +297,6 @@ impl AsyncWrite for TlsStream {
         // We try to flush as much as we can, but since we have already handed
         // off some bytes to rustls we can't return `Poll::Pending()` any more,
         // as this would indicate to the caller that it should try again.
-        // The only exception is when an error happens.
         let _ = self.poll_io(cx, false, true)?;
         Poll::Ready(Ok(bytes_written))
       }
@@ -311,6 +309,7 @@ impl AsyncWrite for TlsStream {
     cx: &mut Context<'_>,
   ) -> Poll<io::Result<()>> {
     ready!(self.poll_io(cx, false, true))?;
+    // The underlying TCP stream does not need to be flushed.
     Poll::Ready(Ok(()))
   }
 
@@ -331,7 +330,6 @@ impl AsyncWrite for TlsStream {
           self.wr_shut = Shut::TcpShut;
         }
         Shut::TcpShut => {
-          ready!(self.poll_io(cx, false, true))?;
           return Poll::Ready(Ok(()));
         }
       }
