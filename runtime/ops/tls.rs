@@ -342,7 +342,7 @@ pub struct TlsStreamReader {
 }
 
 impl TlsStreamReader {
-  pub fn unsplit(self, wr: TlsStreamWriter) -> TlsStream {
+  pub fn reunite(self, wr: TlsStreamWriter) -> TlsStream {
     assert!(Arc::ptr_eq(&self.shared, &wr.shared));
     let Self { shared } = self;
     drop(wr); // Drop `wr` so only 1 strong reference to `shared` remains.

@@ -286,7 +286,7 @@ fn op_http_start(
       panic!("Only a single use of this resource should happen")
     });
     let (read_half, write_half) = resource.into_inner();
-    let tls_stream = read_half.unsplit(write_half);
+    let tls_stream = read_half.reunite(write_half);
 
     let hyper_connection = Http::new()
       .with_executor(LocalExecutor)
