@@ -30,7 +30,6 @@ use deno_core::ResourceId;
 use deno_core::ZeroCopyBuf;
 use io::Read;
 use io::Write;
-use log::debug;
 use serde::Deserialize;
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -41,6 +40,8 @@ use std::io;
 use std::io::BufReader;
 use std::io::ErrorKind;
 use std::mem::MaybeUninit;
+use std::ops::Deref;
+use std::ops::DerefMut;
 use std::path::Path;
 use std::pin::Pin;
 use std::rc::Rc;
@@ -54,11 +55,9 @@ use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio_rustls::rustls::{
   internal::pemfile::{certs, pkcs8_private_keys, rsa_private_keys},
-  Certificate, NoClientAuth, PrivateKey, ServerConfig, Session,
-  StoresClientSessions,
+  Certificate, ClientConfig, ClientSession, NoClientAuth, PrivateKey,
+  ServerConfig, ServerSession, Session, StoresClientSessions,
 };
-use tokio_rustls::{client, server, TlsAcceptor};
-use tokio_rustls::{rustls::ClientConfig, TlsConnector};
 use webpki::DNSNameRef;
 
 lazy_static::lazy_static! {
@@ -86,6 +85,43 @@ impl StoresClientSessions for ClientSessionMemoryCache {
   }
 }
 
+enum TlsSession {
+  Client(ClientSession),
+  Server(ServerSession),
+}
+
+impl Deref for TlsSession {
+  type Target = dyn Session;
+
+  fn deref(&self) -> &Self::Target {
+    match self {
+      TlsSession::Client(client_session) => client_session,
+      TlsSession::Server(server_session) => server_session,
+    }
+  }
+}
+
+impl DerefMut for TlsSession {
+  fn deref_mut(&mut self) -> &mut Self::Target {
+    match self {
+      TlsSession::Client(client_session) => client_session,
+      TlsSession::Server(server_session) => server_session,
+    }
+  }
+}
+
+impl From<ClientSession> for TlsSession {
+  fn from(client_session: ClientSession) -> Self {
+    TlsSession::Client(client_session)
+  }
+}
+
+impl From<ServerSession> for TlsSession {
+  fn from(server_session: ServerSession) -> Self {
+    TlsSession::Server(server_session)
+  }
+}
+
 #[allow(clippy::enum_variant_names)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum Shut {
@@ -95,21 +131,39 @@ enum Shut {
 }
 
 pub struct TlsStream {
-  session: Box<dyn Session>,
-  socket: TcpStream,
+  tls: TlsSession,
+  tcp: TcpStream,
   rd_shut: Shut,
   wr_shut: Shut,
 }
 
 impl TlsStream {
-  pub fn new<S: Session + 'static>(socket: TcpStream, session: S) -> Self {
-    let session = Box::new(session) as Box<dyn Session>;
+  fn new<S>(tcp: TcpStream, tls: S) -> Self
+  where
+    S: 'static,
+    TlsSession: From<S>,
+  {
+    let tls = TlsSession::from(tls);
     Self {
-      socket,
-      session,
+      tcp,
+      tls,
       rd_shut: Shut::Open,
       wr_shut: Shut::Open,
     }
+  }
+
+  fn new_client(
+    tcp: TcpStream,
+    tls_config: &Arc<ClientConfig>,
+    hostname: DNSNameRef,
+  ) -> Self {
+    let tls = TlsSession::Client(ClientSession::new(tls_config, hostname));
+    Self::new(tcp, tls)
+  }
+
+  fn new_server(tcp: TcpStream, tls_config: &Arc<ServerConfig>) -> Self {
+    let tls = TlsSession::Server(ServerSession::new(tls_config));
+    Self::new(tcp, tls)
   }
 
   pub fn into_split(self) -> (TlsStreamReader, TlsStreamWriter) {
@@ -134,34 +188,19 @@ impl TlsStream {
     // Initially, assume that the TCP stream is both readable and writable. If
     // it isn't `read/write_tls()` will fail with `WouldBlock`, to which we'll
     // respond by polling for read readiness or write readiness.
-    let mut socket_is_readable = self.rd_shut != Shut::TcpShut;
-    let mut socket_is_writable = self.wr_shut != Shut::TcpShut;
+    let mut tcp_read_ready = self.rd_shut != Shut::TcpShut;
+    let mut tcp_write_ready = self.wr_shut != Shut::TcpShut;
 
     loop {
-      debug!(
-        "rd: {:?} {:?} {:?} {:?}",
-        for_reading,
-        self.session.wants_read(),
-        socket_is_readable,
-        self.rd_shut,
-      );
-      debug!(
-        "wr: {:?} {:?} {:?} {:?}",
-        for_writing,
-        self.session.wants_write(),
-        socket_is_writable,
-        self.wr_shut,
-      );
-
-      while socket_is_writable && self.session.wants_write() {
-        let mut wrapper = ImplementWriteTrait(&mut self.socket);
-        match self.session.write_tls(&mut wrapper) {
+      while tcp_write_ready && self.tls.wants_write() {
+        let mut wrapper = ImplementWriteTrait(&mut self.tcp);
+        match self.tls.write_tls(&mut wrapper) {
           Ok(_) => {}
           Err(err) if err.kind() == ErrorKind::WouldBlock => {
-            match self.socket.poll_write_ready(cx) {
+            match self.tcp.poll_write_ready(cx) {
               Ready(result) => result?,
               Pending => {
-                socket_is_writable = false;
+                tcp_write_ready = false;
                 break;
               }
             }
@@ -170,15 +209,15 @@ impl TlsStream {
         }
       }
 
-      while socket_is_readable && self.session.wants_read() {
-        let mut wrapper = ImplementReadTrait(&mut self.socket);
-        match self.session.read_tls(&mut wrapper) {
+      while tcp_read_ready && self.tls.wants_read() {
+        let mut wrapper = ImplementReadTrait(&mut self.tcp);
+        match self.tls.read_tls(&mut wrapper) {
           Ok(0) => {
             self.rd_shut = Shut::TcpShut;
-            socket_is_readable = false;
+            tcp_read_ready = false;
             break;
           }
-          Ok(_) => match self.session.process_new_packets() {
+          Ok(_) => match self.tls.process_new_packets() {
             Ok(_) => {}
             Err(err) => {
               let err = io::Error::new(ErrorKind::InvalidData, err);
@@ -186,10 +225,10 @@ impl TlsStream {
             }
           },
           Err(err) if err.kind() == ErrorKind::WouldBlock => {
-            match self.socket.poll_read_ready(cx) {
+            match self.tcp.poll_read_ready(cx) {
               Ready(result) => result?,
               Pending => {
-                socket_is_readable = false;
+                tcp_read_ready = false;
                 break;
               }
             }
@@ -198,20 +237,20 @@ impl TlsStream {
         }
       }
 
-      if socket_is_writable && self.session.wants_write() {
+      if tcp_write_ready && self.tls.wants_write() {
         continue;
       }
 
       if for_reading
-        && !self.session.is_handshaking()
-        && (!self.session.wants_read() || self.rd_shut == Shut::TcpShut)
+        && !self.tls.is_handshaking()
+        && (!self.tls.wants_read() || self.rd_shut == Shut::TcpShut)
       {
         return Ready(Ok(()));
       }
 
       if for_writing
-        && !self.session.is_handshaking()
-        && (!self.session.wants_write() || self.wr_shut == Shut::TcpShut)
+        && !self.tls.is_handshaking()
+        && (!self.tls.wants_write() || self.wr_shut == Shut::TcpShut)
       {
         return Ready(Ok(()));
       }
@@ -233,23 +272,22 @@ impl AsyncRead for TlsStream {
       &mut *(buf.unfilled_mut() as *mut [MaybeUninit<u8>] as *mut [u8])
     };
 
-    let result = match self.session.read(buf_slice) {
+    match self.tls.read(buf_slice) {
       Ok(0) => unreachable!(),
       Ok(bytes_read) => {
         unsafe { buf.assume_init(bytes_read) };
         buf.advance(bytes_read);
-        Ok(())
+        Poll::Ready(Ok(()))
       }
       Err(err) if err.kind() == ErrorKind::ConnectionAborted => {
         // Rustls `read()` returns `ConnectionAborted` when it receives a
         // `CloseNotify` alert; this indicates that the other end of the line
         // has initiated a graceful shutdown at the TLS level.
         self.rd_shut = Shut::TlsShut;
-        Ok(())
+        Poll::Ready(Ok(()))
       }
-      Err(err) => Err(err),
-    };
-    Poll::Ready(result)
+      Err(err) => Poll::Ready(Err(err)),
+    }
   }
 }
 
@@ -261,7 +299,7 @@ impl AsyncWrite for TlsStream {
   ) -> Poll<io::Result<usize>> {
     ready!(self.poll_io(cx, false, true))?;
 
-    let result = match self.session.write(buf) {
+    match self.tls.write(buf) {
       Ok(0) => unreachable!(),
       Ok(bytes_written) => {
         // We try to flush as much as we can, but since we have already handed
@@ -269,11 +307,10 @@ impl AsyncWrite for TlsStream {
         // as this would indicate to the caller that it should try again.
         // The only exception is when an error happens.
         let _ = self.poll_io(cx, false, true)?;
-        Ok(bytes_written)
+        Poll::Ready(Ok(bytes_written))
       }
-      Err(err) => Err(err),
-    };
-    Poll::Ready(result)
+      Err(err) => Poll::Ready(Err(err)),
+    }
   }
 
   fn poll_flush(
@@ -292,12 +329,12 @@ impl AsyncWrite for TlsStream {
       match self.wr_shut {
         Shut::Open => {
           ready!(self.poll_io(cx, false, true))?;
-          self.session.send_close_notify();
+          self.tls.send_close_notify();
           self.wr_shut = Shut::TlsShut;
         }
         Shut::TlsShut => {
           ready!(self.poll_io(cx, false, true))?;
-          ready!(Pin::new(&mut self.socket).poll_shutdown(cx))?;
+          ready!(Pin::new(&mut self.tcp).poll_shutdown(cx))?;
           self.wr_shut = Shut::TcpShut;
         }
         Shut::TcpShut => {
@@ -306,20 +343,6 @@ impl AsyncWrite for TlsStream {
         }
       }
     }
-  }
-}
-
-impl From<client::TlsStream<TcpStream>> for TlsStream {
-  fn from(s: client::TlsStream<TcpStream>) -> Self {
-    let (socket, session) = s.into_inner();
-    Self::new(socket, session)
-  }
-}
-
-impl From<server::TlsStream<TcpStream>> for TlsStream {
-  fn from(s: server::TlsStream<TcpStream>) -> Self {
-    let (socket, session) = s.into_inner();
-    Self::new(socket, session)
   }
 }
 
@@ -332,9 +355,9 @@ impl TlsStreamReader {
     assert!(Arc::ptr_eq(&self.shared, &wr.shared));
     let Self { shared } = self;
     drop(wr); // Drop `wr` so only 1 strong reference to `shared` remains.
-    let Shared { stream, .. } = Arc::try_unwrap(shared)
+    let Shared { tls_stream, .. } = Arc::try_unwrap(shared)
       .unwrap_or_else(|_| panic!("Arc::<Shared>::try_unwrap() failed"));
-    Mutex::into_inner(stream)
+    Mutex::into_inner(tls_stream)
       .unwrap_or_else(|_| panic!("Mutex::<TlsStream>::into_inner() failed"))
   }
 }
@@ -345,12 +368,9 @@ impl AsyncRead for TlsStreamReader {
     cx: &mut Context<'_>,
     buf: &mut ReadBuf<'_>,
   ) -> Poll<io::Result<()>> {
-    debug!("poll_read()...");
-    let r = self
+    self
       .shared
-      .poll_rd_with(cx, move |stream, cx| stream.poll_read(cx, buf));
-    debug!("poll_read(): {:?}", r);
-    r
+      .poll_rd_with(cx, move |tls_stream, cx| tls_stream.poll_read(cx, buf))
   }
 }
 
@@ -364,12 +384,9 @@ impl AsyncWrite for TlsStreamWriter {
     cx: &mut Context<'_>,
     buf: &[u8],
   ) -> Poll<io::Result<usize>> {
-    debug!("poll_write()...");
-    let r = self
+    self
       .shared
-      .poll_wr_with(cx, move |stream, cx| stream.poll_write(cx, buf));
-    debug!("poll_write(): {:?}", r);
-    r
+      .poll_wr_with(cx, move |tls_stream, cx| tls_stream.poll_write(cx, buf))
   }
 
   fn poll_flush(
@@ -378,32 +395,29 @@ impl AsyncWrite for TlsStreamWriter {
   ) -> Poll<io::Result<()>> {
     self
       .shared
-      .poll_wr_with(cx, |stream, cx| stream.poll_flush(cx))
+      .poll_wr_with(cx, |tls_stream, cx| tls_stream.poll_flush(cx))
   }
 
   fn poll_shutdown(
     self: Pin<&mut Self>,
     cx: &mut Context<'_>,
   ) -> Poll<io::Result<()>> {
-    debug!("poll_shutdown()...");
-    let r = self
+    self
       .shared
-      .poll_wr_with(cx, |stream, cx| stream.poll_shutdown(cx));
-    debug!("poll_shutdown(): {:?}", r);
-    r
+      .poll_wr_with(cx, |tls_stream, cx| tls_stream.poll_shutdown(cx))
   }
 }
 
 struct Shared {
-  stream: Mutex<TlsStream>,
+  tls_stream: Mutex<TlsStream>,
   rd_waker: AtomicWaker,
   wr_waker: AtomicWaker,
 }
 
 impl Shared {
-  fn new(stream: TlsStream) -> Arc<Self> {
+  fn new(tls_stream: TlsStream) -> Arc<Self> {
     let self_ = Self {
-      stream: Mutex::new(stream),
+      tls_stream: Mutex::new(tls_stream),
       rd_waker: AtomicWaker::new(),
       wr_waker: AtomicWaker::new(),
     };
@@ -418,8 +432,8 @@ impl Shared {
     self.rd_waker.register(cx.waker());
     let shared_waker = self.new_waker();
     let mut cx = Context::from_waker(&shared_waker);
-    let mut stream = self.stream.lock().unwrap();
-    f(Pin::new(&mut stream), &mut cx)
+    let mut tls_stream = self.tls_stream.lock().unwrap();
+    f(Pin::new(&mut tls_stream), &mut cx)
   }
 
   fn poll_wr_with<R>(
@@ -430,8 +444,8 @@ impl Shared {
     self.wr_waker.register(cx.waker());
     let shared_waker = self.new_waker();
     let mut cx = Context::from_waker(&shared_waker);
-    let mut stream = self.stream.lock().unwrap();
-    f(Pin::new(&mut stream), &mut cx)
+    let mut tls_stream = self.tls_stream.lock().unwrap();
+    f(Pin::new(&mut tls_stream), &mut cx)
   }
 
   const WAKER_VTABLE: RawWakerVTable = RawWakerVTable::new(
@@ -525,18 +539,19 @@ async fn op_start_tls(
   _zero_copy: Option<ZeroCopyBuf>,
 ) -> Result<OpConn, AnyError> {
   let rid = args.rid;
+  let hostname = match &*args.hostname {
+    "" => "localhost",
+    n => n,
+  };
+  let cert_file = args.cert_file.as_deref();
 
-  let mut domain = args.hostname.as_str();
-  if domain.is_empty() {
-    domain = "localhost";
-  }
   {
     super::check_unstable2(&state, "Deno.startTls");
     let mut s = state.borrow_mut();
     let permissions = s.borrow_mut::<Permissions>();
-    permissions.net.check(&(&domain, Some(0)))?;
-    if let Some(path) = &args.cert_file {
-      permissions.read.check(Path::new(&path))?;
+    permissions.net.check(&(hostname, Some(0)))?;
+    if let Some(path) = cert_file {
+      permissions.read.check(Path::new(path))?;
     }
   }
 
@@ -552,28 +567,30 @@ async fn op_start_tls(
 
   let local_addr = tcp_stream.local_addr()?;
   let remote_addr = tcp_stream.peer_addr()?;
-  let mut config = ClientConfig::new();
-  config.set_persistence(CLIENT_SESSION_MEMORY_CACHE.clone());
-  config
+
+  let mut tls_config = ClientConfig::new();
+  tls_config.set_persistence(CLIENT_SESSION_MEMORY_CACHE.clone());
+  tls_config
     .root_store
     .add_server_trust_anchors(&webpki_roots::TLS_SERVER_ROOTS);
-  if let Some(path) = args.cert_file {
+  if let Some(path) = cert_file {
     let key_file = File::open(path)?;
     let reader = &mut BufReader::new(key_file);
-    config.root_store.add_pem_file(reader).unwrap();
+    tls_config.root_store.add_pem_file(reader).unwrap();
   }
+  let tls_config = Arc::new(tls_config);
 
-  let tls_connector = TlsConnector::from(Arc::new(config));
-  let dnsname = DNSNameRef::try_from_ascii_str(&domain)
-    .map_err(|_| generic_error("Invalid DNS lookup"))?;
-  let tls_stream = tls_connector.connect(dnsname, tcp_stream).await?;
+  let hostname = DNSNameRef::try_from_ascii_str(hostname)?;
+
+  let tls_stream = TlsStream::new_client(tcp_stream, &tls_config, hostname);
 
   let rid = {
     let mut state_ = state.borrow_mut();
-    state_.resource_table.add(TlsStreamResource::new(
-      TlsStream::from(tls_stream).into_split(),
-    ))
+    state_
+      .resource_table
+      .add(TlsStreamResource::new(tls_stream.into_split()))
   };
+
   Ok(OpConn {
     rid,
     local_addr: Some(OpAddr::Tcp(IpAddr {
@@ -593,47 +610,53 @@ async fn op_connect_tls(
   _zero_copy: Option<ZeroCopyBuf>,
 ) -> Result<OpConn, AnyError> {
   assert_eq!(args.transport, "tcp");
+  let hostname = match &*args.hostname {
+    "" => "localhost",
+    n => n,
+  };
+  let port = args.port;
+  let cert_file = args.cert_file.as_deref();
 
   {
     let mut s = state.borrow_mut();
     let permissions = s.borrow_mut::<Permissions>();
-    permissions.net.check(&(&args.hostname, Some(args.port)))?;
-    if let Some(path) = &args.cert_file {
-      permissions.read.check(Path::new(&path))?;
+    permissions.net.check(&(hostname, Some(port)))?;
+    if let Some(path) = cert_file {
+      permissions.read.check(Path::new(path))?;
     }
   }
-  let mut domain = args.hostname.as_str();
-  if domain.is_empty() {
-    domain = "localhost";
-  }
 
-  let addr = resolve_addr(&args.hostname, args.port)
+  let connect_addr = resolve_addr(hostname, port)
     .await?
     .next()
     .ok_or_else(|| generic_error("No resolved address found"))?;
-  let tcp_stream = TcpStream::connect(&addr).await?;
+  let tcp_stream = TcpStream::connect(connect_addr).await?;
   let local_addr = tcp_stream.local_addr()?;
   let remote_addr = tcp_stream.peer_addr()?;
-  let mut config = ClientConfig::new();
-  config.set_persistence(CLIENT_SESSION_MEMORY_CACHE.clone());
-  config
+
+  let mut tls_config = ClientConfig::new();
+  tls_config.set_persistence(CLIENT_SESSION_MEMORY_CACHE.clone());
+  tls_config
     .root_store
     .add_server_trust_anchors(&webpki_roots::TLS_SERVER_ROOTS);
-  if let Some(path) = args.cert_file {
+  if let Some(path) = cert_file {
     let key_file = File::open(path)?;
     let reader = &mut BufReader::new(key_file);
-    config.root_store.add_pem_file(reader).unwrap();
+    tls_config.root_store.add_pem_file(reader).unwrap();
   }
-  let tls_connector = TlsConnector::from(Arc::new(config));
-  let dnsname = DNSNameRef::try_from_ascii_str(&domain)
-    .map_err(|_| generic_error("Invalid DNS lookup"))?;
-  let tls_stream = tls_connector.connect(dnsname, tcp_stream).await?;
+  let tls_config = Arc::new(tls_config);
+
+  let hostname = DNSNameRef::try_from_ascii_str(hostname)?;
+
+  let tls_stream = TlsStream::new_client(tcp_stream, &tls_config, hostname);
+
   let rid = {
     let mut state_ = state.borrow_mut();
-    state_.resource_table.add(TlsStreamResource::new(
-      TlsStream::from(tls_stream).into_split(),
-    ))
+    state_
+      .resource_table
+      .add(TlsStreamResource::new(tls_stream.into_split()))
   };
+
   Ok(OpConn {
     rid,
     local_addr: Some(OpAddr::Tcp(IpAddr {
@@ -702,9 +725,9 @@ fn load_keys(path: &str) -> Result<Vec<PrivateKey>, AnyError> {
 }
 
 pub struct TlsListenerResource {
-  listener: AsyncRefCell<TcpListener>,
-  tls_acceptor: TlsAcceptor,
-  cancel: CancelHandle,
+  tcp_listener: AsyncRefCell<TcpListener>,
+  tls_config: Arc<ServerConfig>,
+  cancel_handle: CancelHandle,
 }
 
 impl Resource for TlsListenerResource {
@@ -713,7 +736,7 @@ impl Resource for TlsListenerResource {
   }
 
   fn close(self: Rc<Self>) {
-    self.cancel.cancel();
+    self.cancel_handle.cancel();
   }
 }
 
@@ -734,36 +757,40 @@ fn op_listen_tls(
   _zero_copy: Option<ZeroCopyBuf>,
 ) -> Result<OpConn, AnyError> {
   assert_eq!(args.transport, "tcp");
+  let hostname = &*args.hostname;
+  let port = args.port;
+  let cert_file = &*args.cert_file;
+  let key_file = &*args.key_file;
 
-  let cert_file = args.cert_file;
-  let key_file = args.key_file;
   {
     let permissions = state.borrow_mut::<Permissions>();
-    permissions.net.check(&(&args.hostname, Some(args.port)))?;
-    permissions.read.check(Path::new(&cert_file))?;
-    permissions.read.check(Path::new(&key_file))?;
+    permissions.net.check(&(hostname, Some(port)))?;
+    permissions.read.check(Path::new(cert_file))?;
+    permissions.read.check(Path::new(key_file))?;
   }
-  let mut config = ServerConfig::new(NoClientAuth::new());
+
+  let mut tls_config = ServerConfig::new(NoClientAuth::new());
   if let Some(alpn_protocols) = args.alpn_protocols {
     super::check_unstable(state, "Deno.listenTls#alpn_protocols");
-    config.alpn_protocols =
+    tls_config.alpn_protocols =
       alpn_protocols.into_iter().map(|s| s.into_bytes()).collect();
   }
-  config
-    .set_single_cert(load_certs(&cert_file)?, load_keys(&key_file)?.remove(0))
+  tls_config
+    .set_single_cert(load_certs(cert_file)?, load_keys(key_file)?.remove(0))
     .expect("invalid key or certificate");
-  let tls_acceptor = TlsAcceptor::from(Arc::new(config));
-  let addr = resolve_addr_sync(&args.hostname, args.port)?
+
+  let bind_addr = resolve_addr_sync(hostname, port)?
     .next()
     .ok_or_else(|| generic_error("No resolved address found"))?;
-  let std_listener = std::net::TcpListener::bind(&addr)?;
+  let std_listener = std::net::TcpListener::bind(bind_addr)?;
   std_listener.set_nonblocking(true)?;
-  let listener = TcpListener::from_std(std_listener)?;
-  let local_addr = listener.local_addr()?;
+  let tcp_listener = TcpListener::from_std(std_listener)?;
+  let local_addr = tcp_listener.local_addr()?;
+
   let tls_listener_resource = TlsListenerResource {
-    listener: AsyncRefCell::new(listener),
-    tls_acceptor,
-    cancel: Default::default(),
+    tcp_listener: AsyncRefCell::new(tcp_listener),
+    tls_config: Arc::new(tls_config),
+    cancel_handle: Default::default(),
   };
 
   let rid = state.resource_table.add(tls_listener_resource);
@@ -788,12 +815,16 @@ async fn op_accept_tls(
     .resource_table
     .get::<TlsListenerResource>(rid)
     .ok_or_else(|| bad_resource("Listener has been closed"))?;
-  let listener = RcRef::map(&resource, |r| &r.listener)
+
+  let cancel_handle = RcRef::map(&resource, |r| &r.cancel_handle);
+  let tcp_listener = RcRef::map(&resource, |r| &r.tcp_listener)
     .try_borrow_mut()
     .ok_or_else(|| custom_error("Busy", "Another accept task is ongoing"))?;
-  let cancel = RcRef::map(resource, |r| &r.cancel);
-  let (tcp_stream, _socket_addr) =
-    listener.accept().try_or_cancel(cancel).await.map_err(|e| {
+  let (tcp_stream, remote_addr) = tcp_listener
+    .accept()
+    .try_or_cancel(cancel_handle)
+    .await
+    .map_err(|e| {
       // FIXME(bartlomieju): compatibility with current JS implementation
       if let std::io::ErrorKind::Interrupted = e.kind() {
         bad_resource("Listener has been closed")
@@ -801,25 +832,16 @@ async fn op_accept_tls(
         e.into()
       }
     })?;
+
   let local_addr = tcp_stream.local_addr()?;
-  let remote_addr = tcp_stream.peer_addr()?;
-  let resource = state
-    .borrow()
-    .resource_table
-    .get::<TlsListenerResource>(rid)
-    .ok_or_else(|| bad_resource("Listener has been closed"))?;
-  let cancel = RcRef::map(&resource, |r| &r.cancel);
-  let tls_acceptor = resource.tls_acceptor.clone();
-  let tls_stream = tls_acceptor
-    .accept(tcp_stream)
-    .try_or_cancel(cancel)
-    .await?;
+
+  let tls_stream = TlsStream::new_server(tcp_stream, &resource.tls_config);
 
   let rid = {
     let mut state_ = state.borrow_mut();
-    state_.resource_table.add(TlsStreamResource::new(
-      TlsStream::from(tls_stream).into_split(),
-    ))
+    state_
+      .resource_table
+      .add(TlsStreamResource::new(tls_stream.into_split()))
   };
 
   Ok(OpConn {
