@@ -86,193 +86,23 @@ impl StoresClientSessions for ClientSessionMemoryCache {
 }
 
 pub struct TlsStream {
-  inner: TlsStreamInner,
-}
-
-pub struct TlsReader {
-  shared: Arc<Shared>,
-}
-
-pub struct TlsWriter {
-  shared: Arc<Shared>,
+  session: Box<dyn Session>,
+  socket: TcpStream,
 }
 
 impl TlsStream {
-  fn new<S: Session + 'static>(socket: TcpStream, session: S) -> Self {
-    let inner = TlsStreamInner::new(socket, session);
-    Self { inner }
+  pub fn new<S: Session + 'static>(socket: TcpStream, session: S) -> Self {
+    let session = Box::new(session) as Box<dyn Session>;
+    Self { socket, session }
   }
 
   pub fn into_split(self) -> (TlsReader, TlsWriter) {
-    let Self { inner } = self;
-    let shared = Shared::new(inner);
+    let shared = Shared::new(self);
     let rd = TlsReader {
       shared: shared.clone(),
     };
     let wr = TlsWriter { shared };
     (rd, wr)
-  }
-}
-
-impl TlsReader {
-  pub fn unsplit(self, wr: TlsWriter) -> TlsStream {
-    assert!(Arc::ptr_eq(&self.shared, &wr.shared));
-    let Self { shared } = self;
-    let Shared { inner, .. } = Arc::try_unwrap(shared)
-      .unwrap_or_else(|_| panic!("Arc::<Shared>::try_unwrap() failed"));
-    let inner = Mutex::into_inner(inner).unwrap_or_else(|_| {
-      panic!("Mutex::<TlsStreamInner>::into_inner() failed")
-    });
-    TlsStream { inner }
-  }
-}
-
-impl From<client::TlsStream<TcpStream>> for TlsStream {
-  fn from(s: client::TlsStream<TcpStream>) -> Self {
-    let (socket, session) = s.into_inner();
-    Self::new(socket, session)
-  }
-}
-
-impl From<server::TlsStream<TcpStream>> for TlsStream {
-  fn from(s: server::TlsStream<TcpStream>) -> Self {
-    let (socket, session) = s.into_inner();
-    Self::new(socket, session)
-  }
-}
-
-impl AsyncRead for TlsStream {
-  fn poll_read(
-    mut self: Pin<&mut Self>,
-    cx: &mut Context<'_>,
-    buf: &mut ReadBuf<'_>,
-  ) -> Poll<io::Result<()>> {
-    self.inner.poll_read(cx, buf)
-  }
-}
-
-impl AsyncRead for TlsReader {
-  fn poll_read(
-    self: Pin<&mut Self>,
-    cx: &mut Context<'_>,
-    buf: &mut ReadBuf<'_>,
-  ) -> Poll<io::Result<()>> {
-    eprintln!("poll_read()...");
-    let r = self
-      .shared
-      .poll_rd_with(cx, move |inner, cx| inner.poll_read(cx, buf));
-    eprintln!("poll_read(): {:?}", r);
-    r
-  }
-}
-
-impl AsyncWrite for TlsStream {
-  fn poll_write(
-    mut self: Pin<&mut Self>,
-    cx: &mut Context<'_>,
-    buf: &[u8],
-  ) -> Poll<io::Result<usize>> {
-    self.inner.poll_write(cx, buf)
-  }
-
-  fn poll_flush(
-    self: Pin<&mut Self>,
-    _cx: &mut Context<'_>,
-  ) -> Poll<io::Result<()>> {
-    Poll::Ready(Ok(()))
-  }
-
-  fn poll_shutdown(
-    self: Pin<&mut Self>,
-    _cx: &mut Context<'_>,
-  ) -> Poll<io::Result<()>> {
-    Poll::Ready(Ok(()))
-  }
-}
-
-impl AsyncWrite for TlsWriter {
-  fn poll_write(
-    self: Pin<&mut Self>,
-    cx: &mut Context<'_>,
-    buf: &[u8],
-  ) -> Poll<io::Result<usize>> {
-    eprintln!("poll_write()...");
-    let r = self
-      .shared
-      .poll_wr_with(cx, move |inner, cx| inner.poll_write(cx, buf));
-    eprintln!("poll_write(): {:?}", r);
-    r
-  }
-
-  fn poll_flush(
-    self: Pin<&mut Self>,
-    _cx: &mut Context<'_>,
-  ) -> Poll<io::Result<()>> {
-    Poll::Ready(Ok(()))
-  }
-
-  fn poll_shutdown(
-    self: Pin<&mut Self>,
-    _cx: &mut Context<'_>,
-  ) -> Poll<io::Result<()>> {
-    Poll::Ready(Ok(()))
-  }
-}
-
-struct TlsStreamInner {
-  session: Box<dyn Session>,
-  socket: TcpStream,
-}
-
-impl TlsStreamInner {
-  fn new<S: Session + 'static>(socket: TcpStream, session: S) -> Self {
-    let session = Box::new(session) as Box<dyn Session>;
-    Self { socket, session }
-  }
-
-  fn poll_read(
-    &mut self,
-    cx: &mut Context<'_>,
-    buf: &mut ReadBuf<'_>,
-  ) -> Poll<io::Result<()>> {
-    ready!(self.poll_io(cx, true, false))?;
-
-    let buf_slice = unsafe {
-      &mut *(buf.unfilled_mut() as *mut [MaybeUninit<u8>] as *mut [u8])
-    };
-
-    let result = match self.session.read(buf_slice) {
-      Ok(0) => unreachable!(),
-      Ok(bytes_read) => {
-        unsafe { buf.assume_init(bytes_read) };
-        buf.advance(bytes_read);
-        Ok(())
-      }
-      // Rustls `read()` returns `ConnectionAborted` when it receives a
-      // `CloseNotify` alert,; this indicates a graceful close.
-      Err(err) if err.kind() == ErrorKind::ConnectionAborted => Ok(()),
-      Err(err) => Err(err),
-    };
-    Poll::Ready(result)
-  }
-
-  fn poll_write(
-    &mut self,
-    cx: &mut Context<'_>,
-    buf: &[u8],
-  ) -> Poll<io::Result<usize>> {
-    ready!(self.poll_io(cx, false, true))?;
-
-    let result = match self.session.write(buf) {
-      Ok(0) => unreachable!(),
-      Ok(bytes_written) => {
-        // We try to flush as much as we can - but on a best-effort basis.
-        ready!(self.poll_io(cx, false, true))?;
-        Ok(bytes_written)
-      }
-      Err(err) => Err(err),
-    };
-    Poll::Ready(result)
   }
 
   #[allow(clippy::try_err)]
@@ -282,6 +112,8 @@ impl TlsStreamInner {
     for_reading: bool,
     for_writing: bool,
   ) -> Poll<io::Result<()>> {
+    assert!((for_reading && !for_writing) || (!for_reading && for_writing));
+
     let mut socket_is_readable = true;
     let mut socket_is_writable = true;
 
@@ -315,6 +147,10 @@ impl TlsStreamInner {
         }
       }
 
+      if self.session.wants_write() && socket_is_writable {
+        continue;
+      }
+
       if for_reading
         && !self.session.is_handshaking()
         && !self.session.wants_read()
@@ -329,28 +165,188 @@ impl TlsStreamInner {
         break;
       }
 
+      let mut can_continue = false;
+
       if self.session.wants_read() && !socket_is_readable {
-        ready!(self.socket.poll_read_ready(cx))?;
-        socket_is_readable = true;
+        if let Poll::Ready(result) = self.socket.poll_read_ready(cx) {
+          result?;
+          socket_is_readable = true;
+          can_continue = true;
+        }
       }
+
       if self.session.wants_write() && !socket_is_writable {
-        ready!(self.socket.poll_write_ready(cx))?;
-        socket_is_writable = true;
+        if let Poll::Ready(result) = self.socket.poll_write_ready(cx) {
+          result?;
+          socket_is_writable = true;
+          can_continue = true;
+        }
       }
+
+      if can_continue {
+        continue;
+      }
+
+      return Poll::Pending;
     }
 
     Poll::Ready(Ok(()))
   }
 }
 
+impl AsyncRead for TlsStream {
+  fn poll_read(
+    mut self: Pin<&mut Self>,
+    cx: &mut Context<'_>,
+    buf: &mut ReadBuf<'_>,
+  ) -> Poll<io::Result<()>> {
+    ready!(self.poll_io(cx, true, false))?;
+
+    let buf_slice = unsafe {
+      &mut *(buf.unfilled_mut() as *mut [MaybeUninit<u8>] as *mut [u8])
+    };
+
+    let result = match self.session.read(buf_slice) {
+      Ok(0) => unreachable!(),
+      Ok(bytes_read) => {
+        unsafe { buf.assume_init(bytes_read) };
+        buf.advance(bytes_read);
+        Ok(())
+      }
+      // Rustls `read()` returns `ConnectionAborted` when it receives a
+      // `CloseNotify` alert,; this indicates a graceful close.
+      Err(err) if err.kind() == ErrorKind::ConnectionAborted => Ok(()),
+      Err(err) => Err(err),
+    };
+    Poll::Ready(result)
+  }
+}
+
+impl AsyncWrite for TlsStream {
+  fn poll_write(
+    mut self: Pin<&mut Self>,
+    cx: &mut Context<'_>,
+    buf: &[u8],
+  ) -> Poll<io::Result<usize>> {
+    ready!(self.poll_io(cx, false, true))?;
+
+    let result = match self.session.write(buf) {
+      Ok(0) => unreachable!(),
+      Ok(bytes_written) => {
+        // We try to flush as much as we can, but since we have already handed
+        // off some bytes to rustls we can't return `Poll::Pending()` any more,
+        // as this would indicate to the caller that it should try again.
+        // The only exception is when an error happens.
+        let _ = self.poll_io(cx, false, true)?;
+        Ok(bytes_written)
+      }
+      Err(err) => Err(err),
+    };
+    Poll::Ready(result)
+  }
+
+  fn poll_flush(
+    mut self: Pin<&mut Self>,
+    cx: &mut Context<'_>,
+  ) -> Poll<io::Result<()>> {
+    ready!(self.poll_io(cx, false, true))?;
+    Poll::Ready(Ok(()))
+  }
+
+  fn poll_shutdown(
+    self: Pin<&mut Self>,
+    _cx: &mut Context<'_>,
+  ) -> Poll<io::Result<()>> {
+    todo!()
+  }
+}
+
+impl From<client::TlsStream<TcpStream>> for TlsStream {
+  fn from(s: client::TlsStream<TcpStream>) -> Self {
+    let (socket, session) = s.into_inner();
+    Self::new(socket, session)
+  }
+}
+
+impl From<server::TlsStream<TcpStream>> for TlsStream {
+  fn from(s: server::TlsStream<TcpStream>) -> Self {
+    let (socket, session) = s.into_inner();
+    Self::new(socket, session)
+  }
+}
+
+pub struct TlsReader {
+  shared: Arc<Shared>,
+}
+
+pub struct TlsWriter {
+  shared: Arc<Shared>,
+}
+
+impl TlsReader {
+  pub fn unsplit(self, wr: TlsWriter) -> TlsStream {
+    assert!(Arc::ptr_eq(&self.shared, &wr.shared));
+    let Self { shared } = self;
+    drop(wr); // Drop `wr.shared` so only 1 strong reference to it remains.
+    let Shared { inner, .. } = Arc::try_unwrap(shared)
+      .unwrap_or_else(|_| panic!("Arc::<Shared>::try_unwrap() failed"));
+    Mutex::into_inner(inner)
+      .unwrap_or_else(|_| panic!("Mutex::<TlsStream>::into_inner() failed"))
+  }
+}
+
+impl AsyncRead for TlsReader {
+  fn poll_read(
+    self: Pin<&mut Self>,
+    cx: &mut Context<'_>,
+    buf: &mut ReadBuf<'_>,
+  ) -> Poll<io::Result<()>> {
+    eprintln!("poll_read()...");
+    let r = self
+      .shared
+      .poll_rd_with(cx, move |inner, cx| inner.poll_read(cx, buf));
+    eprintln!("poll_read(): {:?}", r);
+    r
+  }
+}
+
+impl AsyncWrite for TlsWriter {
+  fn poll_write(
+    self: Pin<&mut Self>,
+    cx: &mut Context<'_>,
+    buf: &[u8],
+  ) -> Poll<io::Result<usize>> {
+    eprintln!("poll_write()...");
+    let r = self
+      .shared
+      .poll_wr_with(cx, move |inner, cx| inner.poll_write(cx, buf));
+    eprintln!("poll_write(): {:?}", r);
+    r
+  }
+
+  fn poll_flush(
+    self: Pin<&mut Self>,
+    _cx: &mut Context<'_>,
+  ) -> Poll<io::Result<()>> {
+    Poll::Ready(Ok(()))
+  }
+
+  fn poll_shutdown(
+    self: Pin<&mut Self>,
+    _cx: &mut Context<'_>,
+  ) -> Poll<io::Result<()>> {
+    Poll::Ready(Ok(()))
+  }
+}
+
 struct Shared {
-  inner: Mutex<TlsStreamInner>,
+  inner: Mutex<TlsStream>,
   rd_waker: AtomicWaker,
   wr_waker: AtomicWaker,
 }
 
 impl Shared {
-  fn new(inner: TlsStreamInner) -> Arc<Self> {
+  fn new(inner: TlsStream) -> Arc<Self> {
     let self_ = Self {
       inner: Mutex::new(inner),
       rd_waker: AtomicWaker::new(),
@@ -362,25 +358,25 @@ impl Shared {
   fn poll_rd_with<R>(
     self: &Arc<Self>,
     cx: &mut Context<'_>,
-    mut f: impl FnMut(&mut TlsStreamInner, &mut Context<'_>) -> R,
+    mut f: impl FnMut(Pin<&mut TlsStream>, &mut Context<'_>) -> R,
   ) -> R {
     self.rd_waker.register(cx.waker());
     let shared_waker = self.new_waker();
     let mut cx = Context::from_waker(&shared_waker);
     let mut inner = self.inner.lock().unwrap();
-    f(&mut inner, &mut cx)
+    f(Pin::new(&mut inner), &mut cx)
   }
 
   fn poll_wr_with<R>(
     self: &Arc<Self>,
     cx: &mut Context<'_>,
-    mut f: impl FnMut(&mut TlsStreamInner, &mut Context<'_>) -> R,
+    mut f: impl FnMut(Pin<&mut TlsStream>, &mut Context<'_>) -> R,
   ) -> R {
     self.wr_waker.register(cx.waker());
     let shared_waker = self.new_waker();
     let mut cx = Context::from_waker(&shared_waker);
     let mut inner = self.inner.lock().unwrap();
-    f(&mut inner, &mut cx)
+    f(Pin::new(&mut inner), &mut cx)
   }
 
   const WAKER_VTABLE: RawWakerVTable = RawWakerVTable::new(
