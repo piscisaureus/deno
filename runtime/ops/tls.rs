@@ -13,7 +13,9 @@ use deno_core::error::bad_resource_id;
 use deno_core::error::custom_error;
 use deno_core::error::generic_error;
 use deno_core::error::AnyError;
+use deno_core::futures::future::poll_fn;
 use deno_core::futures::ready;
+use deno_core::futures::task::noop_waker_ref;
 use deno_core::futures::task::AtomicWaker;
 use deno_core::futures::task::Context;
 use deno_core::futures::task::Poll;
@@ -53,6 +55,7 @@ use tokio::io::AsyncWrite;
 use tokio::io::ReadBuf;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
+use tokio::task::spawn_local;
 use tokio_rustls::rustls::{
   internal::pemfile::{certs, pkcs8_private_keys, rsa_private_keys},
   Certificate, ClientConfig, ClientSession, NoClientAuth, PrivateKey,
@@ -268,6 +271,14 @@ impl TlsStream {
       };
     }
   }
+
+  fn poll_graceful_close(&mut self, cx: &mut Context<'_>) -> Poll<()> {
+    let p1 = self.poll_io(cx, Flow::Read);
+    let p2 = Pin::new(self).as_mut().poll_shutdown(cx);
+    let _ = ready!(p1);
+    let _ = ready!(p2);
+    Poll::Ready(())
+  }
 }
 
 impl AsyncRead for TlsStream {
@@ -361,12 +372,11 @@ pub struct ReadHalf {
 impl ReadHalf {
   pub fn reunite(self, wr: WriteHalf) -> TlsStream {
     assert!(Arc::ptr_eq(&self.shared, &wr.shared));
-    let Self { shared } = self;
     drop(wr); // Drop `wr`, so only one strong reference to `shared` remains.
-    let Shared { tls_stream, .. } = Arc::try_unwrap(shared)
+
+    let mut shared = Arc::try_unwrap(self.shared)
       .unwrap_or_else(|_| panic!("Arc::<Shared>::try_unwrap() failed"));
-    Mutex::into_inner(tls_stream)
-      .unwrap_or_else(|_| panic!("Mutex::<TlsStream>::into_inner() failed"))
+    shared.tls_stream.take().unwrap().into_inner().unwrap()
   }
 }
 
@@ -417,7 +427,7 @@ impl AsyncWrite for WriteHalf {
 }
 
 struct Shared {
-  tls_stream: Mutex<TlsStream>,
+  tls_stream: Option<Mutex<TlsStream>>,
   rd_waker: AtomicWaker,
   wr_waker: AtomicWaker,
 }
@@ -425,7 +435,7 @@ struct Shared {
 impl Shared {
   fn new(tls_stream: TlsStream) -> Arc<Self> {
     let self_ = Self {
-      tls_stream: Mutex::new(tls_stream),
+      tls_stream: Some(Mutex::new(tls_stream)),
       rd_waker: AtomicWaker::new(),
       wr_waker: AtomicWaker::new(),
     };
@@ -446,7 +456,7 @@ impl Shared {
     let shared_waker = self.new_waker();
     let mut cx = Context::from_waker(&shared_waker);
 
-    let mut tls_stream = self.tls_stream.lock().unwrap();
+    let mut tls_stream = self.tls_stream.as_ref().unwrap().lock().unwrap();
     f(Pin::new(&mut tls_stream), &mut cx)
   }
 
@@ -488,6 +498,24 @@ impl Shared {
 
   fn drop_waker(self_ptr: *const ()) {
     let _ = unsafe { Weak::from_raw(self_ptr as *const Self) };
+  }
+}
+
+impl Drop for Shared {
+  fn drop(&mut self) {
+    let mut tls_stream = match self.tls_stream.take() {
+      None => return,
+      Some(mutex) => mutex
+        .into_inner()
+        .unwrap_or_else(|_| panic!("Mutex::<TlsStream>::into_inner() failed")),
+    };
+
+    let mut cx = Context::from_waker(noop_waker_ref());
+    let use_linger_task = tls_stream.poll_graceful_close(&mut cx).is_pending();
+
+    if use_linger_task {
+      spawn_local(poll_fn(move |cx| tls_stream.poll_graceful_close(cx)));
+    }
   }
 }
 
