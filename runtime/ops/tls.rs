@@ -132,6 +132,7 @@ enum Flow {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum Shut {
   Open,
+  ExpectEof,
   TlsShut,
   TcpShut,
 }
@@ -192,6 +193,7 @@ impl TlsStream {
       while tcp_write_ready && self.tls.wants_write() {
         let mut wrapper = ImplementWriteTrait(&mut self.tcp);
         match self.tls.write_tls(&mut wrapper) {
+          Ok(0) => unreachable!(),
           Ok(_) => {}
           Err(err) if err.kind() == ErrorKind::WouldBlock => {
             match self.tcp.poll_write_ready(cx) {
@@ -215,8 +217,27 @@ impl TlsStream {
             return Poll::Ready(Err(err));
           }
           Ok(0) => self.rd_shut = Shut::TcpShut,
+          Ok(_) if matches!(self.rd_shut, Shut::TlsShut | Shut::TcpShut) => {
+            // Just like TCP, when data arrives after the connection has been
+            // closed it means that the connection wasn't closed in a clean way.
+            let err = io::Error::from(ErrorKind::ConnectionReset);
+            return Poll::Ready(Err(err));
+          }
           Ok(_) => match self.tls.process_new_packets() {
-            Ok(_) => {}
+            // Do a zero-length plaintext read so we can detect the arrival of
+            // 'CloseNotify' messages, even if only the write half is active.
+            // Actually reading data from the socket is done in `poll_read()`.
+            Ok(()) => match self.tls.read(&mut []) {
+              Ok(0) => {}
+              Ok(_) => unreachable!(),
+              // Rustls `read()` returns `ConnectionAborted` when it receives a
+              // 'CloseNotify' alert; this indicates that the remote end of the
+              // connection has initiated a graceful shutdown at the TLS level.
+              Err(err) if err.kind() == ErrorKind::ConnectionAborted => {
+                self.rd_shut = Shut::TlsShut;
+              }
+              Err(err) => return Poll::Ready(Err(err)),
+            },
             Err(err) => {
               let err = io::Error::new(ErrorKind::InvalidData, err);
               return Poll::Ready(Err(err));
@@ -257,20 +278,18 @@ impl AsyncRead for TlsStream {
   ) -> Poll<io::Result<()>> {
     ready!(self.poll_io(cx, Flow::Read))?;
 
+    if matches!(self.rd_shut, Shut::TlsShut | Shut::TcpShut) {
+      return Poll::Ready(Ok(()));
+    }
+
     let buf_slice =
       unsafe { &mut *(buf.unfilled_mut() as *mut [MaybeUninit<u8>] as *mut _) };
 
     match self.tls.read(buf_slice) {
+      Ok(0) => unreachable!(),
       Ok(bytes_read) => {
         unsafe { buf.assume_init(bytes_read) };
         buf.advance(bytes_read);
-        Poll::Ready(Ok(()))
-      }
-      Err(err) if err.kind() == ErrorKind::ConnectionAborted => {
-        // Rustls `read()` returns `ConnectionAborted` when it receives a
-        // `CloseNotify` alert; this indicates that the remote end of the
-        // connection has initiated a graceful shutdown at the TLS level.
-        self.rd_shut = Shut::TlsShut;
         Poll::Ready(Ok(()))
       }
       Err(err) => Poll::Ready(Err(err)),
@@ -315,6 +334,9 @@ impl AsyncWrite for TlsStream {
     loop {
       match self.wr_shut {
         Shut::Open => {
+          self.wr_shut = Shut::ExpectEof;
+        }
+        Shut::ExpectEof => {
           ready!(self.poll_io(cx, Flow::Write))?;
           self.tls.send_close_notify();
           self.wr_shut = Shut::TlsShut;
