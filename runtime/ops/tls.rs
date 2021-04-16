@@ -98,6 +98,7 @@ impl StoresClientSessions for ClientSessionMemoryCache {
   }
 }
 
+#[derive(Debug)]
 enum TlsSession {
   Client(ClientSession),
   Server(ServerSession),
@@ -149,6 +150,7 @@ enum Shut {
   TcpShut,
 }
 
+#[derive(Debug)]
 pub struct TlsStream(Option<TlsStreamInner>);
 
 impl TlsStream {
@@ -252,6 +254,7 @@ impl Drop for TlsStream {
   }
 }
 
+#[derive(Debug)]
 pub struct TlsStreamInner {
   tls: TlsSession,
   tcp: TcpStream,
@@ -421,6 +424,7 @@ impl TlsStreamInner {
   }
 }
 
+#[derive(Debug)]
 pub struct ReadHalf {
   shared: Arc<Shared>,
 }
@@ -450,6 +454,7 @@ impl AsyncRead for ReadHalf {
   }
 }
 
+#[derive(Debug)]
 pub struct WriteHalf {
   shared: Arc<Shared>,
 }
@@ -484,6 +489,7 @@ impl AsyncWrite for WriteHalf {
   }
 }
 
+#[derive(Debug)]
 struct Shared {
   tls_stream: Mutex<TlsStream>,
   rd_waker: AtomicWaker,
