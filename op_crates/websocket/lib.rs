@@ -25,19 +25,25 @@ use http::{Method, Request, Uri};
 use serde::Deserialize;
 use std::borrow::Cow;
 use std::cell::RefCell;
+use std::io;
 use std::io::BufReader;
 use std::io::Cursor;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::rc::Rc;
+use std::result::Result;
 use std::sync::Arc;
+use tokio::io::AsyncRead;
+use tokio::io::AsyncWrite;
 use tokio::net::TcpStream;
+use tokio_rustls::TlsStream;
 use tokio_rustls::{rustls::ClientConfig, TlsConnector};
+use tokio_tungstenite::tungstenite::stream::NoDelay;
 use tokio_tungstenite::tungstenite::Error as TungsteniteError;
 use tokio_tungstenite::tungstenite::{
   handshake::client::Response, protocol::frame::coding::CloseCode,
   protocol::CloseFrame, Message,
 };
-use tokio_tungstenite::MaybeTlsStream;
 use tokio_tungstenite::{client_async, WebSocketStream};
 use webpki::DNSNameRef;
 
@@ -61,7 +67,73 @@ impl WebSocketPermissions for NoWebSocketPermissions {
   }
 }
 
-type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
+trait WsTransportTrait: AsyncRead + AsyncWrite + Unpin {}
+impl<T> WsTransportTrait for T where T: AsyncRead + AsyncWrite + Unpin {}
+
+struct TlsStreamWrap(TlsStream<TcpStream>);
+
+enum WsTransportStream {
+  Tcp(TcpStream),
+  Tls(TlsStreamWrap),
+}
+
+impl NoDelay for WsTransportStream {
+  fn set_nodelay(&mut self, nodelay: bool) -> io::Result<()> {
+    match self {
+      Self::Tcp(tcp) => tcp.set_nodelay(nodelay),
+      Self::Tls(tls) => tls.0.get_mut().0.set_nodelay(nodelay),
+    }
+  }
+}
+
+impl AsyncRead for WsTransportStream {
+  fn poll_read(
+    self: std::pin::Pin<&mut Self>,
+    cx: &mut std::task::Context<'_>,
+    buf: &mut tokio::io::ReadBuf<'_>,
+  ) -> std::task::Poll<io::Result<()>> {
+    match self.get_mut() {
+      Self::Tcp(tcp) => Pin::new(tcp).poll_read(cx, buf),
+      Self::Tls(tls) => Pin::new(&mut tls.0).poll_read(cx, buf),
+    }
+  }
+}
+
+impl AsyncWrite for WsTransportStream {
+  fn poll_write(
+    self: std::pin::Pin<&mut Self>,
+    cx: &mut std::task::Context<'_>,
+    buf: &[u8],
+  ) -> std::task::Poll<Result<usize, io::Error>> {
+    match self.get_mut() {
+      Self::Tcp(tcp) => Pin::new(tcp).poll_write(cx, buf),
+      Self::Tls(tls) => Pin::new(&mut tls.0).poll_write(cx, buf),
+    }
+  }
+
+  fn poll_flush(
+    self: std::pin::Pin<&mut Self>,
+    cx: &mut std::task::Context<'_>,
+  ) -> std::task::Poll<Result<(), io::Error>> {
+    match self.get_mut() {
+      Self::Tcp(tcp) => Pin::new(tcp).poll_flush(cx),
+      Self::Tls(tls) => Pin::new(&mut tls.0).poll_flush(cx),
+    }
+  }
+
+  fn poll_shutdown(
+    self: std::pin::Pin<&mut Self>,
+    cx: &mut std::task::Context<'_>,
+  ) -> std::task::Poll<Result<(), io::Error>> {
+    match self.get_mut() {
+      Self::Tcp(tcp) => Pin::new(tcp).poll_shutdown(cx),
+      Self::Tls(tls) => Pin::new(&mut tls.0).poll_shutdown(cx),
+    }
+  }
+}
+
+type WsStream = WebSocketStream<WsTransportStream>;
+
 struct WsStreamResource {
   tx: AsyncRefCell<SplitSink<WsStream, Message>>,
   rx: AsyncRefCell<SplitStream<WsStream>>,
@@ -146,8 +218,8 @@ where
     Err(_) => return Ok(json!({ "success": false })),
   };
 
-  let socket: MaybeTlsStream<TcpStream> = match uri.scheme_str() {
-    Some("ws") => MaybeTlsStream::Plain(tcp_socket),
+  let socket = match uri.scheme_str() {
+    Some("ws") => WsTransportStream::Tcp(tcp_socket),
     Some("wss") => {
       let mut config = ClientConfig::new();
       config
@@ -163,7 +235,8 @@ where
       let dnsname =
         DNSNameRef::try_from_ascii_str(&domain).expect("invalid hostname");
       let tls_socket = tls_connector.connect(dnsname, tcp_socket).await?;
-      MaybeTlsStream::Rustls(tls_socket)
+      let tls_socket = TlsStreamWrap(tokio_rustls::TlsStream::from(tls_socket));
+      WsTransportStream::Tls(tls_socket)
     }
     _ => unreachable!(),
   };
