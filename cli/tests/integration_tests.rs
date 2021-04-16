@@ -5961,7 +5961,7 @@ async fn listen_tls_alpn_fail() {
 
   let hostname = webpki::DNSNameRef::try_from_ascii_str("localhost").unwrap();
 
-  let tcp_stream = tokio::net::TcpStream::connect("localhost:4504")
+  let tcp_stream = tokio::net::TcpStream::connect("localhost:4505")
     .await
     .unwrap();
   let mut tls_stream = TlsStream::new_client_side(tcp_stream, &cfg, hostname);
