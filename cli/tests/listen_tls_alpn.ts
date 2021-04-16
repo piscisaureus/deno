@@ -10,8 +10,5 @@ const listener = Deno.listenTls({
 console.log("READY");
 
 for await (const conn of listener) {
-  if (await conn.read(new Uint8Array(1)) !== null) {
-    throw new Error("should not receive data on TLS connection");
-  }
   conn.close();
 }

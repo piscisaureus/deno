@@ -146,6 +146,7 @@ enum Flow {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Shut {
   Open,
+  Eof,
   TlsShut,
   TcpShut,
 }
@@ -294,7 +295,7 @@ impl TlsStreamInner {
       // as soon as Rustls has cleartext for us to read.
       while tcp_read_ready
         && self.tls.wants_read()
-        && self.rd_shut != Shut::TcpShut
+        && self.rd_shut == Shut::Open
       {
         let mut wrapper = ImplementReadTrait(&mut self.tcp);
         match self.tls.read_tls(&mut wrapper) {
@@ -336,7 +337,7 @@ impl TlsStreamInner {
 
       let poll_again = match flow {
         _ if self.tls.is_handshaking() => true,
-        Flow::Read => self.tls.wants_read() && self.rd_shut != Shut::TcpShut,
+        Flow::Read => self.tls.wants_read() && self.rd_shut == Shut::Open,
         Flow::Write => self.tls.wants_write(),
       };
       return match poll_again {
@@ -370,17 +371,25 @@ impl TlsStreamInner {
     cx: &mut Context<'_>,
     buf: &[u8],
   ) -> Poll<io::Result<usize>> {
-    ready!(self.poll_io(cx, Flow::Write))?;
+    if buf.is_empty() {
+      // Tokio-rustls compatibility: a zero byte write always succeeds.
+      Poll::Ready(Ok(0))
+    } else if self.wr_shut != Shut::Open {
+      // Bail out if stream has been shut down for writing.
+      Poll::Ready(Err(ErrorKind::BrokenPipe.into()))
+    } else {
+      ready!(self.poll_io(cx, Flow::Write))?;
 
-    let bytes_written = self.tls.write(buf)?;
-    assert_ne!(bytes_written, 0);
+      let bytes_written = self.tls.write(buf)?;
+      assert_ne!(bytes_written, 0);
 
-    // We try to flush as much data as we can, but we have already handed off
-    // at least some bytes to rustls, so we can't return `Poll::Pending()` any
-    // more, as this would indicate to the caller that it should try again.
-    let _ = self.poll_io(cx, Flow::Write)?;
+      // We try to flush as much data as we can, but we have already handed off
+      // at least some bytes to rustls, so we can't return `Poll::Pending()` any
+      // more, as this would indicate to the caller that it should try again.
+      let _ = self.poll_io(cx, Flow::Write)?;
 
-    Poll::Ready(Ok(bytes_written))
+      Poll::Ready(Ok(bytes_written))
+    }
   }
 
   fn poll_close(
@@ -388,9 +397,14 @@ impl TlsStreamInner {
     cx: &mut Context<'_>,
     wait_for_remote: bool,
   ) -> Poll<io::Result<()>> {
-    // Send 'CloseNotify' alert.
+    // Schedule outbound 'CloseNotify', and set flag to disallow `write()`s.
+    if self.wr_shut < Shut::Eof {
+      self.tls.send_close_notify();
+      self.wr_shut = Shut::Eof;
+    }
+
+    // Flush remaining bytes in Rustls' send buffer, plus 'CloseNotify' alert.
     if self.wr_shut < Shut::TlsShut {
-      self.tls.send_close_notify(); // Idempotent.
       ready!(self.poll_io(cx, Flow::Write))?;
       self.wr_shut = Shut::TlsShut;
     }
@@ -399,26 +413,27 @@ impl TlsStreamInner {
     if wait_for_remote && self.rd_shut < Shut::TlsShut {
       ready!(self.poll_io(cx, Flow::Read))?;
       if self.rd_shut < Shut::TlsShut {
-        // Apparently we received more data rather than a 'CloseNotify' alert.
-        // Abort the connection instead of closing gracefully.
+        // Apparently, instead of 'CloseNotify', we received more regular data.
+        // Abort the TLS session instead of closing gracefully.
         return Poll::Ready(Err(ErrorKind::ConnectionReset.into()));
       }
     }
 
-    // Shut down the underlying TCP socket.
-    if self.wr_shut < Shut::TcpShut {
+    // Shut down the underlying TCP socket, but only after the 'CloseNotify'
+    // alert that was sent by the remote has been received.
+    if self.wr_shut < Shut::TcpShut && self.rd_shut >= Shut::TlsShut {
       ready!(Pin::new(&mut self.tcp).poll_shutdown(cx))?;
       self.wr_shut = Shut::TcpShut;
     }
 
     // Wait for the remote end to gracefully close the TCP connection.
     // TODO(piscisaureus): this is unnecessary; remove when stable.
-    if wait_for_remote && self.rd_shut < Shut::TcpShut {
-      ready!(self.poll_io(cx, Flow::Read))?;
-      if self.rd_shut < Shut::TcpShut {
-        return Poll::Ready(Err(ErrorKind::ConnectionReset.into()));
-      }
-    }
+    //if wait_for_remote && self.rd_shut < Shut::TcpShut {
+    //  ready!(self.poll_io(cx, Flow::Read))?;
+    //  if self.rd_shut < Shut::TcpShut {
+    //    return Poll::Ready(Err(ErrorKind::ConnectionReset.into()));
+    //  }
+    //}
 
     Poll::Ready(Ok(()))
   }
