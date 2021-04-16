@@ -256,10 +256,7 @@ impl TlsStreamInner {
           Ok(0) => unreachable!(),
           Ok(_) => {}
           Err(err) if err.kind() == ErrorKind::WouldBlock => {
-            match self.tcp.poll_write_ready(cx) {
-              Poll::Ready(result) => result?,
-              Poll::Pending => tcp_write_ready = false,
-            }
+            tcp_write_ready = self.tcp.poll_write_ready(cx)?.is_ready();
           }
           Err(err) => return Poll::Ready(Err(err)),
         }
@@ -302,10 +299,7 @@ impl TlsStreamInner {
             }
           },
           Err(err) if err.kind() == ErrorKind::WouldBlock => {
-            match self.tcp.poll_read_ready(cx) {
-              Poll::Ready(result) => result?,
-              Poll::Pending => tcp_read_ready = false,
-            }
+            tcp_read_ready = self.tcp.poll_read_ready(cx)?.is_ready()
           }
           Err(err) => return Poll::Ready(Err(err)),
         }
