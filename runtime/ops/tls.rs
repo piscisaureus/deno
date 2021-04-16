@@ -273,11 +273,6 @@ impl TlsStreamInner {
             return Poll::Ready(Err(err));
           }
           Ok(0) => self.rd_shut = Shut::TcpShut,
-          Ok(_) if self.rd_shut == Shut::TlsShut => {
-            // Just like TCP, when data arrives after the connection has been
-            // closed, this means that the connection wasn't closed gracefully.
-            return Poll::Ready(Err(ErrorKind::ConnectionReset.into()));
-          }
           Ok(_) => match self.tls.process_new_packets() {
             // Do a zero-length plaintext read so we can detect the arrival of
             // 'CloseNotify' messages, even if only the write half is active.
