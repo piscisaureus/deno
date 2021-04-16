@@ -1,5 +1,8 @@
 // Copyright 2018-2021 the Deno authors. All rights reserved. MIT license.
 
+pub use rustls;
+pub use webpki;
+
 use crate::ops::io::TcpStreamResource;
 use crate::ops::io::TlsStreamResource;
 use crate::ops::net::IpAddr;
@@ -33,6 +36,18 @@ use deno_core::ZeroCopyBuf;
 use io::Error;
 use io::Read;
 use io::Write;
+use rustls::internal::pemfile::certs;
+use rustls::internal::pemfile::pkcs8_private_keys;
+use rustls::internal::pemfile::rsa_private_keys;
+use rustls::Certificate;
+use rustls::ClientConfig;
+use rustls::ClientSession;
+use rustls::NoClientAuth;
+use rustls::PrivateKey;
+use rustls::ServerConfig;
+use rustls::ServerSession;
+use rustls::Session;
+use rustls::StoresClientSessions;
 use serde::Deserialize;
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -56,11 +71,6 @@ use tokio::io::ReadBuf;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::task::spawn_local;
-use tokio_rustls::rustls::{
-  internal::pemfile::{certs, pkcs8_private_keys, rsa_private_keys},
-  Certificate, ClientConfig, ClientSession, NoClientAuth, PrivateKey,
-  ServerConfig, ServerSession, Session, StoresClientSessions,
-};
 use webpki::DNSNameRef;
 
 lazy_static::lazy_static! {
@@ -152,7 +162,7 @@ impl TlsStream {
     Self(Some(inner))
   }
 
-  fn new_client_side(
+  pub fn new_client_side(
     tcp: TcpStream,
     tls_config: &Arc<ClientConfig>,
     hostname: DNSNameRef,
@@ -161,9 +171,16 @@ impl TlsStream {
     Self::new(tcp, tls)
   }
 
-  fn new_server_side(tcp: TcpStream, tls_config: &Arc<ServerConfig>) -> Self {
+  pub fn new_server_side(
+    tcp: TcpStream,
+    tls_config: &Arc<ServerConfig>,
+  ) -> Self {
     let tls = TlsSession::Server(ServerSession::new(tls_config));
     Self::new(tcp, tls)
+  }
+
+  pub async fn handshake(&mut self) -> io::Result<()> {
+    poll_fn(|cx| self.inner_mut().poll_io(cx, Flow::Write)).await
   }
 
   fn into_split(self) -> (ReadHalf, WriteHalf) {
@@ -175,7 +192,14 @@ impl TlsStream {
     (rd, wr)
   }
 
-  fn inner(&mut self) -> &mut TlsStreamInner {
+  /// Tokio-rustls compatibility: returns a reference to the underlying TCP
+  /// stream, and a reference to the Rustls `Session` object.
+  pub fn get_ref(&self) -> (&TcpStream, &dyn Session) {
+    let inner = self.0.as_ref().unwrap();
+    (&inner.tcp, &*inner.tls)
+  }
+
+  fn inner_mut(&mut self) -> &mut TlsStreamInner {
     self.0.as_mut().unwrap()
   }
 }
@@ -186,7 +210,7 @@ impl AsyncRead for TlsStream {
     cx: &mut Context<'_>,
     buf: &mut ReadBuf<'_>,
   ) -> Poll<io::Result<()>> {
-    self.inner().poll_read(cx, buf)
+    self.inner_mut().poll_read(cx, buf)
   }
 }
 
@@ -196,14 +220,14 @@ impl AsyncWrite for TlsStream {
     cx: &mut Context<'_>,
     buf: &[u8],
   ) -> Poll<io::Result<usize>> {
-    self.inner().poll_write(cx, buf)
+    self.inner_mut().poll_write(cx, buf)
   }
 
   fn poll_flush(
     mut self: Pin<&mut Self>,
     cx: &mut Context<'_>,
   ) -> Poll<io::Result<()>> {
-    self.inner().poll_io(cx, Flow::Write)
+    self.inner_mut().poll_io(cx, Flow::Write)
     // The underlying TCP stream does not need to be flushed.
   }
 
@@ -211,7 +235,7 @@ impl AsyncWrite for TlsStream {
     mut self: Pin<&mut Self>,
     cx: &mut Context<'_>,
   ) -> Poll<io::Result<()>> {
-    self.inner().poll_close(cx, false)
+    self.inner_mut().poll_close(cx, false)
   }
 }
 
