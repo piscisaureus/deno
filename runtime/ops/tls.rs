@@ -30,6 +30,7 @@ use deno_core::RcRef;
 use deno_core::Resource;
 use deno_core::ResourceId;
 use deno_core::ZeroCopyBuf;
+use io::Error;
 use io::Read;
 use io::Write;
 use serde::Deserialize;
@@ -41,7 +42,6 @@ use std::fs::File;
 use std::io;
 use std::io::BufReader;
 use std::io::ErrorKind;
-use std::mem::MaybeUninit;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::path::Path;
@@ -135,26 +135,22 @@ enum Flow {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum Shut {
   Open,
-  ExpectEof,
+  AtEof,
   TlsShut,
   TcpShut,
 }
 
-pub struct TlsStream {
-  tls: TlsSession,
-  tcp: TcpStream,
-  rd_shut: Shut,
-  wr_shut: Shut,
-}
+pub struct TlsStream(Option<TlsStreamInner>);
 
 impl TlsStream {
   fn new(tcp: TcpStream, tls: TlsSession) -> Self {
-    Self {
+    let inner = TlsStreamInner {
       tcp,
       tls,
       rd_shut: Shut::Open,
       wr_shut: Shut::Open,
-    }
+    };
+    Self(Some(inner))
   }
 
   fn new_client_side(
@@ -180,6 +176,67 @@ impl TlsStream {
     (rd, wr)
   }
 
+  fn inner(&mut self) -> &mut TlsStreamInner {
+    self.0.as_mut().unwrap()
+  }
+}
+
+impl AsyncRead for TlsStream {
+  fn poll_read(
+    mut self: Pin<&mut Self>,
+    cx: &mut Context<'_>,
+    buf: &mut ReadBuf<'_>,
+  ) -> Poll<io::Result<()>> {
+    self.inner().poll_read(cx, buf)
+  }
+}
+
+impl AsyncWrite for TlsStream {
+  fn poll_write(
+    mut self: Pin<&mut Self>,
+    cx: &mut Context<'_>,
+    buf: &[u8],
+  ) -> Poll<io::Result<usize>> {
+    self.inner().poll_write(cx, buf)
+  }
+
+  fn poll_flush(
+    mut self: Pin<&mut Self>,
+    cx: &mut Context<'_>,
+  ) -> Poll<io::Result<()>> {
+    self.inner().poll_io(cx, Flow::Write)
+    // The underlying TCP stream does not need to be flushed.
+  }
+
+  fn poll_shutdown(
+    mut self: Pin<&mut Self>,
+    cx: &mut Context<'_>,
+  ) -> Poll<io::Result<()>> {
+    self.inner().poll_close_write(cx)
+  }
+}
+
+impl Drop for TlsStream {
+  fn drop(&mut self) {
+    let mut inner = self.0.take().unwrap();
+
+    let mut cx = Context::from_waker(noop_waker_ref());
+    let use_linger_task = inner.poll_close(&mut cx).is_pending();
+
+    if use_linger_task {
+      spawn_local(poll_fn(move |cx| inner.poll_close(cx)));
+    }
+  }
+}
+
+pub struct TlsStreamInner {
+  tls: TlsSession,
+  tcp: TcpStream,
+  rd_shut: Shut,
+  wr_shut: Shut,
+}
+
+impl TlsStreamInner {
   fn poll_io(
     &mut self,
     cx: &mut Context<'_>,
@@ -215,16 +272,14 @@ impl TlsStream {
         let mut wrapper = ImplementReadTrait(&mut self.tcp);
         match self.tls.read_tls(&mut wrapper) {
           Ok(0) if self.tls.is_handshaking() => {
-            let err =
-              io::Error::new(ErrorKind::UnexpectedEof, "tls handshake eof");
+            let err = Error::new(ErrorKind::UnexpectedEof, "tls handshake eof");
             return Poll::Ready(Err(err));
           }
           Ok(0) => self.rd_shut = Shut::TcpShut,
-          Ok(_) if matches!(self.rd_shut, Shut::TlsShut | Shut::TcpShut) => {
+          Ok(_) if self.rd_shut != Shut::Open => {
             // Just like TCP, when data arrives after the connection has been
-            // closed it means that the connection wasn't closed in a clean way.
-            let err = io::Error::from(ErrorKind::ConnectionReset);
-            return Poll::Ready(Err(err));
+            // closed, this means that the connection wasn't closed gracefully.
+            return Poll::Ready(Err(ErrorKind::ConnectionReset.into()));
           }
           Ok(_) => match self.tls.process_new_packets() {
             // Do a zero-length plaintext read so we can detect the arrival of
@@ -233,16 +288,16 @@ impl TlsStream {
             Ok(()) => match self.tls.read(&mut []) {
               Ok(0) => {}
               Ok(_) => unreachable!(),
-              // Rustls `read()` returns `ConnectionAborted` when it receives a
-              // 'CloseNotify' alert; this indicates that the remote end of the
-              // connection has initiated a graceful shutdown at the TLS level.
               Err(err) if err.kind() == ErrorKind::ConnectionAborted => {
+                // `Session::read()` returns `ConnectionAborted` when a
+                // 'CloseNotify' alert has been received, which indicates that
+                // the remote peer wants to gracefully end the TLS session.
                 self.rd_shut = Shut::TlsShut;
               }
               Err(err) => return Poll::Ready(Err(err)),
             },
             Err(err) => {
-              let err = io::Error::new(ErrorKind::InvalidData, err);
+              let err = Error::new(ErrorKind::InvalidData, err);
               return Poll::Ready(Err(err));
             }
           },
@@ -272,95 +327,100 @@ impl TlsStream {
     }
   }
 
-  fn poll_graceful_close(&mut self, cx: &mut Context<'_>) -> Poll<()> {
-    let p1 = self.poll_io(cx, Flow::Read);
-    let p2 = Pin::new(self).as_mut().poll_shutdown(cx);
-    let _ = ready!(p1);
-    let _ = ready!(p2);
-    Poll::Ready(())
-  }
-}
-
-impl AsyncRead for TlsStream {
   fn poll_read(
-    mut self: Pin<&mut Self>,
+    &mut self,
     cx: &mut Context<'_>,
     buf: &mut ReadBuf<'_>,
   ) -> Poll<io::Result<()>> {
     ready!(self.poll_io(cx, Flow::Read))?;
 
-    if matches!(self.rd_shut, Shut::TlsShut | Shut::TcpShut) {
-      return Poll::Ready(Ok(()));
-    }
-
-    let buf_slice =
-      unsafe { &mut *(buf.unfilled_mut() as *mut [MaybeUninit<u8>] as *mut _) };
-
-    match self.tls.read(buf_slice) {
-      Ok(0) => unreachable!(),
-      Ok(bytes_read) => {
+    match self.rd_shut {
+      Shut::Open => {
+        let buf_slice =
+          unsafe { &mut *(buf.unfilled_mut() as *mut [_] as *mut [u8]) };
+        let bytes_read = self.tls.read(buf_slice)?;
+        assert_ne!(bytes_read, 0);
         unsafe { buf.assume_init(bytes_read) };
         buf.advance(bytes_read);
         Poll::Ready(Ok(()))
       }
-      Err(err) => Poll::Ready(Err(err)),
+      Shut::AtEof => unreachable!(),
+      Shut::TlsShut | Shut::TcpShut => Poll::Ready(Ok(())),
     }
   }
-}
 
-impl AsyncWrite for TlsStream {
   fn poll_write(
-    mut self: Pin<&mut Self>,
+    &mut self,
     cx: &mut Context<'_>,
     buf: &[u8],
   ) -> Poll<io::Result<usize>> {
     ready!(self.poll_io(cx, Flow::Write))?;
 
-    match self.tls.write(buf) {
-      Ok(0) => unreachable!(),
-      Ok(bytes_written) => {
-        // We try to flush as much as we can, but since we have already handed
-        // off some bytes to rustls we can't return `Poll::Pending()` any more,
-        // as this would indicate to the caller that it should try again.
-        let _ = self.poll_io(cx, Flow::Write)?;
-        Poll::Ready(Ok(bytes_written))
+    let bytes_written = self.tls.write(buf)?;
+    assert_ne!(bytes_written, 0);
+
+    // We try to flush as much data as we can, but we have already handed off
+    // at least some bytes to rustls, so we can't return `Poll::Pending()` any
+    // more, as this would indicate to the caller that it should try again.
+    let _ = self.poll_io(cx, Flow::Write)?;
+
+    Poll::Ready(Ok(bytes_written))
+  }
+
+  fn poll_close_read(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+    loop {
+      match self.rd_shut {
+        Shut::Open => {
+          self.rd_shut = Shut::AtEof;
+        }
+        Shut::AtEof => {
+          ready!(self.poll_io(cx, Flow::Read))?;
+          if !matches!(self.rd_shut, Shut::TlsShut | Shut::TcpShut) {
+            return Poll::Ready(Err(ErrorKind::ConnectionReset.into()));
+          }
+        }
+        Shut::TlsShut => {
+          // TODO(piscisaureus): waiting to receive a TCP FIN packet is
+          // overkill and unnecessary. Remove this once stable.
+          ready!(self.poll_io(cx, Flow::Read))?;
+          assert!(matches!(self.rd_shut, Shut::TcpShut));
+        }
+        Shut::TcpShut => {
+          return Poll::Ready(Ok(()));
+        }
       }
-      Err(err) => Poll::Ready(Err(err)),
     }
   }
 
-  fn poll_flush(
-    mut self: Pin<&mut Self>,
-    cx: &mut Context<'_>,
-  ) -> Poll<io::Result<()>> {
-    ready!(self.poll_io(cx, Flow::Write))?;
-    // The underlying TCP stream does not need to be flushed.
-    Poll::Ready(Ok(()))
-  }
-
-  fn poll_shutdown(
-    mut self: Pin<&mut Self>,
-    cx: &mut Context<'_>,
-  ) -> Poll<io::Result<()>> {
+  fn poll_close_write(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
     loop {
       match self.wr_shut {
         Shut::Open => {
-          self.wr_shut = Shut::ExpectEof;
+          self.wr_shut = Shut::AtEof;
         }
-        Shut::ExpectEof => {
+        Shut::AtEof => {
           ready!(self.poll_io(cx, Flow::Write))?;
           self.tls.send_close_notify();
           self.wr_shut = Shut::TlsShut;
         }
         Shut::TlsShut => {
           ready!(self.poll_io(cx, Flow::Write))?;
-          ready!(Pin::new(&mut self.tcp).poll_shutdown(cx))?;
+          if self.rd_shut != Shut::TcpShut {
+            ready!(Pin::new(&mut self.tcp).poll_shutdown(cx))?;
+          }
           self.wr_shut = Shut::TcpShut;
         }
         Shut::TcpShut => {
           return Poll::Ready(Ok(()));
         }
       }
+    }
+  }
+
+  fn poll_close(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+    match (self.poll_close_read(cx)?, self.poll_close_write(cx)?) {
+      (Poll::Ready(_), Poll::Ready(_)) => Poll::Ready(Ok(())),
+      _ => Poll::Pending,
     }
   }
 }
@@ -374,9 +434,11 @@ impl ReadHalf {
     assert!(Arc::ptr_eq(&self.shared, &wr.shared));
     drop(wr); // Drop `wr`, so only one strong reference to `shared` remains.
 
-    let mut shared = Arc::try_unwrap(self.shared)
-      .unwrap_or_else(|_| panic!("Arc::<Shared>::try_unwrap() failed"));
-    shared.tls_stream.take().unwrap().into_inner().unwrap()
+    Arc::try_unwrap(self.shared)
+      .unwrap_or_else(|_| panic!("Arc::<Shared>::try_unwrap() failed"))
+      .tls_stream
+      .into_inner()
+      .unwrap()
   }
 }
 
@@ -427,7 +489,7 @@ impl AsyncWrite for WriteHalf {
 }
 
 struct Shared {
-  tls_stream: Option<Mutex<TlsStream>>,
+  tls_stream: Mutex<TlsStream>,
   rd_waker: AtomicWaker,
   wr_waker: AtomicWaker,
 }
@@ -435,7 +497,7 @@ struct Shared {
 impl Shared {
   fn new(tls_stream: TlsStream) -> Arc<Self> {
     let self_ = Self {
-      tls_stream: Some(Mutex::new(tls_stream)),
+      tls_stream: Mutex::new(tls_stream),
       rd_waker: AtomicWaker::new(),
       wr_waker: AtomicWaker::new(),
     };
@@ -456,7 +518,7 @@ impl Shared {
     let shared_waker = self.new_waker();
     let mut cx = Context::from_waker(&shared_waker);
 
-    let mut tls_stream = self.tls_stream.as_ref().unwrap().lock().unwrap();
+    let mut tls_stream = self.tls_stream.lock().unwrap();
     f(Pin::new(&mut tls_stream), &mut cx)
   }
 
@@ -498,24 +560,6 @@ impl Shared {
 
   fn drop_waker(self_ptr: *const ()) {
     let _ = unsafe { Weak::from_raw(self_ptr as *const Self) };
-  }
-}
-
-impl Drop for Shared {
-  fn drop(&mut self) {
-    let mut tls_stream = match self.tls_stream.take() {
-      None => return,
-      Some(mutex) => mutex
-        .into_inner()
-        .unwrap_or_else(|_| panic!("Mutex::<TlsStream>::into_inner() failed")),
-    };
-
-    let mut cx = Context::from_waker(noop_waker_ref());
-    let use_linger_task = tls_stream.poll_graceful_close(&mut cx).is_pending();
-
-    if use_linger_task {
-      spawn_local(poll_fn(move |cx| tls_stream.poll_graceful_close(cx)));
-    }
   }
 }
 
