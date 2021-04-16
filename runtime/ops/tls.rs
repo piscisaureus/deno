@@ -276,7 +276,7 @@ impl TlsStreamInner {
             return Poll::Ready(Err(err));
           }
           Ok(0) => self.rd_shut = Shut::TcpShut,
-          Ok(_) if self.rd_shut != Shut::Open => {
+          Ok(_) if self.rd_shut == Shut::TlsShut => {
             // Just like TCP, when data arrives after the connection has been
             // closed, this means that the connection wasn't closed gracefully.
             return Poll::Ready(Err(ErrorKind::ConnectionReset.into()));
