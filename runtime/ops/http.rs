@@ -282,9 +282,8 @@ fn op_http_start(
     .resource_table
     .take::<TlsStreamResource>(tcp_stream_rid)
   {
-    let resource = Rc::try_unwrap(resource_rc).unwrap_or_else(|_| {
-      panic!("Only a single use of this resource should happen")
-    });
+    let resource = Rc::try_unwrap(resource_rc)
+      .expect("Only a single use of this resource should happen");
     let (read_half, write_half) = resource.into_inner();
     let tls_stream = read_half.reunite(write_half);
 
