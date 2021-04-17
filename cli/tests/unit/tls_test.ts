@@ -238,18 +238,20 @@ async function sendCloseWrite(
   buf.fill(42);
   for (let remaining = byteCount; remaining > 0; remaining -= n) {
     n = await conn.write(buf.subarray(0, remaining));
-    console.log("S", n);
+    console.log("S1", n, remaining - n);
     assert(n >= 1);
   }
 
   // Send EOF.
+  console.log("S2 eof-");
   await conn.closeWrite();
+  console.log("S2 eof+");
 
   // Receive 69s.
   for (let remaining = byteCount; remaining > 0; remaining -= n) {
     buf.fill(0);
     n = await conn.read(buf) as number;
-    console.log("S", n);
+    console.log("S3", n);
     assert(n >= 1);
     assertStrictEquals(buf[0], 69);
     assertStrictEquals(buf[n - 1], 69);
@@ -257,10 +259,10 @@ async function sendCloseWrite(
 
   if (readHalfClose) {
     // Receive EOF.
-    console.log("S eof-");
+    console.log("S3 eof-");
     const eof = await conn.read(buf);
     assertStrictEquals(eof, null);
-    console.log("S eof+");
+    console.log("S3 eof+");
   }
 
   conn.close();
@@ -280,7 +282,7 @@ async function receiveCloseWrite(
   for (let remaining = byteCount; remaining > 0; remaining -= n) {
     buf.fill(0);
     n = await conn.read(buf) as number;
-    console.log("R", n);
+    console.log("R1", n, remaining - n);
     assert(n >= 1);
     assertStrictEquals(buf[0], 42);
     assertStrictEquals(buf[n - 1], 42);
@@ -288,17 +290,17 @@ async function receiveCloseWrite(
 
   if (readEof) {
     // Receive EOF.
-    console.log("R eof-");
+    console.log("R2 eof-");
     const eof = await conn.read(buf);
     assertStrictEquals(eof, null);
-    console.log("R eof+");
+    console.log("R2 eof+");
   }
 
   // Send 69s.
   buf.fill(69);
   for (let remaining = byteCount; remaining > 0; remaining -= n) {
     n = await conn.write(buf.subarray(0, remaining));
-    console.log("R", n);
+    console.log("R3", n, remaining - n);
     assert(n >= 1);
   }
 
@@ -414,14 +416,14 @@ unitTest(
   async function tlsStreamHalfCloseManyLargePrecise(): Promise<void> {
     const [serverConn1, clientConn1] = await tlsPair(port++);
     await Promise.all([
-      sendCloseWrite(serverConn1, 10, ONE_MB, true),
-      receiveCloseWrite(clientConn1, 10, ONE_MB, true),
+      sendCloseWrite(serverConn1, 100, ONE_MB, true),
+      receiveCloseWrite(clientConn1, 100, ONE_MB, true),
     ]);
 
     const [serverConn2, clientConn2] = await tlsPair(port++);
     await Promise.all([
-      sendCloseWrite(clientConn2, 10, ONE_MB, true),
-      receiveCloseWrite(serverConn2, 10, ONE_MB, true),
+      sendCloseWrite(clientConn2, 100, ONE_MB, true),
+      receiveCloseWrite(serverConn2, 100, ONE_MB, true),
     ]);
   },
 );
@@ -431,14 +433,14 @@ unitTest(
   async function tlsStreamHalfCloseManyLargeSloppy(): Promise<void> {
     const [serverConn1, clientConn1] = await tlsPair(port++);
     await Promise.all([
-      sendCloseWrite(serverConn1, 10, ONE_MB, false),
-      receiveCloseWrite(clientConn1, 10, ONE_MB, false),
+      sendCloseWrite(serverConn1, 100, ONE_MB, false),
+      receiveCloseWrite(clientConn1, 100, ONE_MB, false),
     ]);
 
     const [serverConn2, clientConn2] = await tlsPair(port++);
     await Promise.all([
-      sendCloseWrite(clientConn2, 10, ONE_MB, false),
-      receiveCloseWrite(serverConn2, 10, ONE_MB, false),
+      sendCloseWrite(clientConn2, 100, ONE_MB, false),
+      receiveCloseWrite(serverConn2, 100, ONE_MB, false),
     ]);
   },
 );
