@@ -151,6 +151,14 @@ enum Shut {
   TcpShut,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum State {
+  Open,
+  Eof,
+  Closing,
+  Closed,
+}
+
 #[derive(Debug)]
 pub struct TlsStream(Option<TlsStreamInner>);
 
@@ -161,6 +169,10 @@ impl TlsStream {
       tls,
       rd_shut: Shut::Open,
       wr_shut: Shut::Open,
+      clear_rd_state: State::Open,
+      clear_wr_state: State::Open,
+      tls_rd_state: State::Open,
+      tls_wr_state: State::Open,
     };
     Self(Some(inner))
   }
@@ -261,6 +273,10 @@ pub struct TlsStreamInner {
   tcp: TcpStream,
   rd_shut: Shut,
   wr_shut: Shut,
+  clear_rd_state: State,
+  clear_wr_state: State,
+  tls_rd_state: State,
+  tls_wr_state: State,
 }
 
 impl TlsStreamInner {
@@ -304,6 +320,90 @@ impl TlsStreamInner {
     );
   }
 
+  fn poll_io_(
+    &mut self,
+    cx: &mut Context<'_>,
+    flow: Flow,
+  ) -> Poll<io::Result<()>> {
+    // Initially, assume that the TCP stream is both readable and writable. If
+    // this turns out not to be the case, `read_tls` or `write_tls()` will fail
+    // with `WouldBlock`; only then do we arrange to be asynchronously notified
+    // of read/write.
+    let mut tcp_read_ready = true;
+    let mut tcp_write_ready = true;
+
+    let mut clear_rd_avail = false;
+    let mut clear_wr_avail = false;
+
+    loop {
+      // Update cleartext reading state.
+      clear_rd_avail |= match self.clear_rd_state {
+        State::Open | State::Eof => {
+          // Do a zero-length plaintext read so we can detect the arrival of
+          // 'CloseNotify' messages, even if only the write half is active.
+          // Actually reading data from the socket is done in `poll_read()`.
+          match self.tls.read(&mut []) {
+            Ok(0) if self.clear_rd_state == State::Open => {
+              !self.tls.wants_read()
+            }
+            Ok(0) if self.clear_rd_state == State::Eof => {
+              return Poll::Ready(Err(Error::from(ErrorKind::ConnectionReset)));
+            }
+            Err(err) if err.kind() == ErrorKind::ConnectionAborted => {
+              // `Session::read()` returns `ConnectionAborted` when a
+              // 'CloseNotify' alert has been received, which indicates that
+              // the remote peer wants to gracefully end the TLS session.
+              self.clear_rd_state = State::Closed;
+              true
+            }
+            Err(err) => return Poll::Ready(Err(err)),
+            _ => unreachable!(),
+          }
+        }
+        State::Closing => unreachable!(),
+        State::Closed => true,
+      };
+
+      // Update ciphertext read state.
+      match self.tls_rd_state {
+        State::Open => {
+          let mut wrapper = ImplementReadTrait(&mut self.tcp);
+          match self.tls.read_tls(&mut wrapper) {
+            Ok(0) if self.tls.is_handshaking() => {
+              let err =
+                Error::new(ErrorKind::UnexpectedEof, "tls handshake eof");
+              return Poll::Ready(Err(err));
+            }
+            Ok(0) => {
+              self.tls_rd_state = State::Closed;
+            }
+            Ok(_) => {
+              self
+                .tls
+                .process_new_packets()
+                .map_err(|err| Error::new(ErrorKind::InvalidData, err))?;
+            }
+            Err(err) if err.kind() == ErrorKind::WouldBlock => {
+              tcp_read_ready = self.tcp.poll_read_ready(cx)?.is_ready()
+            }
+            Err(err) => return Poll::Ready(Err(err)),
+          }
+        }
+        State::Eof => {
+          self.tls_rd_state = State::Closing;
+        }
+        State::Closing => {
+          self.tls.send_close_notify();
+          self.clear_wr_state = State::Closed;
+        }
+        State::Closed => {
+          clear_wr_avail = true;
+        }
+      }
+    }
+
+    Poll::Ready(Ok(()))
+  }
   fn poll_io(
     &mut self,
     cx: &mut Context<'_>,
