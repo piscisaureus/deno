@@ -489,7 +489,8 @@ impl TlsStreamInner {
   }
 
   fn dump_state(&mut self, label: &str) {
-    if cfg!(unix) {
+    #[cfg(unix)]
+    {
       use std::os::unix::io::AsRawFd;
       debug!(
         "[{}] fd: {}, \
