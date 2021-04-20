@@ -487,6 +487,7 @@ impl TlsStreamInner {
     Poll::Ready(Ok(()))
   }
 
+  #[allow(dead_code)]
   fn dump_state(&mut self, label: &str) {
     #[cfg(unix)]
     {
