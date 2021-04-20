@@ -308,7 +308,7 @@ impl TlsStreamInner {
           Err(err) => return Poll::Ready(Err(err)),
         }
 
-        if self.tcp.poll_write_ready(cx).is_pending() {
+        if self.tcp.poll_write_ready(cx)?.is_pending() {
           break false;
         }
       };
@@ -319,8 +319,10 @@ impl TlsStreamInner {
           State::Stream if !self.tls.wants_read() => break true,
           State::Stream => {}
           State::StreamShouldEnd if !self.tls.wants_read() => {
-            // Apparently, instead of 'CloseNotify', we received more regular data.
-            // Abort the TLS session instead of closing gracefully.
+            // Apparently Rustls has more incoming cleartext buffered up, but
+            // the TLS stream is closing so this data will never be processed by
+            // the application layer. Just like what would happen if this were a
+            // TCP stream, don't gracefully end the TLS session, but abort it.
             return Poll::Ready(Err(Error::from(ErrorKind::ConnectionReset)));
           }
           State::StreamShouldEnd => {}
@@ -372,7 +374,7 @@ impl TlsStreamInner {
           Err(err) => return Poll::Ready(Err(err)),
         }
 
-        if self.tcp.poll_read_ready(cx).is_pending() {
+        if self.tcp.poll_read_ready(cx)?.is_pending() {
           break false;
         }
       };
