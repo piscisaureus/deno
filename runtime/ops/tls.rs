@@ -264,20 +264,6 @@ pub struct TlsStreamInner {
 }
 
 impl TlsStreamInner {
-  #[allow(dead_code)]
-  fn d(&mut self, label: &str) {
-    use std::os::unix::io::AsRawFd;
-    debug!(
-      "[{}] fd: {}, read: {:?}, wants_read: {:?}, write: {:?}, wants_write: {:?}",
-      label,
-      self.tcp.as_raw_fd(),
-      self.rd_state,
-      self.tls.wants_read(),
-      self.wr_state,
-      self.tls.wants_write()
-    );
-  }
-
   fn poll_io(
     &mut self,
     cx: &mut Context<'_>,
@@ -285,7 +271,7 @@ impl TlsStreamInner {
   ) -> Poll<io::Result<()>> {
     loop {
       let wr_ready = loop {
-        self.d("poll_io write");
+        self.dump_state("poll_io write");
         match self.wr_state {
           State::Stream if !self.tls.wants_write() => break true,
           State::StreamShouldEnd if !self.tls.wants_write() => {
@@ -328,7 +314,7 @@ impl TlsStreamInner {
       };
 
       let rd_ready = loop {
-        self.d("poll_io read");
+        self.dump_state("poll_io read");
         match self.rd_state {
           State::Stream if !self.tls.wants_read() => break true,
           State::Stream => {}
@@ -410,7 +396,7 @@ impl TlsStreamInner {
       };
       return match poll_again {
         false => {
-          self.d("poll_io ready");
+          self.dump_state("poll_io ready");
           Poll::Ready(Ok(()))
         }
         true => Poll::Pending,
@@ -446,15 +432,17 @@ impl TlsStreamInner {
       // Tokio-rustls compatibility: a zero byte write always succeeds.
       Poll::Ready(Ok(0))
     } else if self.wr_state == State::Stream {
-      // Before returning "ready", flush Rustls' ciphertext send queue.
+      // Flush Rustls' ciphertext send queue.
       ready!(self.poll_io(cx, Flow::Write))?;
 
+      // Copy data from `buf` to the Rustls cleartext send queue.
       let bytes_written = self.tls.write(buf)?;
       assert_ne!(bytes_written, 0);
 
-      // We try to flush as much data as we can, but we have already handed off
-      // at least some bytes to rustls, so we can't return `Poll::Pending()` any
-      // more, as this would indicate to the caller that it should try again.
+      // Try to flush as much ciphertext as possible. However, since we just
+      // handed off at least some bytes to rustls, so we can't return
+      // `Poll::Pending()` any more: this would tell the caller that it should
+      // try to send those bytes again.
       let _ = self.poll_io(cx, Flow::Write)?;
 
       Poll::Ready(Ok(bytes_written))
@@ -496,6 +484,23 @@ impl TlsStreamInner {
     assert_eq!(self.wr_state, State::TcpClosed);
 
     Poll::Ready(Ok(()))
+  }
+
+  fn dump_state(&mut self, label: &str) {
+    if cfg!(unix) {
+      use std::os::unix::io::AsRawFd;
+      debug!(
+        "[{}] fd: {}, \
+         read: {:?}, wants_read: {:?}, \
+         write: {:?}, wants_write: {:?}",
+        label,
+        self.tcp.as_raw_fd(),
+        self.rd_state,
+        self.tls.wants_read(),
+        self.wr_state,
+        self.tls.wants_write()
+      );
+    }
   }
 }
 
