@@ -238,20 +238,16 @@ async function sendCloseWrite(
   buf.fill(42);
   for (let remaining = byteCount; remaining > 0; remaining -= n) {
     n = await conn.write(buf.subarray(0, remaining));
-    console.log("S1", n, remaining - n);
     assert(n >= 1);
   }
 
   // Send EOF.
-  console.log("S2 eof-");
   await conn.closeWrite();
-  console.log("S2 eof+");
 
   // Receive 69s.
   for (let remaining = byteCount; remaining > 0; remaining -= n) {
     buf.fill(0);
     n = await conn.read(buf) as number;
-    console.log("S3", n);
     assert(n >= 1);
     assertStrictEquals(buf[0], 69);
     assertStrictEquals(buf[n - 1], 69);
@@ -259,10 +255,8 @@ async function sendCloseWrite(
 
   if (readHalfClose) {
     // Receive EOF.
-    console.log("S3 eof-");
     const eof = await conn.read(buf);
     assertStrictEquals(eof, null);
-    console.log("S3 eof+");
   }
 
   conn.close();
@@ -282,7 +276,6 @@ async function receiveCloseWrite(
   for (let remaining = byteCount; remaining > 0; remaining -= n) {
     buf.fill(0);
     n = await conn.read(buf) as number;
-    console.log("R1", n, remaining - n);
     assert(n >= 1);
     assertStrictEquals(buf[0], 42);
     assertStrictEquals(buf[n - 1], 42);
@@ -290,17 +283,14 @@ async function receiveCloseWrite(
 
   if (readEof) {
     // Receive EOF.
-    console.log("R2 eof-");
     const eof = await conn.read(buf);
     assertStrictEquals(eof, null);
-    console.log("R2 eof+");
   }
 
   // Send 69s.
   buf.fill(69);
   for (let remaining = byteCount; remaining > 0; remaining -= n) {
     n = await conn.write(buf.subarray(0, remaining));
-    console.log("R3", n, remaining - n);
     assert(n >= 1);
   }
 
