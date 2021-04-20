@@ -36,7 +36,6 @@ use deno_core::ZeroCopyBuf;
 use io::Error;
 use io::Read;
 use io::Write;
-use log::debug;
 use rustls::internal::pemfile::certs;
 use rustls::internal::pemfile::pkcs8_private_keys;
 use rustls::internal::pemfile::rsa_private_keys;
@@ -492,7 +491,7 @@ impl TlsStreamInner {
     #[cfg(unix)]
     {
       use std::os::unix::io::AsRawFd;
-      debug!(
+      log::debug!(
         "[{}] fd: {}, \
          read: {:?}, wants_read: {:?}, \
          write: {:?}, wants_write: {:?}",
