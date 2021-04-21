@@ -1,5 +1,3 @@
-// Copyright 2018-2021 the Deno authors. All rights reserved. MIT license.
-
 const listener = Deno.listenTls({
   port: Number(Deno.args[0]),
   certFile: "./cli/tests/tls/localhost.crt",
