@@ -141,6 +141,7 @@ enum Flow {
   Read,
   Write,
 }
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum State {
   Stream,
@@ -535,7 +536,9 @@ impl AsyncRead for ReadHalf {
   ) -> Poll<io::Result<()>> {
     self
       .shared
-      .poll_flow_with(cx, Flow::Read, move |tls, cx| tls.poll_read(cx, buf))
+      .poll_with_shared_waker(cx, Flow::Read, move |tls, cx| {
+        tls.poll_read(cx, buf)
+      })
   }
 }
 
@@ -552,7 +555,9 @@ impl AsyncWrite for WriteHalf {
   ) -> Poll<io::Result<usize>> {
     self
       .shared
-      .poll_flow_with(cx, Flow::Write, move |tls, cx| tls.poll_write(cx, buf))
+      .poll_with_shared_waker(cx, Flow::Write, move |tls, cx| {
+        tls.poll_write(cx, buf)
+      })
   }
 
   fn poll_flush(
@@ -561,7 +566,7 @@ impl AsyncWrite for WriteHalf {
   ) -> Poll<io::Result<()>> {
     self
       .shared
-      .poll_flow_with(cx, Flow::Write, |tls, cx| tls.poll_flush(cx))
+      .poll_with_shared_waker(cx, Flow::Write, |tls, cx| tls.poll_flush(cx))
   }
 
   fn poll_shutdown(
@@ -570,7 +575,7 @@ impl AsyncWrite for WriteHalf {
   ) -> Poll<io::Result<()>> {
     self
       .shared
-      .poll_flow_with(cx, Flow::Write, |tls, cx| tls.poll_shutdown(cx))
+      .poll_with_shared_waker(cx, Flow::Write, |tls, cx| tls.poll_shutdown(cx))
   }
 }
 
@@ -591,7 +596,7 @@ impl Shared {
     Arc::new(self_)
   }
 
-  fn poll_flow_with<R>(
+  fn poll_with_shared_waker<R>(
     self: &Arc<Self>,
     cx: &mut Context<'_>,
     flow: Flow,
@@ -602,41 +607,41 @@ impl Shared {
       Flow::Write => self.wr_waker.register(cx.waker()),
     }
 
-    let shared_waker = self.new_waker();
+    let shared_waker = self.new_shared_waker();
     let mut cx = Context::from_waker(&shared_waker);
 
     let mut tls_stream = self.tls_stream.lock().unwrap();
     f(Pin::new(&mut tls_stream), &mut cx)
   }
 
-  const WAKER_VTABLE: RawWakerVTable = RawWakerVTable::new(
-    Self::clone_waker,
-    Self::wake_waker,
-    Self::wake_waker_by_ref,
-    Self::drop_waker,
+  const SHARED_WAKER_VTABLE: RawWakerVTable = RawWakerVTable::new(
+    Self::clone_shared_waker,
+    Self::wake_shared_waker,
+    Self::wake_shared_waker_by_ref,
+    Self::drop_shared_waker,
   );
 
-  fn new_waker(self: &Arc<Self>) -> Waker {
+  fn new_shared_waker(self: &Arc<Self>) -> Waker {
     let self_weak = Arc::downgrade(self);
     let self_ptr = self_weak.into_raw() as *const ();
-    let raw_waker = RawWaker::new(self_ptr, &Self::WAKER_VTABLE);
+    let raw_waker = RawWaker::new(self_ptr, &Self::SHARED_WAKER_VTABLE);
     unsafe { Waker::from_raw(raw_waker) }
   }
 
-  fn clone_waker(self_ptr: *const ()) -> RawWaker {
+  fn clone_shared_waker(self_ptr: *const ()) -> RawWaker {
     let self_weak = unsafe { Weak::from_raw(self_ptr as *const Self) };
     let ptr1 = self_weak.clone().into_raw();
     let ptr2 = self_weak.into_raw();
     assert!(ptr1 == ptr2);
-    RawWaker::new(self_ptr, &Self::WAKER_VTABLE)
+    RawWaker::new(self_ptr, &Self::SHARED_WAKER_VTABLE)
   }
 
-  fn wake_waker(self_ptr: *const ()) {
-    Self::wake_waker_by_ref(self_ptr);
-    Self::drop_waker(self_ptr);
+  fn wake_shared_waker(self_ptr: *const ()) {
+    Self::wake_shared_waker_by_ref(self_ptr);
+    Self::drop_shared_waker(self_ptr);
   }
 
-  fn wake_waker_by_ref(self_ptr: *const ()) {
+  fn wake_shared_waker_by_ref(self_ptr: *const ()) {
     let self_weak = unsafe { Weak::from_raw(self_ptr as *const Self) };
     if let Some(self_arc) = Weak::upgrade(&self_weak) {
       self_arc.rd_waker.wake();
@@ -645,7 +650,7 @@ impl Shared {
     self_weak.into_raw();
   }
 
-  fn drop_waker(self_ptr: *const ()) {
+  fn drop_shared_waker(self_ptr: *const ()) {
     let _ = unsafe { Weak::from_raw(self_ptr as *const Self) };
   }
 }

@@ -241,7 +241,7 @@ async function sendThenCloseWriteThenReceive(
   const buf = new Uint8Array(chunkSize); // Note: buf is size of _chunk_.
   let n: number;
 
-  // Send 42s.
+  // Slowly send 42s.
   buf.fill(42);
   for (let remaining = byteCount; remaining > 0; remaining -= n) {
     n = await conn.write(buf.subarray(0, remaining));
@@ -282,7 +282,7 @@ async function receiveThenSend(
     assertStrictEquals(buf[n - 1], 42);
   }
 
-  // Send 69s.
+  // Slowly send 69s.
   buf.fill(69);
   for (let remaining = byteCount; remaining > 0; remaining -= n) {
     n = await conn.write(buf.subarray(0, remaining));
