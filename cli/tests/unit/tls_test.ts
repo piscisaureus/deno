@@ -205,9 +205,12 @@ unitTest(
 );
 
 let nextPort = 3501;
+function getPort() {
+  return nextPort++;
+}
 
 async function tlsPair(): Promise<[Deno.Conn, Deno.Conn]> {
-  const port = nextPort++;
+  const port = getPort();
   const listener = Deno.listenTls({
     hostname: "localhost",
     port,
@@ -488,8 +491,9 @@ unitTest(
   },
 );
 
-async function immediateClose(conn: Deno.Conn): Promise<void> {
+function immediateClose(conn: Deno.Conn): Promise<void> {
   conn.close();
+  return Promise.resolve();
 }
 
 async function closeWriteAndClose(conn: Deno.Conn): Promise<void> {
@@ -532,6 +536,104 @@ unitTest(
       immediateClose(serverConn),
       immediateClose(clientConn),
     ]);
+  },
+);
+
+function createHttpsListener(port: number): Deno.Listener {
+  // Query format: `curl --insecure https://localhost:8443/z/12345`
+  // The server returns a response consisting of 12345 times the letter 'z'.
+  const listener = Deno.listenTls({
+    hostname: "localhost",
+    port,
+    certFile: "./cli/tests/tls/localhost.crt",
+    keyFile: "./cli/tests/tls/localhost.key",
+  });
+
+  serve(listener);
+  return listener;
+
+  async function serve(listener: Deno.Listener) {
+    for await (const conn of listener) {
+      const EOL = "\r\n";
+
+      // Read GET request plus headers.
+      let req = "";
+      const buf = new Uint8Array(0x1000);
+      while (!req.endsWith(EOL + EOL)) {
+        const n = await conn.read(buf);
+        if (n === null) throw new Error("Unexpected EOF");
+        req += [...buf.subarray(0, n)]
+          .map((c) => String.fromCharCode(c))
+          .join("");
+      }
+
+      // Parse GET request.
+      const { filler, count, version } =
+        /^GET \/(?<filler>[^\/]+)\/(?<count>\d+) HTTP\/(?<version>1\.\d)\r\n/
+          .exec(req)!.groups as {
+            filler: string;
+            count: string;
+            version: string;
+          };
+
+      // Generate response.
+      const resBody = new TextEncoder().encode(filler.repeat(+count));
+      let resHead = new TextEncoder().encode(
+        [
+          `HTTP/${version} 200 OK`,
+          `Content-Length: ${resBody.length}`,
+          "Content-Type: text/plain",
+        ].join(EOL) + EOL + EOL,
+      );
+
+      // Send response.
+      await conn.write(resHead);
+      await conn.write(resBody);
+
+      // Close TCP connection.
+      conn.close();
+    }
+  }
+}
+
+async function curl(url: string): Promise<string> {
+  const curl = Deno.run({
+    cmd: ["curl", "--insecure", url],
+    stdout: "piped",
+  });
+
+  try {
+    const [status, output] = await Promise.all([curl.status(), curl.output()]);
+    if (!status.success) {
+      throw new Error(`curl ${url} failed: ${status.code}`);
+    }
+    return new TextDecoder().decode(output);
+  } finally {
+    curl.close();
+  }
+}
+
+unitTest(
+  { perms: { read: true, net: true, run: true } },
+  async function curlFakeHttpsServer(): Promise<void> {
+    const port = getPort();
+    const listener = createHttpsListener(port);
+
+    const res1 = await curl(`https://localhost:${port}/d/1`);
+    assertStrictEquals(res1, "d");
+
+    const res2 = await curl(`https://localhost:${port}/e/12345`);
+    assertStrictEquals(res2, "e".repeat(12345));
+
+    const count3 = 1 << 17; // 128 kB.
+    const res3 = await curl(`https://localhost:${port}/n/${count3}`);
+    assertStrictEquals(res3, "n".repeat(count3));
+
+    const count4 = 12345678;
+    const res4 = await curl(`https://localhost:${port}/o/${count4}`);
+    assertStrictEquals(res4, "o".repeat(count4));
+
+    listener.close();
   },
 );
 
