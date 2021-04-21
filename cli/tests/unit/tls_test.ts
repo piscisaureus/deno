@@ -488,6 +488,53 @@ unitTest(
   },
 );
 
+async function immediateClose(conn: Deno.Conn): Promise<void> {
+  conn.close();
+}
+
+async function closeWriteAndClose(conn: Deno.Conn): Promise<void> {
+  await conn.closeWrite();
+
+  if (await conn.read(new Uint8Array(1)) !== null) {
+    throw new Error("did not expect to receive data on TLS stream");
+  }
+
+  conn.close();
+}
+
+unitTest(
+  { perms: { read: true, net: true } },
+  async function tlsServerStreamImmediateClose(): Promise<void> {
+    const [serverConn, clientConn] = await tlsPair();
+    await Promise.all([
+      immediateClose(serverConn),
+      closeWriteAndClose(clientConn),
+    ]);
+  },
+);
+
+unitTest(
+  { perms: { read: true, net: true } },
+  async function tlsClientStreamImmediateClose(): Promise<void> {
+    const [serverConn, clientConn] = await tlsPair();
+    await Promise.all([
+      closeWriteAndClose(serverConn),
+      immediateClose(clientConn),
+    ]);
+  },
+);
+
+unitTest(
+  { perms: { read: true, net: true } },
+  async function tlsClientAndServerStreamImmediateClose(): Promise<void> {
+    const [serverConn, clientConn] = await tlsPair();
+    await Promise.all([
+      immediateClose(serverConn),
+      immediateClose(clientConn),
+    ]);
+  },
+);
+
 unitTest(
   { perms: { read: true, net: true } },
   async function startTls(): Promise<void> {
