@@ -250,6 +250,8 @@ impl Drop for TlsStream {
 
     if use_linger_task {
       spawn_local(poll_fn(move |cx| inner.poll_close(cx)));
+    } else if cfg!(debug_assertions) {
+      spawn_local(async {}); // Spawn dummy task to detect missing LocalSet.
     }
   }
 }

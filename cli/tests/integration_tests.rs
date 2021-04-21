@@ -16,6 +16,7 @@ use std::process::Command;
 use std::sync::Arc;
 use tempfile::TempDir;
 use test_util as util;
+use tokio::task::LocalSet;
 
 #[test]
 fn js_unit_tests_lint() {
@@ -5895,87 +5896,103 @@ console.log("finish");
 
 #[tokio::test]
 async fn listen_tls_alpn() {
-  let mut child = util::deno_cmd()
-    .current_dir(util::root_path())
-    .arg("run")
-    .arg("--unstable")
-    .arg("--quiet")
-    .arg("--allow-net")
-    .arg("--allow-read")
-    .arg("./cli/tests/listen_tls_alpn.ts")
-    .arg("4504")
-    .stdout(std::process::Stdio::piped())
-    .spawn()
-    .unwrap();
-  let stdout = child.stdout.as_mut().unwrap();
-  let mut buffer = [0; 5];
-  let read = stdout.read(&mut buffer).unwrap();
-  assert_eq!(read, 5);
-  let msg = std::str::from_utf8(&buffer).unwrap();
-  assert_eq!(msg, "READY");
+  // TLS streams require the presence of an ambient local task set to gracefully
+  // close dropped connections in the background.
+  LocalSet::new()
+    .run_until(async {
+      let mut child = util::deno_cmd()
+        .current_dir(util::root_path())
+        .arg("run")
+        .arg("--unstable")
+        .arg("--quiet")
+        .arg("--allow-net")
+        .arg("--allow-read")
+        .arg("./cli/tests/listen_tls_alpn.ts")
+        .arg("4504")
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+      let stdout = child.stdout.as_mut().unwrap();
+      let mut buffer = [0; 5];
+      let read = stdout.read(&mut buffer).unwrap();
+      assert_eq!(read, 5);
+      let msg = std::str::from_utf8(&buffer).unwrap();
+      assert_eq!(msg, "READY");
 
-  let mut cfg = rustls::ClientConfig::new();
-  let reader =
-    &mut BufReader::new(Cursor::new(include_bytes!("./tls/RootCA.crt")));
-  cfg.root_store.add_pem_file(reader).unwrap();
-  cfg.alpn_protocols.push("foobar".as_bytes().to_vec());
-  let cfg = Arc::new(cfg);
+      let mut cfg = rustls::ClientConfig::new();
+      let reader =
+        &mut BufReader::new(Cursor::new(include_bytes!("./tls/RootCA.crt")));
+      cfg.root_store.add_pem_file(reader).unwrap();
+      cfg.alpn_protocols.push("foobar".as_bytes().to_vec());
+      let cfg = Arc::new(cfg);
 
-  let hostname = webpki::DNSNameRef::try_from_ascii_str("localhost").unwrap();
+      let hostname =
+        webpki::DNSNameRef::try_from_ascii_str("localhost").unwrap();
 
-  let tcp_stream = tokio::net::TcpStream::connect("localhost:4504")
-    .await
-    .unwrap();
-  let mut tls_stream = TlsStream::new_client_side(tcp_stream, &cfg, hostname);
-  tls_stream.handshake().await.unwrap();
-  let (_, session) = tls_stream.get_ref();
+      let tcp_stream = tokio::net::TcpStream::connect("localhost:4504")
+        .await
+        .unwrap();
+      let mut tls_stream =
+        TlsStream::new_client_side(tcp_stream, &cfg, hostname);
+      tls_stream.handshake().await.unwrap();
+      let (_, session) = tls_stream.get_ref();
 
-  let alpn = session.get_alpn_protocol().unwrap();
-  assert_eq!(std::str::from_utf8(alpn).unwrap(), "foobar");
+      let alpn = session.get_alpn_protocol().unwrap();
+      assert_eq!(std::str::from_utf8(alpn).unwrap(), "foobar");
 
-  child.kill().unwrap();
-  child.wait().unwrap();
+      child.kill().unwrap();
+      child.wait().unwrap();
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn listen_tls_alpn_fail() {
-  let mut child = util::deno_cmd()
-    .current_dir(util::root_path())
-    .arg("run")
-    .arg("--unstable")
-    .arg("--quiet")
-    .arg("--allow-net")
-    .arg("--allow-read")
-    .arg("./cli/tests/listen_tls_alpn.ts")
-    .arg("4505")
-    .stdout(std::process::Stdio::piped())
-    .spawn()
-    .unwrap();
-  let stdout = child.stdout.as_mut().unwrap();
-  let mut buffer = [0; 5];
-  let read = stdout.read(&mut buffer).unwrap();
-  assert_eq!(read, 5);
-  let msg = std::str::from_utf8(&buffer).unwrap();
-  assert_eq!(msg, "READY");
+  // TLS streams require the presence of an ambient local task set to gracefully
+  // close dropped connections in the background.
+  LocalSet::new()
+    .run_until(async {
+      let mut child = util::deno_cmd()
+        .current_dir(util::root_path())
+        .arg("run")
+        .arg("--unstable")
+        .arg("--quiet")
+        .arg("--allow-net")
+        .arg("--allow-read")
+        .arg("./cli/tests/listen_tls_alpn.ts")
+        .arg("4505")
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+      let stdout = child.stdout.as_mut().unwrap();
+      let mut buffer = [0; 5];
+      let read = stdout.read(&mut buffer).unwrap();
+      assert_eq!(read, 5);
+      let msg = std::str::from_utf8(&buffer).unwrap();
+      assert_eq!(msg, "READY");
 
-  let mut cfg = rustls::ClientConfig::new();
-  let reader =
-    &mut BufReader::new(Cursor::new(include_bytes!("./tls/RootCA.crt")));
-  cfg.root_store.add_pem_file(reader).unwrap();
-  cfg.alpn_protocols.push("boofar".as_bytes().to_vec());
-  let cfg = Arc::new(cfg);
+      let mut cfg = rustls::ClientConfig::new();
+      let reader =
+        &mut BufReader::new(Cursor::new(include_bytes!("./tls/RootCA.crt")));
+      cfg.root_store.add_pem_file(reader).unwrap();
+      cfg.alpn_protocols.push("boofar".as_bytes().to_vec());
+      let cfg = Arc::new(cfg);
 
-  let hostname = webpki::DNSNameRef::try_from_ascii_str("localhost").unwrap();
+      let hostname =
+        webpki::DNSNameRef::try_from_ascii_str("localhost").unwrap();
 
-  let tcp_stream = tokio::net::TcpStream::connect("localhost:4505")
-    .await
-    .unwrap();
-  let mut tls_stream = TlsStream::new_client_side(tcp_stream, &cfg, hostname);
-  tls_stream.handshake().await.unwrap();
-  let (_, session) = tls_stream.get_ref();
+      let tcp_stream = tokio::net::TcpStream::connect("localhost:4505")
+        .await
+        .unwrap();
+      let mut tls_stream =
+        TlsStream::new_client_side(tcp_stream, &cfg, hostname);
+      tls_stream.handshake().await.unwrap();
+      let (_, session) = tls_stream.get_ref();
 
-  assert!(session.get_alpn_protocol().is_none());
+      assert!(session.get_alpn_protocol().is_none());
 
-  child.kill().unwrap();
-  child.wait().unwrap();
+      child.kill().unwrap();
+      child.wait().unwrap();
+    })
+    .await;
 }
