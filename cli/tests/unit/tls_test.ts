@@ -11,7 +11,8 @@ import {
 import { BufReader, BufWriter } from "../../../test_util/std/io/bufio.ts";
 import { TextProtoReader } from "../../../test_util/std/textproto/mod.ts";
 
-const ONE_MB = 1 << 20;
+const SIZE_64KB = 1 << 16;
+const SIZE_1MB = 1 << 20;
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -338,14 +339,14 @@ unitTest(
   async function tlsStreamHalfCloseOneLargePrecise(): Promise<void> {
     const [serverConn1, clientConn1] = await tlsPair(port++);
     await Promise.all([
-      sendCloseWrite(serverConn1, 1, ONE_MB, true),
-      receiveCloseWrite(clientConn1, 1, ONE_MB, true),
+      sendCloseWrite(serverConn1, 1, SIZE_1MB, true),
+      receiveCloseWrite(clientConn1, 1, SIZE_1MB, true),
     ]);
 
     const [serverConn2, clientConn2] = await tlsPair(port++);
     await Promise.all([
-      sendCloseWrite(clientConn2, 1, ONE_MB, true),
-      receiveCloseWrite(serverConn2, 1, ONE_MB, true),
+      sendCloseWrite(clientConn2, 1, SIZE_1MB, true),
+      receiveCloseWrite(serverConn2, 1, SIZE_1MB, true),
     ]);
   },
 );
@@ -355,14 +356,14 @@ unitTest(
   async function tlsStreamHalfCloseOneLargeSloppy(): Promise<void> {
     const [serverConn1, clientConn1] = await tlsPair(port++);
     await Promise.all([
-      sendCloseWrite(serverConn1, 1, ONE_MB, false),
-      receiveCloseWrite(clientConn1, 1, ONE_MB, false),
+      sendCloseWrite(serverConn1, 1, SIZE_1MB, false),
+      receiveCloseWrite(clientConn1, 1, SIZE_1MB, false),
     ]);
 
     const [serverConn2, clientConn2] = await tlsPair(port++);
     await Promise.all([
-      sendCloseWrite(clientConn2, 1, ONE_MB, false),
-      receiveCloseWrite(serverConn2, 1, ONE_MB, false),
+      sendCloseWrite(clientConn2, 1, SIZE_1MB, false),
+      receiveCloseWrite(serverConn2, 1, SIZE_1MB, false),
     ]);
   },
 );
@@ -406,14 +407,14 @@ unitTest(
   async function tlsStreamHalfCloseManyLargePrecise(): Promise<void> {
     const [serverConn1, clientConn1] = await tlsPair(port++);
     await Promise.all([
-      sendCloseWrite(serverConn1, 100, ONE_MB, true),
-      receiveCloseWrite(clientConn1, 100, ONE_MB, true),
+      sendCloseWrite(serverConn1, 100, SIZE_64KB, true),
+      receiveCloseWrite(clientConn1, 100, SIZE_64KB, true),
     ]);
 
     const [serverConn2, clientConn2] = await tlsPair(port++);
     await Promise.all([
-      sendCloseWrite(clientConn2, 100, ONE_MB, true),
-      receiveCloseWrite(serverConn2, 100, ONE_MB, true),
+      sendCloseWrite(clientConn2, 100, SIZE_64KB, true),
+      receiveCloseWrite(serverConn2, 100, SIZE_64KB, true),
     ]);
   },
 );
@@ -423,14 +424,14 @@ unitTest(
   async function tlsStreamHalfCloseManyLargeSloppy(): Promise<void> {
     const [serverConn1, clientConn1] = await tlsPair(port++);
     await Promise.all([
-      sendCloseWrite(serverConn1, 100, ONE_MB, false),
-      receiveCloseWrite(clientConn1, 100, ONE_MB, false),
+      sendCloseWrite(serverConn1, 100, SIZE_64KB, false),
+      receiveCloseWrite(clientConn1, 100, SIZE_64KB, false),
     ]);
 
     const [serverConn2, clientConn2] = await tlsPair(port++);
     await Promise.all([
-      sendCloseWrite(clientConn2, 100, ONE_MB, false),
-      receiveCloseWrite(serverConn2, 100, ONE_MB, false),
+      sendCloseWrite(clientConn2, 100, SIZE_64KB, false),
+      receiveCloseWrite(serverConn2, 100, SIZE_64KB, false),
     ]);
   },
 );
@@ -441,7 +442,7 @@ async function sendAlotReceiveNothing(conn: Deno.Conn): Promise<void> {
   const readPromise = conn.read(readBuf);
 
   // Send 1 MB of data.
-  const writeBuf = new Uint8Array(ONE_MB);
+  const writeBuf = new Uint8Array(SIZE_1MB);
   writeBuf.fill(42);
   await conn.write(writeBuf);
 
@@ -463,7 +464,7 @@ async function receiveAlotSendNothing(conn: Deno.Conn): Promise<void> {
   let n: number | null;
 
   // Receive 1 MB of data.
-  for (let nread = 0; nread < ONE_MB; nread += n!) {
+  for (let nread = 0; nread < SIZE_1MB; nread += n!) {
     n = await conn.read(readBuf);
     assertStrictEquals(typeof n, "number");
     assert(n! > 0);
