@@ -293,8 +293,6 @@ async function receiveThenSend(
   conn.close();
 }
 
-let port = 3501;
-
 unitTest(
   { perms: { read: true, net: true } },
   async function tlsServerStreamHalfCloseSendOneByte(): Promise<void> {
