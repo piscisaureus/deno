@@ -204,7 +204,10 @@ unitTest(
   },
 );
 
-async function tlsPair(port: number): Promise<[Deno.Conn, Deno.Conn]> {
+let nextPort = 3501;
+
+async function tlsPair(): Promise<[Deno.Conn, Deno.Conn]> {
+  const port = nextPort++;
   const listener = Deno.listenTls({
     hostname: "localhost",
     port,
@@ -218,21 +221,24 @@ async function tlsPair(port: number): Promise<[Deno.Conn, Deno.Conn]> {
     port,
     certFile: "cli/tests/tls/RootCA.pem",
   });
-  const connections = await Promise.all([acceptPromise, connectPromise]);
+  const conns = await Promise.all([acceptPromise, connectPromise]);
 
   listener.close();
 
-  return connections;
+  return conns;
 }
 
-async function sendCloseWrite(
+async function sleep(msec: number): Promise<void> {
+  await new Promise((res, _rej) => setTimeout(res, msec));
+}
+
+async function sendThenCloseWriteThenReceive(
   conn: Deno.Conn,
   chunkCount: number,
   chunkSize: number,
-  readHalfClose: boolean,
 ): Promise<void> {
-  const buf = new Uint8Array(chunkSize);
   const byteCount = chunkCount * chunkSize;
+  const buf = new Uint8Array(chunkSize); // Note: buf is size of _chunk_.
   let n: number;
 
   // Send 42s.
@@ -240,6 +246,7 @@ async function sendCloseWrite(
   for (let remaining = byteCount; remaining > 0; remaining -= n) {
     n = await conn.write(buf.subarray(0, remaining));
     assert(n >= 1);
+    await sleep(10);
   }
 
   // Send EOF.
@@ -254,23 +261,16 @@ async function sendCloseWrite(
     assertStrictEquals(buf[n - 1], 69);
   }
 
-  if (readHalfClose) {
-    // Receive EOF.
-    const eof = await conn.read(buf);
-    assertStrictEquals(eof, null);
-  }
-
   conn.close();
 }
 
-async function receiveCloseWrite(
+async function receiveThenSend(
   conn: Deno.Conn,
   chunkCount: number,
   chunkSize: number,
-  readEof: boolean,
 ): Promise<void> {
-  const buf = new Uint8Array(chunkSize);
   const byteCount = chunkCount * chunkSize;
+  const buf = new Uint8Array(byteCount); // Note: buf size equals `byteCount`.
   let n: number;
 
   // Receive 42s.
@@ -282,17 +282,12 @@ async function receiveCloseWrite(
     assertStrictEquals(buf[n - 1], 42);
   }
 
-  if (readEof) {
-    // Receive EOF.
-    const eof = await conn.read(buf);
-    assertStrictEquals(eof, null);
-  }
-
   // Send 69s.
   buf.fill(69);
   for (let remaining = byteCount; remaining > 0; remaining -= n) {
     n = await conn.write(buf.subarray(0, remaining));
     assert(n >= 1);
+    await sleep(10);
   }
 
   conn.close();
@@ -302,136 +297,88 @@ let port = 3501;
 
 unitTest(
   { perms: { read: true, net: true } },
-  async function tlsStreamHalfCloseOneSmallPrecise(): Promise<void> {
-    const [serverConn1, clientConn1] = await tlsPair(port++);
+  async function tlsServerStreamHalfCloseSendOneByte(): Promise<void> {
+    const [serverConn, clientConn] = await tlsPair();
     await Promise.all([
-      sendCloseWrite(serverConn1, 1, 1, true),
-      receiveCloseWrite(clientConn1, 1, 1, true),
-    ]);
-
-    const [serverConn2, clientConn2] = await tlsPair(port++);
-    await Promise.all([
-      sendCloseWrite(clientConn2, 1, 1, true),
-      receiveCloseWrite(serverConn2, 1, 1, true),
+      sendThenCloseWriteThenReceive(serverConn, 1, 1),
+      receiveThenSend(clientConn, 1, 1),
     ]);
   },
 );
 
 unitTest(
   { perms: { read: true, net: true } },
-  async function tlsStreamHalfCloseOneSmallSloppy(): Promise<void> {
-    const [serverConn1, clientConn1] = await tlsPair(port++);
+  async function tlsClientStreamHalfCloseSendOneByte(): Promise<void> {
+    const [serverConn, clientConn] = await tlsPair();
     await Promise.all([
-      sendCloseWrite(serverConn1, 1, 1, false),
-      receiveCloseWrite(clientConn1, 1, 1, false),
-    ]);
-
-    const [serverConn2, clientConn2] = await tlsPair(port++);
-    await Promise.all([
-      sendCloseWrite(clientConn2, 1, 1, false),
-      receiveCloseWrite(serverConn2, 1, 1, false),
+      sendThenCloseWriteThenReceive(clientConn, 1, 1),
+      receiveThenSend(serverConn, 1, 1),
     ]);
   },
 );
 
 unitTest(
   { perms: { read: true, net: true } },
-  async function tlsStreamHalfCloseOneLargePrecise(): Promise<void> {
-    const [serverConn1, clientConn1] = await tlsPair(port++);
+  async function tlsServerStreamHalfCloseSendOneChunk(): Promise<void> {
+    const [serverConn, clientConn] = await tlsPair();
     await Promise.all([
-      sendCloseWrite(serverConn1, 1, SIZE_1MB, true),
-      receiveCloseWrite(clientConn1, 1, SIZE_1MB, true),
-    ]);
-
-    const [serverConn2, clientConn2] = await tlsPair(port++);
-    await Promise.all([
-      sendCloseWrite(clientConn2, 1, SIZE_1MB, true),
-      receiveCloseWrite(serverConn2, 1, SIZE_1MB, true),
+      sendThenCloseWriteThenReceive(serverConn, 1, SIZE_1MB),
+      receiveThenSend(clientConn, 1, SIZE_1MB),
     ]);
   },
 );
 
 unitTest(
   { perms: { read: true, net: true } },
-  async function tlsStreamHalfCloseOneLargeSloppy(): Promise<void> {
-    const [serverConn1, clientConn1] = await tlsPair(port++);
+  async function tlsClientStreamHalfCloseSendOneChunk(): Promise<void> {
+    const [serverConn, clientConn] = await tlsPair();
     await Promise.all([
-      sendCloseWrite(serverConn1, 1, SIZE_1MB, false),
-      receiveCloseWrite(clientConn1, 1, SIZE_1MB, false),
-    ]);
-
-    const [serverConn2, clientConn2] = await tlsPair(port++);
-    await Promise.all([
-      sendCloseWrite(clientConn2, 1, SIZE_1MB, false),
-      receiveCloseWrite(serverConn2, 1, SIZE_1MB, false),
+      sendThenCloseWriteThenReceive(clientConn, 1, SIZE_1MB),
+      receiveThenSend(serverConn, 1, SIZE_1MB),
     ]);
   },
 );
 
 unitTest(
   { perms: { read: true, net: true } },
-  async function tlsStreamHalfCloseManySmallPrecise(): Promise<void> {
-    const [serverConn1, clientConn1] = await tlsPair(port++);
+  async function tlsServerStreamHalfCloseSendManyBytes(): Promise<void> {
+    const [serverConn, clientConn] = await tlsPair();
     await Promise.all([
-      sendCloseWrite(serverConn1, 100, 1, true),
-      receiveCloseWrite(clientConn1, 100, 1, true),
-    ]);
-
-    const [serverConn2, clientConn2] = await tlsPair(port++);
-    await Promise.all([
-      sendCloseWrite(clientConn2, 100, 1, true),
-      receiveCloseWrite(serverConn2, 100, 1, true),
+      sendThenCloseWriteThenReceive(serverConn, 100, 1),
+      receiveThenSend(clientConn, 100, 1),
     ]);
   },
 );
 
 unitTest(
   { perms: { read: true, net: true } },
-  async function tlsStreamHalfCloseManySmallSloppy(): Promise<void> {
-    const [serverConn1, clientConn1] = await tlsPair(port++);
+  async function tlsClientStreamHalfCloseSendManyBytes(): Promise<void> {
+    const [serverConn, clientConn] = await tlsPair();
     await Promise.all([
-      sendCloseWrite(serverConn1, 100, 1, false),
-      receiveCloseWrite(clientConn1, 100, 1, false),
-    ]);
-
-    const [serverConn2, clientConn2] = await tlsPair(port++);
-    await Promise.all([
-      sendCloseWrite(clientConn2, 100, 1, false),
-      receiveCloseWrite(serverConn2, 100, 1, false),
+      sendThenCloseWriteThenReceive(clientConn, 100, 1),
+      receiveThenSend(serverConn, 100, 1),
     ]);
   },
 );
 
 unitTest(
   { perms: { read: true, net: true } },
-  async function tlsStreamHalfCloseManyLargePrecise(): Promise<void> {
-    const [serverConn1, clientConn1] = await tlsPair(port++);
+  async function tlsServerStreamHalfCloseSendManyChunks(): Promise<void> {
+    const [serverConn, clientConn] = await tlsPair();
     await Promise.all([
-      sendCloseWrite(serverConn1, 100, SIZE_64KB, true),
-      receiveCloseWrite(clientConn1, 100, SIZE_64KB, true),
-    ]);
-
-    const [serverConn2, clientConn2] = await tlsPair(port++);
-    await Promise.all([
-      sendCloseWrite(clientConn2, 100, SIZE_64KB, true),
-      receiveCloseWrite(serverConn2, 100, SIZE_64KB, true),
+      sendThenCloseWriteThenReceive(serverConn, 100, SIZE_64KB),
+      receiveThenSend(clientConn, 100, SIZE_64KB),
     ]);
   },
 );
 
 unitTest(
   { perms: { read: true, net: true } },
-  async function tlsStreamHalfCloseManyLargeSloppy(): Promise<void> {
-    const [serverConn1, clientConn1] = await tlsPair(port++);
+  async function tlsClientStreamHalfCloseSendManyChunks(): Promise<void> {
+    const [serverConn, clientConn] = await tlsPair();
     await Promise.all([
-      sendCloseWrite(serverConn1, 100, SIZE_64KB, false),
-      receiveCloseWrite(clientConn1, 100, SIZE_64KB, false),
-    ]);
-
-    const [serverConn2, clientConn2] = await tlsPair(port++);
-    await Promise.all([
-      sendCloseWrite(clientConn2, 100, SIZE_64KB, false),
-      receiveCloseWrite(serverConn2, 100, SIZE_64KB, false),
+      sendThenCloseWriteThenReceive(clientConn, 100, SIZE_64KB),
+      receiveThenSend(serverConn, 100, SIZE_64KB),
     ]);
   },
 );
@@ -478,7 +425,7 @@ async function receiveAlotSendNothing(conn: Deno.Conn): Promise<void> {
 unitTest(
   { perms: { read: true, net: true } },
   async function tlsServerStreamCancelRead(): Promise<void> {
-    const [serverConn, clientConn] = await tlsPair(3505);
+    const [serverConn, clientConn] = await tlsPair();
     await Promise.all([
       sendAlotReceiveNothing(serverConn),
       receiveAlotSendNothing(clientConn),
@@ -489,7 +436,7 @@ unitTest(
 unitTest(
   { perms: { read: true, net: true } },
   async function tlsClientStreamCancelRead(): Promise<void> {
-    const [serverConn, clientConn] = await tlsPair(3506);
+    const [serverConn, clientConn] = await tlsPair();
     await Promise.all([
       sendAlotReceiveNothing(clientConn),
       receiveAlotSendNothing(serverConn),
@@ -535,7 +482,7 @@ async function sendReceiveEmptyBuf(conn: Deno.Conn): Promise<void> {
 unitTest(
   { perms: { read: true, net: true } },
   async function tlsStreamSendReceiveEmptyBuf(): Promise<void> {
-    const [serverConn, clientConn] = await tlsPair(3507);
+    const [serverConn, clientConn] = await tlsPair();
     await Promise.all([
       sendReceiveEmptyBuf(serverConn),
       sendReceiveEmptyBuf(clientConn),
