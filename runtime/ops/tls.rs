@@ -275,8 +275,14 @@ impl TlsStreamInner {
       let wr_ready = loop {
         self.dump_state("poll_io write");
         match self.wr_state {
+          _ if self.tls.is_handshaking() && !self.tls.wants_write() => {
+            break true;
+          }
+          _ if self.tls.is_handshaking() => {}
           State::Stream if !self.tls.wants_write() => break true,
-          State::StreamShouldEnd if !self.tls.wants_write() => {
+          State::StreamShouldEnd => {
+            // Rustls will enqueue the 'CloseNotify' alert and send it after
+            // flusing the data that is already in the queue.
             self.tls.send_close_notify();
             self.wr_state = State::TlsClosing;
             continue;
@@ -318,6 +324,14 @@ impl TlsStreamInner {
       let rd_ready = loop {
         self.dump_state("poll_io read");
         match self.rd_state {
+          State::TcpClosed if self.tls.is_handshaking() => {
+            let err = Error::new(ErrorKind::UnexpectedEof, "tls handshake eof");
+            return Poll::Ready(Err(err));
+          }
+          _ if self.tls.is_handshaking() && !self.tls.wants_read() => {
+            break true;
+          }
+          _ if self.tls.is_handshaking() => {}
           State::Stream if !self.tls.wants_read() => break true,
           State::Stream => {}
           State::StreamShouldEnd if !self.tls.wants_read() => {
@@ -328,11 +342,6 @@ impl TlsStreamInner {
             return Poll::Ready(Err(Error::from(ErrorKind::ConnectionReset)));
           }
           State::StreamShouldEnd => {}
-          State::TlsClosing => unreachable!(),
-          _ if self.tls.is_handshaking() => {
-            let err = Error::new(ErrorKind::UnexpectedEof, "tls handshake eof");
-            return Poll::Ready(Err(err));
-          }
           State::TlsClosed if self.wr_state == State::TcpClosed => {
             // Wait for the remote end to gracefully close the TCP connection.
             // TODO(piscisaureus): this is unnecessary; remove when stable.
@@ -393,17 +402,17 @@ impl TlsStreamInner {
         }
       }
 
-      let poll_again = match flow {
-        _ if self.tls.is_handshaking() => true,
-        Flow::Read => !rd_ready,
-        Flow::Write => !wr_ready,
+      let io_ready = match flow {
+        _ if self.tls.is_handshaking() => false,
+        Flow::Read => rd_ready,
+        Flow::Write => wr_ready,
       };
-      return match poll_again {
-        false => {
+      return match io_ready {
+        false => Poll::Pending,
+        true => {
           self.dump_state("poll_io ready");
           Poll::Ready(Ok(()))
         }
-        true => Poll::Pending,
       };
     }
   }
@@ -496,11 +505,12 @@ impl TlsStreamInner {
     {
       use std::os::unix::io::AsRawFd;
       log::debug!(
-        "[{}] fd: {}, \
+        "[{}] fd: {}, is_handshaking: {:?}, \
          read: {:?}, wants_read: {:?}, \
          write: {:?}, wants_write: {:?}",
         label,
         self.tcp.as_raw_fd(),
+        self.tls.is_handshaking(),
         self.rd_state,
         self.tls.wants_read(),
         self.wr_state,

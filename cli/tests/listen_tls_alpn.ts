@@ -10,11 +10,5 @@ const listener = Deno.listenTls({
 console.log("READY");
 
 for await (const conn of listener) {
-  // Start a `read` op to avoid closing the TLS stream before the handshake is
-  // complete. We don't expect to actually receive any data, so `read()` should
-  // return `null`.
-  if (await conn.read(new Uint8Array(1)) !== null) {
-    throw new Error("did not expect to receive data on TLS stream");
-  }
   conn.close();
 }
